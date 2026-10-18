@@ -30,7 +30,7 @@ Feature: Secrets and safety
   @safety
   Scenario: Work only happens on the AI branch
     Given the factory is running for an issue
-    Then all writes land on the branch ai/<issue_number>
+    Then all writes land on the branch ai/code-weaver/<issue_number>
     And the target repo's main branch is never modified by the factory
 
   @safety
