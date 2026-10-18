@@ -1,5 +1,6 @@
 # requirements/reporting.feature
-# Factory stage 15 — durable status report, issue comment, arc42 activity.
+# Factory stage 15 — the PR itself is the final status report (no report
+# files in the repo), plus the issue comment and arc42 AI-activity section.
 
 Feature: Reporting
   As a maintainer of the target project
@@ -7,11 +8,11 @@ Feature: Reporting
   so that I can audit the AI work before I merge anything
 
   @report
-  Scenario: A final status report is written
+  Scenario: The final status report is the PR
     Given the pipeline reached the report stage
     When the report stage runs
-    Then the run status is written under test-results/
-    And the report links the PR, the source issue and every stage outcome
+    Then the PR description carries the run status, the source issue and every stage outcome
+    And no separate report file is written into the repo
 
   @report
   Scenario: The source issue is commented with the outcome
@@ -22,11 +23,12 @@ Feature: Reporting
   @report
   Scenario: The arc42 documents the AI activity
     When the report stage runs
-    Then an AI-activity section is added to the arc42 docs under docs/
+    Then an AI-activity section is added to the arc42 markdown files under docs/
 
   @report
   Scenario: A failed run is reported too
     Given the pipeline stopped early in a failed stage
     When the report stage runs
-    Then the report states which stage failed and why
+    Then the failure summary states which stage failed and why
     And the source issue is commented with the failure summary
+    And no report file is written into the repo

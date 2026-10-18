@@ -16,20 +16,21 @@ Feature: Secrets and safety
   @safety
   Scenario: The LLM backend needs no secret
     Given the backend is the internal keyless llama-swap
-    When the factory configures pi
+    When the factory uses the pre-configured pi
     Then no API key secret is required
-    And the backend URL is the only configuration needed
+    And the backend configuration is a pre-requisite of the runner environment
 
   @safety
-  Scenario: Every loop in the pipeline is bounded
+  Scenario: Every loop in the pipeline respects its cap
     Given the pipeline contains the guard re-run, review-fix and gate-fix loops
-    Then every loop is bounded by MAX_LOOPS
-    And the factory is guaranteed to terminate
+    Then every loop respects the configured cap
+    And a cap of 0 means that loop is uncapped
+    And the factory is guaranteed to terminate while all caps are non-zero
 
   @safety
   Scenario: Work only happens on the AI branch
     Given the factory is running for an issue
-    Then all writes land on the branch ai/code-weaver/<issue>
+    Then all writes land on the branch ai/<issue_number>
     And the target repo's main branch is never modified by the factory
 
   @safety
@@ -39,15 +40,15 @@ Feature: Secrets and safety
     And the partial work stays on the AI branch, reviewable via the PR
 
   @safety
-  Scenario: The factory tolerates arc42 schema variance
-    Given a target project's arc42.json uses a different schema variant
+  Scenario: The factory tolerates arc42 structure variance
+    Given a target project's arc42 markdown files use a different structure variant
     When the extraction stage runs
-    Then the extraction prompt tolerates the schema difference
+    Then the extraction prompt tolerates the structural difference
     And extraction proceeds on the readable parts
 
   @safety
   Scenario: An audit trail exists for human review
     Given the factory finished or failed a run
-    Then per-iteration logs exist under test-results/
+    Then per-iteration logs exist in the workflow log or an artifact, never committed to the repo
     And the arc42 docs carry an AI-activity section for the run
-    And a human reviews the report before merging
+    And a human reviews the PR before merging

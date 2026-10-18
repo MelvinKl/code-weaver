@@ -32,17 +32,20 @@ Feature: Test and review loop
 
   @review @safety
   Scenario: The fix loop is bounded by MAX_LOOPS
-    Given the fix loop has run MAX_LOOPS iterations
+    Given MAX_LOOPS is non-zero
+    And the fix loop has run MAX_LOOPS iterations
     When the problems are still not zero
     Then the pipeline stops with a failure report listing the unfulfilled scenarios
 
   @review @safety
   Scenario: The loop respects the token budget
-    Given the cumulative LLM spend reached MAX_TOTAL_TOKENS
+    Given MAX_TOTAL_TOKENS is non-zero
+    And the cumulative LLM spend reached MAX_TOTAL_TOKENS
     When another loop iteration would start
     Then the loop stops and reports the budget exhaustion
 
   @review
-  Scenario: Every iteration is logged
+  Scenario: Every iteration is logged without touching the repo tree
     Given the review loop ran N iterations
-    Then each iteration wrote a log to test-results/iteration-N.log
+    Then each iteration's log is written to the workflow log or an artifact
+    And no file under test-results/ is committed to the repo

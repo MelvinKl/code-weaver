@@ -44,10 +44,10 @@ Feature: Only-X-changed guard-rail
 
   @guard @safety
   Scenario: Guard re-runs are capped
-    Given the same generation stage keeps leaking the same off-limits file
+    Given the loop caps are non-zero
+    And the same generation stage keeps leaking the same off-limits file
     When the guard re-runs the generation stage MAX_LOOPS times without success
     Then the pipeline stops with a failure report listing the violations
-    And the pipeline never loops forever
 
   @guard
   Scenario: All three checks share one shell idiom
