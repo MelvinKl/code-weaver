@@ -1,0 +1,59 @@
+# requirements/configuration.feature
+# The full configurable surface (plan §11): every setting has a default
+# and can be overridden per target repo via workflow inputs.
+
+Feature: Configuration surface
+  As a maintainer of a target project
+  I want every factory setting configurable per target repo
+  so that one factory fits different projects without forking the code
+
+  @config
+  Scenario: The trigger label is configurable
+    Given the default AI_REQUIREMENTS_LABEL is "ai-requirements"
+    When a target sets AI_REQUIREMENTS_LABEL to another value
+    Then the factory triggers on the target's value instead
+
+  @config
+  Scenario: The target branch is configurable
+    Given the default TARGET_BRANCH is "main"
+    When a target sets TARGET_BRANCH to "develop"
+    Then the PR is opened against develop
+
+  @config
+  Scenario: The artefact directories are configurable
+    Given the defaults are REQUIREMENTS_DIR requirements/, PLAN_DIR plans/ and DOC_DIR docs/
+    When a target overrides any of them
+    Then the factory reads and writes under the overridden paths
+    And the guard-rail allowed sets follow the overridden paths
+
+  @config
+  Scenario: The LLM backend is configurable
+    Given the defaults are LLM_MCP_URL "http://192.168.5.28:8080/v1" and LLM_MODEL "Qwen3.8"
+    When a target points the factory at another OpenAI-compatible backend
+    Then pi runs against that backend
+
+  @config
+  Scenario: The action ref is configurable
+    Given the default AI_REPO_REF is MelvinKl/code-weaver at the current release tag
+    When a target pins a different ref
+    Then the factory runs from that ref
+
+  @config
+  Scenario: The loop caps are configurable
+    Given the defaults are MAX_LOOPS 5 and MAX_TOTAL_TOKENS 500000
+    When a target lowers or raises them
+    Then every bounded loop in the pipeline uses the target's values
+
+  @config
+  Scenario: Settings flow from workflow inputs to stage environment
+    Given the target repo passes its settings via with on the reusable workflow
+    When the factory runs
+    Then every stage receives the settings via environment variables
+    And the resolved configuration is written under test-results/ for audit
+
+  @config @safety
+  Scenario: Secrets are never plain inputs
+    Given the factory requires GH_TOKEN
+    When the target repo wires the token
+    Then it passes it via the reusable workflow's secrets block
+    And no secret value appears in with inputs or committed files

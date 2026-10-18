@@ -1,0 +1,53 @@
+# requirements/safety.feature
+# Secrets handling, branch hygiene, mandatory loop caps, audit trail.
+
+Feature: Secrets and safety
+  As the operator of the factory
+  I want the factory to be safe by default
+  so that automated AI work can never compromise the target repo or run away
+
+  @safety
+  Scenario: GH_TOKEN is repo-scoped and never committed
+    Given the factory needs GH_TOKEN to open PRs and comment on issues
+    Then the token is a repo-scoped PAT or the built-in GITHUB_TOKEN
+    And the token carries at least issues:write, pull-requests:write and contents:write
+    And it is stored as a GitHub secret, never in the repo
+
+  @safety
+  Scenario: The LLM backend needs no secret
+    Given the backend is the internal keyless llama-swap
+    When the factory configures pi
+    Then no API key secret is required
+    And the backend URL is the only configuration needed
+
+  @safety
+  Scenario: Every loop in the pipeline is bounded
+    Given the pipeline contains the guard re-run, review-fix and gate-fix loops
+    Then every loop is bounded by MAX_LOOPS
+    And the factory is guaranteed to terminate
+
+  @safety
+  Scenario: Work only happens on the AI branch
+    Given the factory is running for an issue
+    Then all writes land on the branch ai/code-weaver/<issue>
+    And the target repo's main branch is never modified by the factory
+
+  @safety
+  Scenario: A broken stage cannot corrupt the target branch
+    Given a stage failed or a guard-rail reverted its output
+    Then the target repo's main branch is untouched
+    And the partial work stays on the AI branch, reviewable via the PR
+
+  @safety
+  Scenario: The factory tolerates arc42 schema variance
+    Given a target project's arc42.json uses a different schema variant
+    When the extraction stage runs
+    Then the extraction prompt tolerates the schema difference
+    And extraction proceeds on the readable parts
+
+  @safety
+  Scenario: An audit trail exists for human review
+    Given the factory finished or failed a run
+    Then per-iteration logs exist under test-results/
+    And the arc42 docs carry an AI-activity section for the run
+    And a human reviews the report before merging
