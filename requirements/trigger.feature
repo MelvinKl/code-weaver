@@ -47,4 +47,4 @@ Feature: Factory trigger
     Given a factory run for issue 7 is already in progress
     When a second trigger fires for issue 7
     Then the second run does not duplicate the work of the first
-    And both runs operate on the same branch "ai/7"
+    And both runs operate on the same branch "ai/code-weaver/7"
