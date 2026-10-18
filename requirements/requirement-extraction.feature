@@ -1,6 +1,6 @@
 # requirements/requirement-extraction.feature
 # Factory stages 3 + 4 — derive the delta requirements from the project itself
-# (arc42.json + git diff + docs/README) and write them as Gherkin.
+# (arc42 markdown files + git diff + docs/README) and write them as Gherkin.
 
 Feature: Requirement extraction
   As the factory
@@ -21,9 +21,9 @@ Feature: Requirement extraction
 
   @extraction
   Scenario: Requirements are derived from the project itself
-    Given the project has arc42.json, docs/ and README.md
+    Given the project has the arc42 markdown files, docs/ and README.md
     When the extraction stage runs pi with the requirements prompt template
-    Then pi reads arc42.json, the baseline diff and docs/README as context
+    Then pi reads the arc42 markdown files, the baseline diff and docs/README as context
     And the derived requirements are the delta implied by the issue text against that baseline
 
   @extraction

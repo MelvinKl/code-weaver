@@ -1,6 +1,8 @@
 # requirements/setup-pi.feature
-# Factory stage 2 — pi is already installed and configured in the
-# GitHub Actions environment; the factory verifies it, never installs it.
+# Factory stage 2 — pi is pre-installed and pre-configured in the
+# GitHub Actions environment; the factory verifies it, never installs or
+# configures it. The LLM backend is a pre-requisite of the environment;
+# what is adjustable is which of the configured models is used.
 
 Feature: pi pre-installed and configured in the runner environment
   As the operator of the GitHub Actions runners
@@ -15,17 +17,25 @@ Feature: pi pre-installed and configured in the runner environment
     And the factory performs no installation step
 
   @setup
-  Scenario: The LLM backend configuration is already in place
-    Given the runner environment has pi pre-configured
+  Scenario: The LLM backend configuration is a pre-requisite of the environment
+    Given the pi configuration defining the LLM backend is a pre-requisite of the runner environment
     When the setup stage checks the backend configuration
-    Then pi is pointed at LLM_MCP_URL "http://192.168.5.28:8080/v1" with LLM_MODEL "Qwen3.8" keyless
+    Then pi's LLM backend (e.g. keyless llama-swap at "http://192.168.5.28:8080/v1") is already configured
     And the factory performs no configuration step
+    And no target repo can change which backend the factory uses
+
+  @setup
+  Scenario: Which configured model is used is adjustable
+    Given the runner environment has pi pre-configured with one or more models
+    When the factory runs with LLM_MODEL "Qwen3.8"
+    Then every pi invocation in the pipeline uses that configured model
+    And the backend configuration itself is untouched
 
   @setup
   Scenario: The setup stage verifies pi actually works
     Given pi is pre-installed and pre-configured
-    When the setup stage runs a headless smoke check with pi --print
-    Then the stage exits 0 only if pi reaches the backend and answers
+    When the setup stage runs a headless smoke check with pi --print against the selected LLM_MODEL
+    Then the stage exits 0 only if pi reaches the pre-configured backend with that model and answers
 
   @setup
   Scenario: pi runs headless
@@ -50,7 +60,7 @@ Feature: pi pre-installed and configured in the runner environment
 
   @setup @safety
   Scenario: An unreachable backend fails the stage clearly
-    Given the LLM backend at LLM_MCP_URL is unreachable from the runner
+    Given the pre-configured LLM backend is unreachable from the runner
     When the setup stage verifies the backend
     Then the stage fails with an explicit "backend unreachable" error
     And no later stage runs

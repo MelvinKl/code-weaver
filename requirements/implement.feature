@@ -8,7 +8,7 @@ Feature: Implementation
 
   Background:
     Given the plan-check stage passed
-    And a plan exists under plans/ for every requirement group
+    And plans exist under plans/ covering every requirement change
 
   @implement
   Scenario: The plan is implemented as code
@@ -22,11 +22,11 @@ Feature: Implementation
     Then tests covering the new behaviour are added under tests/
 
   @implement
-  Scenario: The arc42 documentation is updated and regenerated
+  Scenario: The arc42 documentation is updated and complete
     Given the implementation changed the architecture
     When the implement stage runs
-    Then arc42.json is updated to reflect the change
-    And docs/ is rebuilt from arc42.json and stays complete
+    Then the arc42 markdown files are updated to reflect the change
+    And the arc42 set under docs/ stays complete
 
   @implement
   Scenario: The README is kept current

@@ -27,10 +27,18 @@ Feature: Configuration surface
     And the guard-rail allowed sets follow the overridden paths
 
   @config
-  Scenario: The LLM backend is configurable
-    Given the defaults are LLM_MCP_URL "http://192.168.5.28:8080/v1" and LLM_MODEL "Qwen3.8"
-    When a target points the factory at another OpenAI-compatible backend
-    Then pi runs against that backend
+  Scenario: The LLM backend is a pre-requisite of the environment
+    Given the pi configuration in the runner environment defines the LLM backend
+    Then the backend is fixed by that pre-requisite configuration
+    And no target repo can change which backend the factory uses
+
+  @config
+  Scenario: Which configured model is used is adjustable
+    Given the runner environment has pi pre-configured with several models
+    And the default LLM_MODEL is "Qwen3.8"
+    When a target sets LLM_MODEL to another already-configured model
+    Then every pi invocation in the pipeline uses that model
+    And the backend configuration itself is unchanged
 
   @config
   Scenario: The action ref is configurable
@@ -45,11 +53,19 @@ Feature: Configuration surface
     Then every bounded loop in the pipeline uses the target's values
 
   @config
+  Scenario: A loop cap of 0 means no cap
+    Given the defaults are MAX_LOOPS 5 and MAX_TOTAL_TOKENS 500000
+    When a target sets MAX_LOOPS to 0
+    Then the guard re-run, review-fix and gate-fix loops run without a loop-count limit
+    And setting MAX_TOTAL_TOKENS to 0 removes the token budget
+    And the resolved configuration records the removed caps
+
+  @config
   Scenario: Settings flow from workflow inputs to stage environment
     Given the target repo passes its settings via with on the reusable workflow
     When the factory runs
     Then every stage receives the settings via environment variables
-    And the resolved configuration is written under test-results/ for audit
+    And the resolved configuration is recorded in the workflow log for audit, never committed to the repo
 
   @config @safety
   Scenario: Secrets are never plain inputs

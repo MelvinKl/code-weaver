@@ -9,7 +9,7 @@ Feature: Pull request and gate loop
 
   Background:
     Given the test-and-review loop ended with zero problems
-    And the AI branch is named ai/code-weaver/<issue>
+    And the AI branch is named ai/code-weaver/<issue_number>
 
   @pr
   Scenario: A pull request is opened against the target branch
@@ -22,7 +22,7 @@ Feature: Pull request and gate loop
   Scenario: The PR body links back to the work
     When the pr-open stage runs
     Then the PR body references the source issue
-    And the PR body links the test-results report
+    And the PR body serves as the final status report
 
   @gates
   Scenario: All PR-triggered workflows must be green
