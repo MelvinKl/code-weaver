@@ -9,7 +9,7 @@ Feature: Pull request and gate loop
 
   Background:
     Given the test-and-review loop ended with zero problems
-    And the AI branch is named ai/code-weaver/<issue_number>
+    And the AI branch is named ai/<issue_number>
 
   @pr
   Scenario: A pull request is opened against the target branch
