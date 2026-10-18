@@ -23,14 +23,6 @@ Feature: Reuse by ref, never copy-paste
     And it contains none of the pipeline logic itself
 
   @reuse
-  Scenario: JS actions ship as npm packages
-    Given the code-weaver repo ships JS actions
-    When the target repo runs npm ci --omit=dev
-    Then the actions are populated under node_modules/.github/actions/
-    And the workflow references them by package plus ref
-    And no separate checkout of the code-weaver source is needed
-
-  @reuse
   Scenario: Composite actions are referenced by owner, repo and path
     Given a composite action in the code-weaver repo
     When a step references it
