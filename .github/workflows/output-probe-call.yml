@@ -1,0 +1,51 @@
+name: output-probe caller
+on:
+  workflow_dispatch:
+
+jobs:
+  call-factory:
+    uses: ./.github/workflows/output-probe-factory.yml
+    secrets: inherit
+
+# The factory file (output-probe-factory.yml) holds jobs one/two, so the
+# probe runs them inside a CALLED workflow — the factory's exact topology.
+jobs:
+  one:
+    runs-on: self-hosted
+    outputs:
+      started: ${{ steps.w.outputs.started }}
+      single: ${{ steps.w.outputs.single }}
+      first: ${{ steps.w.outputs.first }}
+      last: ${{ steps.w.outputs.last }}
+    steps:
+      - id: w
+        run: |
+          echo "started=false" >> "$GITHUB_OUTPUT"
+          echo "single=alpha" >> "$GITHUB_OUTPUT"
+          echo "first=one" >> "$GITHUB_OUTPUT"
+          echo "started=true" >> "$GITHUB_OUTPUT"
+          echo "last=two" >> "$GITHUB_OUTPUT"
+      - name: dump github_output file
+        run: |
+          echo "=== GITHUB_OUTPUT file after step ==="
+          cat "$GITHUB_OUTPUT"
+          echo "=== end ==="
+
+  two:
+    runs-on: self-hosted
+    needs: one
+    steps:
+      - name: echo received outputs
+        run: |
+          {
+            echo "started=${{ needs.one.outputs.started }}"
+            echo "single=${{ needs.one.outputs.single }}"
+            echo "first=${{ needs.one.outputs.first }}"
+            echo "last=${{ needs.one.outputs.last }}"
+          } | tee "$RUNNER_TEMP/probe-outputs.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe
+          path: ${{ runner.temp }}/probe-outputs.txt
+          if-no-files-found: ignore
