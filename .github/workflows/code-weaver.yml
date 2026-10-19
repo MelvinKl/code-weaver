@@ -21,6 +21,6 @@ jobs:
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Qwen3.8        # which configured model — the one adjustable LLM setting
-      runner: gha-beryllium      # runner label whose environment has pi pre-installed & configured
+      runner: self-hosted      # runner label whose environment has pi pre-installed & configured
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
