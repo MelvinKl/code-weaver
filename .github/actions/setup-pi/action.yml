@@ -16,7 +16,7 @@ runs:
   steps:
     - id: verify
       name: Verify pi (pre-requisite of the runner environment)
-      shell: python3
+      shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}
       env:
         LLM_MODEL: ${{ inputs.llm-model }}

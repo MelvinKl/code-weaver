@@ -70,3 +70,10 @@ Feature: pi pre-installed and configured in the runner environment
     When the setup stage verifies the backend
     Then the stage fails with an explicit "backend unreachable" error
     And no later stage runs
+
+  @setup
+  Scenario: A verify step only runs under a runner-accepted shell form
+    Given a composite action step that carries an interpreter program
+    When the runner validates the step's shell declaration before executing it
+    Then the declaration is a built-in shell or a format string naming the interpreter and the script placeholder
+    And the step's program actually executes and the stage sees its result

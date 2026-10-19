@@ -16,7 +16,7 @@ runs:
   using: composite
   steps:
     - name: Cut the AI branch and record the baseline
-      shell: python3
+      shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}
       run: |
         import os, subprocess, sys

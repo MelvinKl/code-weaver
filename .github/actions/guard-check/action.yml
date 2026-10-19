@@ -21,7 +21,7 @@ runs:
   using: composite
   steps:
     - name: Guard — only the allowed paths may change
-      shell: python3
+      shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}
       env:
         BASELINE_REF: ${{ inputs.baseline-ref }}

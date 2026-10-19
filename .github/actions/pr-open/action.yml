@@ -31,7 +31,7 @@ runs:
   steps:
     - id: open
       name: Push the AI branch and open (or update) the PR
-      shell: python3
+      shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}
       run: |
         import os, sys
