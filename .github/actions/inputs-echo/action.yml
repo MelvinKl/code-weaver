@@ -1,0 +1,30 @@
+name: inputs-echo
+description: Probe — does the runner bind composite-action INPUT_* env for values derived from needs.*.outputs?
+inputs:
+  p:
+    description: value sourced from a previous job's outputs
+  q:
+    description: literal value (control)
+  r:
+    description: value from a workflow_call input
+runs:
+  using: composite
+  steps:
+    - shell: /bin/sh {0}
+      env:
+        STEP_ENV_P: ${{ inputs.p }}
+        STEP_ENV_Q: ${{ inputs.q }}
+      run: |
+        echo "=== inner step sees ==="
+        echo "INPUT_P      = '${INPUT_P:-<ABSENT>}'"
+        echo "INPUT_Q      = '${INPUT_Q:-<ABSENT>}'"
+        echo "INPUT_R      = '${INPUT_R:-<ABSENT>}'"
+        echo "STEP_ENV_P   = '${STEP_ENV_P:-<ABSENT>}'"
+        echo "STEP_ENV_Q   = '${STEP_ENV_Q:-<ABSENT>}'"
+        {
+          echo "INPUT_P=${INPUT_P:-<ABSENT>}"
+          echo "INPUT_Q=${INPUT_Q:-<ABSENT>}"
+          echo "INPUT_R=${INPUT_R:-<ABSENT>}"
+          echo "STEP_ENV_P=${STEP_ENV_P:-<ABSENT>}"
+          echo "STEP_ENV_Q=${STEP_ENV_Q:-<ABSENT>}"
+        } >> "$RUNNER_TEMP/inputs-echo.txt"
