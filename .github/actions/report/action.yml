@@ -25,147 +25,175 @@ runs:
       shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}
       run: |
-        import os, sys, glob, json, datetime
-        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
-        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-        if os.path.isdir(scripts):
-            sys.path.insert(0, scripts)
         try:
-            import common
-        except ImportError:
-            def state_dir():
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                return d
-            def state_file(n):
-                return os.path.join(state_dir(), n)
-            def log(m):
-                print(m, flush=True)
-            def gh_api(p, accept="application/vnd.github+json", data=None):
-                import subprocess
-                env = {**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
-                args = ["gh", "api", "-H", f"Accept: {accept}"]
-                if data is not None:
-                    args += ["-f", f"body={data}"]
-                args.append(p)
-                r = subprocess.run(args, capture_output=True, text=True, env=env)
-                if r.returncode != 0:
-                    raise RuntimeError(r.stderr.strip()[:300])
-                return r.stdout
-            def push_branch(branch, force=True):
-                import subprocess
-                token = os.environ.get("GH_TOKEN", "")
-                subprocess.run(["git", "push", "--force",
-                                f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}", branch],
-                               cwd=os.environ["GITHUB_WORKSPACE"], check=True,
-                               env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
-
-        # a crashed stage must leave a persistent diagnosis (the job log dies
-        # with the run; a ghost run's logs are unreachable from the API) —
-        # the full traceback goes to the runner's diag dir + one line to the
-        # stage-fail-reason state file the summary/upload steps carry on
-        def _cw_on_uncaught(t, v, tb):
-            import traceback as _tb
-            dump = _tb.format_exc()
+            import os, sys, glob, json, datetime
+            action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+            scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+            if os.path.isdir(scripts):
+                sys.path.insert(0, scripts)
             try:
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                    f.write(f"stage 15 report FAILED — {v}\n")
-                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                    f.write(f"=== stage 15 report FAILED ===\n{dump}\n")
-                print(f"::error::stage 15 report failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-            except Exception:
-                print(f"::error::stage 15 report failed — {v}")
-            raise SystemExit(1)
-        sys.excepthook = _cw_on_uncaught
-        repo = os.environ["GITHUB_WORKSPACE"]
-        result = os.environ["INPUT_RUN_RESULT"]
-        pr = os.environ.get("INPUT_PR_NUMBER", "").strip()
-        issue = os.environ["INPUT_ISSUE_NUMBER"]
-        now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
+                import common
+            except ImportError:
+                def state_dir():
+                    d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                    os.makedirs(d, exist_ok=True)
+                    return d
+                def state_file(n):
+                    return os.path.join(state_dir(), n)
+                def log(m):
+                    print(m, flush=True)
+                def gh_api(p, accept="application/vnd.github+json", data=None):
+                    import subprocess
+                    env = {**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
+                    args = ["gh", "api", "-H", f"Accept: {accept}"]
+                    if data is not None:
+                        args += ["-f", f"body={data}"]
+                    args.append(p)
+                    r = subprocess.run(args, capture_output=True, text=True, env=env)
+                    if r.returncode != 0:
+                        raise RuntimeError(r.stderr.strip()[:300])
+                    return r.stdout
+                def push_branch(branch, force=True):
+                    import subprocess
+                    token = os.environ.get("GH_TOKEN", "")
+                    subprocess.run(["git", "push", "--force",
+                                    f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}", branch],
+                                   cwd=os.environ["GITHUB_WORKSPACE"], check=True,
+                                   env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
 
-        # merge every stage's summary line (the jobs downloaded their
-        # cw-* state artifacts into the state dir before calling us)
-        stage_lines = []
-        for f in sorted(glob.glob(os.path.join(state_dir(), "**", "stage-summary.txt"), recursive=True)):
-            for line in open(f):
-                if line.strip() and line.strip() not in stage_lines:
-                    stage_lines.append(line.strip())
-        stage_table = "\n".join(f"- {l}" for l in stage_lines) or "- (no stage summaries captured)"
+            # a crashed stage must leave a persistent diagnosis (the job log dies
+            # with the run; a ghost run's logs are unreachable from the API) —
+            # the full traceback goes to the runner's diag dir + one line to the
+            # stage-fail-reason state file the summary/upload steps carry on
+            def _cw_persist(stage, dump, value):
+                # one writer for both paths (the explicit try/except wrap and the
+                # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                # state file (carried on by the summary/upload steps), and the
+                # runner's durable diag log (the job log dies with the run)
+                if globals().get("_cw_persisted"):
+                    return
+                globals()["_cw_persisted"] = True
+                try:
+                    d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                    os.makedirs(d, exist_ok=True)
+                    with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                        f.write(f"stage {stage} FAILED — {value}\n")
+                    with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                        f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                    print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                except Exception:
+                    print(f"::error::stage {stage} failed — {value}")
 
-        if pr:
-            view = json.loads(gh_api(
-                f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}"))
-            body = view.get("body") or ""
-            head = view["head"]["sha"]
-            final = (body.split("\n## Final status")[0]
-                     + "\n## Final status\n"
-                     + f"- **Run result:** {result}\n- **Completed:** {now}\n"
-                     + f"- **AI branch:** `{view['head']['ref']}` @ `{head[:12]}`\n"
-                     + f"- **Source issue:** #{issue}\n\n"
-                     + "### Stage outcomes\n" + stage_table + "\n"
-                     + "\n_Merging this PR is a human decision — the factory never merges._\n")
-            import subprocess
-            with open(state_file("final-pr-body.md"), "w") as f:
-                f.write(final)
-            subprocess.run(["gh", "pr", "edit", pr, "--body-file", state_file("final-pr-body.md")],
-                           cwd=repo, env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")},
-                           check=False)
-            # the arc42 docs get the AI-activity section (docs changes are
-            # within the implementation allow-set — this commit is the
-            # report stage's own, made after the guards have run)
-            doc_dir = (os.environ.get("DOC_DIR") or "").strip().rstrip("/")
-            entry = (f"\n### {now} — code-weaver run for issue #{issue}\n"
-                     f"- result: {result}\n- PR: {pr}\n- stages:\n"
-                     + "\n".join(f"  - {l}" for l in stage_lines) + "\n")
-            touched = False
-            # arc42 activity commits only land on the AI branch — if the run
-            # died before the branch existed, the checkout is at the base ref
-            # and the target tree must stay untouched
-            on_ai_branch = subprocess.run(["git", "branch", "--show-current"], cwd=repo,
-                                          capture_output=True, text=True).stdout.strip() \
-                == os.environ.get("AI_BRANCH", "")
-            if on_ai_branch and doc_dir and os.path.isdir(doc_dir):
-                for md in sorted(glob.glob(os.path.join(doc_dir, "**", "*.md"), recursive=True)):
-                    text = open(md).read()
-                    marker = "## AI activity (code-weaver)"
-                    if marker in text:
-                        text = text.rstrip("\n") + entry
-                    elif text:
-                        text = text.rstrip("\n") + f"\n\n{marker}\n" + entry
-                    else:
-                        text = f"{marker}\n" + entry
-                    open(md, "w").write(text)
-                    touched = True
-                    break  # the first arc42 file carries the activity log
-            if touched:
-                subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-                st = subprocess.run(["git", "status", "--porcelain"], cwd=repo,
-                                    capture_output=True, text=True)
-                if st.stdout.strip():
-                    subprocess.run(["git", "commit", "-q", "-m", "report: AI-activity recorded"],
-                                   cwd=repo, check=True)
-                    push_branch(os.environ.get("AI_BRANCH", ""))
-            url = view.get("html_url", "")
-            ok = result == "success"
-            gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
-                   data=("✅ **code-weaver run finished** — final status is in the PR body.\n"
-                         f"- result: **{result}**\n- completed: {now}\n"
-                         f"- pull request: {url}\n- source: #{issue}\n"
-                         if ok else
-                         f"❌ **code-weaver run failed** — the pull request is incomplete.\n"
-                         f"- result: **{result}**\n- completed: {now}\n"
-                         f"- pull request: {url}\n- stage outcomes:\n{stage_table}\n"))
-            log(f"stage 15: PR #{pr} body = final status report ({result}); "
-                f"issue #{issue} commented; arc42 activity {'recorded' if touched else 'n/a'}")
-        else:
-            gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
-                   data=("❌ **code-weaver run failed** before a pull request could "
-                         "be opened.\n"
-                         f"- result: **{result}**\n- completed: {now}\n"
-                         f"- stage outcomes:\n{stage_table}\n"
-                         "- full logs: the workflow run's artifacts (the repo tree "
-                         "is never used for report files).\n"))
-            log(f"stage 15: no PR — failure reported on issue #{issue} "
-                f"(stage outcomes: {len(stage_lines)} line(s))")
+            def _cw_on_uncaught(t, v, tb):
+                import traceback as _tb
+                # the hook receives (type, value, traceback) from the interpreter —
+                # sys.exc_info() is already cleared by the time it runs, so the
+                # arguments are the source of truth; format_exc() is the fallback
+                if tb is not None:
+                    dump = "".join(_tb.format_exception(t, v, tb))
+                else:
+                    dump = _tb.format_exc()
+                    if not dump.strip() or dump.strip() == "NoneType: None":
+                        dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                _cw_persist("15 report", dump, v)
+                raise SystemExit(1)
+            sys.excepthook = _cw_on_uncaught
+            repo = os.environ["GITHUB_WORKSPACE"]
+            result = os.environ["INPUT_RUN_RESULT"]
+            pr = os.environ.get("INPUT_PR_NUMBER", "").strip()
+            issue = os.environ["INPUT_ISSUE_NUMBER"]
+            now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+            # merge every stage's summary line (the jobs downloaded their
+            # cw-* state artifacts into the state dir before calling us)
+            stage_lines = []
+            for f in sorted(glob.glob(os.path.join(state_dir(), "**", "stage-summary.txt"), recursive=True)):
+                for line in open(f):
+                    if line.strip() and line.strip() not in stage_lines:
+                        stage_lines.append(line.strip())
+            stage_table = "\n".join(f"- {l}" for l in stage_lines) or "- (no stage summaries captured)"
+
+            if pr:
+                view = json.loads(gh_api(
+                    f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}"))
+                body = view.get("body") or ""
+                head = view["head"]["sha"]
+                final = (body.split("\n## Final status")[0]
+                         + "\n## Final status\n"
+                         + f"- **Run result:** {result}\n- **Completed:** {now}\n"
+                         + f"- **AI branch:** `{view['head']['ref']}` @ `{head[:12]}`\n"
+                         + f"- **Source issue:** #{issue}\n\n"
+                         + "### Stage outcomes\n" + stage_table + "\n"
+                         + "\n_Merging this PR is a human decision — the factory never merges._\n")
+                import subprocess
+                with open(state_file("final-pr-body.md"), "w") as f:
+                    f.write(final)
+                subprocess.run(["gh", "pr", "edit", pr, "--body-file", state_file("final-pr-body.md")],
+                               cwd=repo, env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")},
+                               check=False)
+                # the arc42 docs get the AI-activity section (docs changes are
+                # within the implementation allow-set — this commit is the
+                # report stage's own, made after the guards have run)
+                doc_dir = (os.environ.get("DOC_DIR") or "").strip().rstrip("/")
+                entry = (f"\n### {now} — code-weaver run for issue #{issue}\n"
+                         f"- result: {result}\n- PR: {pr}\n- stages:\n"
+                         + "\n".join(f"  - {l}" for l in stage_lines) + "\n")
+                touched = False
+                # arc42 activity commits only land on the AI branch — if the run
+                # died before the branch existed, the checkout is at the base ref
+                # and the target tree must stay untouched
+                on_ai_branch = subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                                              capture_output=True, text=True).stdout.strip() \
+                    == os.environ.get("AI_BRANCH", "")
+                if on_ai_branch and doc_dir and os.path.isdir(doc_dir):
+                    for md in sorted(glob.glob(os.path.join(doc_dir, "**", "*.md"), recursive=True)):
+                        text = open(md).read()
+                        marker = "## AI activity (code-weaver)"
+                        if marker in text:
+                            text = text.rstrip("\n") + entry
+                        elif text:
+                            text = text.rstrip("\n") + f"\n\n{marker}\n" + entry
+                        else:
+                            text = f"{marker}\n" + entry
+                        open(md, "w").write(text)
+                        touched = True
+                        break  # the first arc42 file carries the activity log
+                if touched:
+                    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+                    st = subprocess.run(["git", "status", "--porcelain"], cwd=repo,
+                                        capture_output=True, text=True)
+                    if st.stdout.strip():
+                        subprocess.run(["git", "commit", "-q", "-m", "report: AI-activity recorded"],
+                                       cwd=repo, check=True)
+                        push_branch(os.environ.get("AI_BRANCH", ""))
+                url = view.get("html_url", "")
+                ok = result == "success"
+                gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
+                       data=("✅ **code-weaver run finished** — final status is in the PR body.\n"
+                             f"- result: **{result}**\n- completed: {now}\n"
+                             f"- pull request: {url}\n- source: #{issue}\n"
+                             if ok else
+                             f"❌ **code-weaver run failed** — the pull request is incomplete.\n"
+                             f"- result: **{result}**\n- completed: {now}\n"
+                             f"- pull request: {url}\n- stage outcomes:\n{stage_table}\n"))
+                log(f"stage 15: PR #{pr} body = final status report ({result}); "
+                    f"issue #{issue} commented; arc42 activity {'recorded' if touched else 'n/a'}")
+            else:
+                gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
+                       data=("❌ **code-weaver run failed** before a pull request could "
+                             "be opened.\n"
+                             f"- result: **{result}**\n- completed: {now}\n"
+                             f"- stage outcomes:\n{stage_table}\n"
+                             "- full logs: the workflow run's artifacts (the repo tree "
+                             "is never used for report files).\n"))
+                log(f"stage 15: no PR — failure reported on issue #{issue} "
+                    f"(stage outcomes: {len(stage_lines)} line(s))")
+        except SystemExit:
+            raise
+        except BaseException as e:
+            # explicit wrap: inside this handler the exception
+            # context is alive, so the persisted traceback is always
+            # complete; the excepthook below is the backstop
+            import traceback as _tb
+            _cw_persist("15 report", _tb.format_exc(), e)
+            raise

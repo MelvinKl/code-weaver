@@ -27,27 +27,55 @@ runs:
         BASELINE_REF: ${{ inputs.baseline-ref }}
         CW_GUARD_ALLOW: ${{ inputs.allow }}
       run: |
-        import os, sys, subprocess
-        # a crashed stage must leave a persistent diagnosis (the job log dies
-        # with the run; a ghost run's logs are unreachable from the API) —
-        # the full traceback goes to the runner's diag dir + one line to the
-        # stage-fail-reason state file the summary/upload steps carry on
-        def _cw_on_uncaught(t, v, tb):
+        try:
+            import os, sys, subprocess
+            # a crashed stage must leave a persistent diagnosis (the job log dies
+            # with the run; a ghost run's logs are unreachable from the API) —
+            # the full traceback goes to the runner's diag dir + one line to the
+            # stage-fail-reason state file the summary/upload steps carry on
+            def _cw_persist(stage, dump, value):
+                # one writer for both paths (the explicit try/except wrap and the
+                # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                # state file (carried on by the summary/upload steps), and the
+                # runner's durable diag log (the job log dies with the run)
+                if globals().get("_cw_persisted"):
+                    return
+                globals()["_cw_persisted"] = True
+                try:
+                    d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                    os.makedirs(d, exist_ok=True)
+                    with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                        f.write(f"stage {stage} FAILED — {value}\n")
+                    with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                        f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                    print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                except Exception:
+                    print(f"::error::stage {stage} failed — {value}")
+
+            def _cw_on_uncaught(t, v, tb):
+                import traceback as _tb
+                # the hook receives (type, value, traceback) from the interpreter —
+                # sys.exc_info() is already cleared by the time it runs, so the
+                # arguments are the source of truth; format_exc() is the fallback
+                if tb is not None:
+                    dump = "".join(_tb.format_exception(t, v, tb))
+                else:
+                    dump = _tb.format_exc()
+                    if not dump.strip() or dump.strip() == "NoneType: None":
+                        dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                _cw_persist("guard-check", dump, v)
+                raise SystemExit(1)
+            sys.excepthook = _cw_on_uncaught
+            script = os.path.join(os.environ.get("GITHUB_ACTION_PATH", "."), "guard-check.py")
+            args = [sys.executable, script, os.environ["BASELINE_REF"], *os.environ.get("CW_GUARD_ALLOW", "").split()]
+            r = subprocess.run(args, cwd=os.environ["GITHUB_WORKSPACE"], env=os.environ)
+            sys.exit(r.returncode)
+        except SystemExit:
+            raise
+        except BaseException as e:
+            # explicit wrap: inside this handler the exception
+            # context is alive, so the persisted traceback is always
+            # complete; the excepthook below is the backstop
             import traceback as _tb
-            dump = _tb.format_exc()
-            try:
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                    f.write(f"stage guard-check FAILED — {v}\n")
-                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                    f.write(f"=== stage guard-check FAILED ===\n{dump}\n")
-                print(f"::error::stage guard-check failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-            except Exception:
-                print(f"::error::stage guard-check failed — {v}")
-            raise SystemExit(1)
-        sys.excepthook = _cw_on_uncaught
-        script = os.path.join(os.environ.get("GITHUB_ACTION_PATH", "."), "guard-check.py")
-        args = [sys.executable, script, os.environ["BASELINE_REF"], *os.environ.get("CW_GUARD_ALLOW", "").split()]
-        r = subprocess.run(args, cwd=os.environ["GITHUB_WORKSPACE"], env=os.environ)
-        sys.exit(r.returncode)
+            _cw_persist("guard-check", _tb.format_exc(), e)
+            raise

@@ -19,82 +19,110 @@ runs:
       shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}
       run: |
-        import os, subprocess, sys
-        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
-        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-        if os.path.isdir(scripts):
-            sys.path.insert(0, scripts)
         try:
-            from common import state_dir, state_file, log
-        except ImportError:
-            def state_dir():
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                return d
-            def state_file(n):
-                return os.path.join(state_dir(), n)
-            def log(m):
-                print(m, flush=True)
-
-        # a crashed stage must leave a persistent diagnosis (the job log dies
-        # with the run; a ghost run's logs are unreachable from the API) —
-        # the full traceback goes to the runner's diag dir + one line to the
-        # stage-fail-reason state file the summary/upload steps carry on
-        def _cw_on_uncaught(t, v, tb):
-            import traceback as _tb
-            dump = _tb.format_exc()
+            import os, subprocess, sys
+            action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+            scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+            if os.path.isdir(scripts):
+                sys.path.insert(0, scripts)
             try:
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                    f.write(f"stage 3 baseline FAILED — {v}\n")
-                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                    f.write(f"=== stage 3 baseline FAILED ===\n{dump}\n")
-                print(f"::error::stage 3 baseline failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-            except Exception:
-                print(f"::error::stage 3 baseline failed — {v}")
-            raise SystemExit(1)
-        sys.excepthook = _cw_on_uncaught
-        base_ref = os.environ["INPUT_BASE_REF"]
-        ai_branch = os.environ["INPUT_AI_BRANCH"]
-        repo = os.environ["GITHUB_WORKSPACE"]
+                from common import state_dir, state_file, log
+            except ImportError:
+                def state_dir():
+                    d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                    os.makedirs(d, exist_ok=True)
+                    return d
+                def state_file(n):
+                    return os.path.join(state_dir(), n)
+                def log(m):
+                    print(m, flush=True)
 
-        def g(*args, check=True):
-            r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                               text=True)
-            if check and r.returncode != 0:
-                # surface git's own diagnosis (a bare check=True traceback
-                # hides it in e.stderr) before the uncaught-exception hook
-                # persists everything
-                print(f"::error::git {' '.join(args)} failed (exit {r.returncode}): "
-                      f"{r.stderr.strip()[:400]}")
-                raise subprocess.CalledProcessError(r.returncode, ["git", *args],
-                                                    output=r.stdout, stderr=r.stderr)
-            return r
+            # a crashed stage must leave a persistent diagnosis (the job log dies
+            # with the run; a ghost run's logs are unreachable from the API) —
+            # the full traceback goes to the runner's diag dir + one line to the
+            # stage-fail-reason state file the summary/upload steps carry on
+            def _cw_persist(stage, dump, value):
+                # one writer for both paths (the explicit try/except wrap and the
+                # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                # state file (carried on by the summary/upload steps), and the
+                # runner's durable diag log (the job log dies with the run)
+                if globals().get("_cw_persisted"):
+                    return
+                globals()["_cw_persisted"] = True
+                try:
+                    d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                    os.makedirs(d, exist_ok=True)
+                    with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                        f.write(f"stage {stage} FAILED — {value}\n")
+                    with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                        f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                    print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                except Exception:
+                    print(f"::error::stage {stage} failed — {value}")
 
-        # baseline ref = head of the target branch
-        g("fetch", "--no-recurse-submodules", "origin", base_ref)
-        base_sha = g("rev-parse", f"origin/{base_ref}").stdout.strip()
+            def _cw_on_uncaught(t, v, tb):
+                import traceback as _tb
+                # the hook receives (type, value, traceback) from the interpreter —
+                # sys.exc_info() is already cleared by the time it runs, so the
+                # arguments are the source of truth; format_exc() is the fallback
+                if tb is not None:
+                    dump = "".join(_tb.format_exception(t, v, tb))
+                else:
+                    dump = _tb.format_exc()
+                    if not dump.strip() or dump.strip() == "NoneType: None":
+                        dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                _cw_persist("3 baseline", dump, v)
+                raise SystemExit(1)
+            sys.excepthook = _cw_on_uncaught
+            base_ref = os.environ["INPUT_BASE_REF"]
+            ai_branch = os.environ["INPUT_AI_BRANCH"]
+            repo = os.environ["GITHUB_WORKSPACE"]
 
-        # re-runs start clean: delete an existing AI branch (local + remote)
-        g("branch", "-D", ai_branch, check=False)
-        g("push", "origin", f"--delete", ai_branch, check=False)
+            def g(*args, check=True):
+                r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                                   text=True)
+                if check and r.returncode != 0:
+                    # surface git's own diagnosis (a bare check=True traceback
+                    # hides it in e.stderr) before the uncaught-exception hook
+                    # persists everything
+                    print(f"::error::git {' '.join(args)} failed (exit {r.returncode}): "
+                          f"{r.stderr.strip()[:400]}")
+                    raise subprocess.CalledProcessError(r.returncode, ["git", *args],
+                                                        output=r.stdout, stderr=r.stderr)
+                return r
 
-        g("checkout", "-B", ai_branch, base_sha)
-        g("config", "user.name", "Code Weaver")
-        g("config", "user.email", "code-weaver@users.noreply.github.com")
+            # baseline ref = head of the target branch
+            g("fetch", "--no-recurse-submodules", "origin", base_ref)
+            base_sha = g("rev-parse", f"origin/{base_ref}").stdout.strip()
 
-        # the issue's change set, snapshotted as state (empty at a fresh cut —
-        # it grows as stages write, and anchors every guard check)
-        state = state_dir()
-        with open(state_file("baseline.sha"), "w") as f:
-            f.write(base_sha + "\n")
-        diff = g("diff", base_sha).stdout
-        with open(state_file("baseline.diff"), "w") as f:
-            f.write(diff)
+            # re-runs start clean: delete an existing AI branch (local + remote)
+            g("branch", "-D", ai_branch, check=False)
+            g("push", "origin", f"--delete", ai_branch, check=False)
 
-        log(f"baseline: {ai_branch} cut at {base_sha} (head of {base_ref}); "
-            f"baseline diff {len(diff)} bytes → state (not the repo tree)")
-        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"baseline-ref={base_sha}\n")
-            f.write(f"ai-branch={ai_branch}\n")
+            g("checkout", "-B", ai_branch, base_sha)
+            g("config", "user.name", "Code Weaver")
+            g("config", "user.email", "code-weaver@users.noreply.github.com")
+
+            # the issue's change set, snapshotted as state (empty at a fresh cut —
+            # it grows as stages write, and anchors every guard check)
+            state = state_dir()
+            with open(state_file("baseline.sha"), "w") as f:
+                f.write(base_sha + "\n")
+            diff = g("diff", base_sha).stdout
+            with open(state_file("baseline.diff"), "w") as f:
+                f.write(diff)
+
+            log(f"baseline: {ai_branch} cut at {base_sha} (head of {base_ref}); "
+                f"baseline diff {len(diff)} bytes → state (not the repo tree)")
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write(f"baseline-ref={base_sha}\n")
+                f.write(f"ai-branch={ai_branch}\n")
+        except SystemExit:
+            raise
+        except BaseException as e:
+            # explicit wrap: inside this handler the exception
+            # context is alive, so the persisted traceback is always
+            # complete; the excepthook below is the backstop
+            import traceback as _tb
+            _cw_persist("3 baseline", _tb.format_exc(), e)
+            raise

@@ -38,7 +38,9 @@ runs:
 
         def fail(msg):
             # the job log dies with the run — persist the reason (the
-            # summary/upload steps carry stage-fail-reason.txt on)
+            # summary/upload steps carry stage-fail-reason.txt on); the flag
+            # keeps the excepthook from writing a second entry for it
+            globals()["_cw_persisted"] = True
             try:
                 d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
                 os.makedirs(d, exist_ok=True)

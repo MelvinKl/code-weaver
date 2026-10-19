@@ -39,47 +39,75 @@ runs:
       shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}
       run: |
-        import os, sys
-        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
-        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-        if os.path.isdir(scripts):
-            sys.path.insert(0, scripts)
-        # a crashed stage must leave a persistent diagnosis (the job log dies
-        # with the run; a ghost run's logs are unreachable from the API) —
-        # the full traceback goes to the runner's diag dir + one line to the
-        # stage-fail-reason state file the summary/upload steps carry on
-        def _cw_on_uncaught(t, v, tb):
-            import traceback as _tb
-            dump = _tb.format_exc()
-            try:
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                    f.write(f"stage pi-run (LLM stages) FAILED — {v}\n")
-                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                    f.write(f"=== stage pi-run (LLM stages) FAILED ===\n{dump}\n")
-                print(f"::error::stage pi-run (LLM stages) failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-            except Exception:
-                print(f"::error::stage pi-run (LLM stages) failed — {v}")
-            raise SystemExit(1)
-        sys.excepthook = _cw_on_uncaught
-        from common import pi_invoke, state_file
+        try:
+            import os, sys
+            action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+            scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+            if os.path.isdir(scripts):
+                sys.path.insert(0, scripts)
+            # a crashed stage must leave a persistent diagnosis (the job log dies
+            # with the run; a ghost run's logs are unreachable from the API) —
+            # the full traceback goes to the runner's diag dir + one line to the
+            # stage-fail-reason state file the summary/upload steps carry on
+            def _cw_persist(stage, dump, value):
+                # one writer for both paths (the explicit try/except wrap and the
+                # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                # state file (carried on by the summary/upload steps), and the
+                # runner's durable diag log (the job log dies with the run)
+                if globals().get("_cw_persisted"):
+                    return
+                globals()["_cw_persisted"] = True
+                try:
+                    d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                    os.makedirs(d, exist_ok=True)
+                    with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                        f.write(f"stage {stage} FAILED — {value}\n")
+                    with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                        f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                    print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                except Exception:
+                    print(f"::error::stage {stage} failed — {value}")
 
-        prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")
-        sp = os.path.join(prompts, os.environ["INPUT_TEMPLATE"] + ".md")
-        if not os.path.exists(sp):
-            print(f"::error::unknown pi prompt template '{os.environ['INPUT_TEMPLATE']}' (have: "
-                  f"{sorted(os.path.basename(p) for p in os.listdir(prompts)) if os.path.isdir(prompts) else 'none'})")
-            sys.exit(1)
-        r = pi_invoke(
-            model=os.environ["INPUT_MODEL"],
-            system_prompt_file=sp,
-            prompt_file=os.environ.get("INPUT_PROMPT_FILE") or None,
-            context=os.environ.get("INPUT_CONTEXT", "").split(),
-            timeout=int(os.environ.get("INPUT_TIMEOUT") or 1800),
-        )
-        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"pi-exit-code={r.returncode}\n")
-            f.write(f"pi-out-file={state_file('last-pi.out')}\n")
-        if r.returncode != 0:
-            sys.exit(1)
+            def _cw_on_uncaught(t, v, tb):
+                import traceback as _tb
+                # the hook receives (type, value, traceback) from the interpreter —
+                # sys.exc_info() is already cleared by the time it runs, so the
+                # arguments are the source of truth; format_exc() is the fallback
+                if tb is not None:
+                    dump = "".join(_tb.format_exception(t, v, tb))
+                else:
+                    dump = _tb.format_exc()
+                    if not dump.strip() or dump.strip() == "NoneType: None":
+                        dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                _cw_persist("pi-run (LLM stages)", dump, v)
+                raise SystemExit(1)
+            sys.excepthook = _cw_on_uncaught
+            from common import pi_invoke, state_file
+
+            prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")
+            sp = os.path.join(prompts, os.environ["INPUT_TEMPLATE"] + ".md")
+            if not os.path.exists(sp):
+                print(f"::error::unknown pi prompt template '{os.environ['INPUT_TEMPLATE']}' (have: "
+                      f"{sorted(os.path.basename(p) for p in os.listdir(prompts)) if os.path.isdir(prompts) else 'none'})")
+                sys.exit(1)
+            r = pi_invoke(
+                model=os.environ["INPUT_MODEL"],
+                system_prompt_file=sp,
+                prompt_file=os.environ.get("INPUT_PROMPT_FILE") or None,
+                context=os.environ.get("INPUT_CONTEXT", "").split(),
+                timeout=int(os.environ.get("INPUT_TIMEOUT") or 1800),
+            )
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write(f"pi-exit-code={r.returncode}\n")
+                f.write(f"pi-out-file={state_file('last-pi.out')}\n")
+            if r.returncode != 0:
+                sys.exit(1)
+        except SystemExit:
+            raise
+        except BaseException as e:
+            # explicit wrap: inside this handler the exception
+            # context is alive, so the persisted traceback is always
+            # complete; the excepthook below is the backstop
+            import traceback as _tb
+            _cw_persist("pi-run (LLM stages)", _tb.format_exc(), e)
+            raise
