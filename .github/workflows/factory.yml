@@ -155,6 +155,8 @@ jobs:
           [ -z "$ISSUE" ] && ISSUE="${{ github.event.issue.number || '' }}"
           if [ -z "$ISSUE" ]; then
             echo "no issue to process (no input, no issue event) — factory idle"
+            mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+            echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
             exit 0
           fi
           echo "issue-number=$ISSUE" >> "$GITHUB_OUTPUT"
@@ -162,6 +164,8 @@ jobs:
             LABELS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE" | jq -r '.labels[].name')
             if ! grep -qx -- "$AI_REQUIREMENTS_LABEL" <<<"$LABELS"; then
               echo "issue $ISSUE does not carry '$AI_REQUIREMENTS_LABEL' — factory idle"
+              mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+              echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
               exit 0
             fi
           fi
@@ -169,6 +173,8 @@ jobs:
           EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${{ inputs.workflow-name }}.yml/runs?status=in_progress&per_page=20" \
             | jq -r --arg n "$ISSUE" '[.workflow_runs[]? | select((.inputs?["issue-number"] // "") == $n) | .id] | join(" ")') || true
           if [ -n "$EXISTING" ]; then
+            mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+            echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
             gh issue comment "$ISSUE" --body "⏳ **code-weaver** — a factory run for issue #${ISSUE} is already in progress (run ${EXISTING}). This trigger exits without duplicating work."
             exit 0
           fi
@@ -198,6 +204,14 @@ jobs:
           } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
           echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
             | tee "$RUNNER_TEMP/cw/stage-summary.txt"
+          # state files — every later job reads its trigger values from these
+          # (artifact channel), never from the job-outputs relay
+          mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+          echo "true" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
+          echo "$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/issue-number.txt"
+          echo "$TITLE" > "$RUNNER_TEMP/cw/state/trigger/issue-title.txt"
+          echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base-ref.txt"
+          echo "$BASE_SHA" > "$RUNNER_TEMP/cw/state/trigger/base-sha.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -245,22 +259,47 @@ jobs:
     runs-on: ${{ inputs.runner }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
-      # stage values via env (CW_*) — this runner build never binds a
-      # composite action's with: values to INPUT_* for its inner steps
-      CW_BASE_REF: ${{ needs.trigger.outputs.base-ref }}
-      CW_AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      # ISSUE_NUMBER / CW_BASE_REF / CW_AI_BRANCH arrive via GITHUB_ENV from
+      # the trigger artifact (the Read trigger state step) — job-level env is
+      # frozen at job start and the job-outputs relay drops values here
     steps:
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ needs.trigger.outputs.base-ref }}
+          ref: ${{ env.CW_BASE_REF }}
           token: ${{ secrets.GH_TOKEN }}
       - name: Stage 3 — cut the AI branch, record the baseline
+        if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/baseline/
         with:
-          base-ref: ${{ needs.trigger.outputs.base-ref }}
-          ai-branch: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          # env-based (not needs.-based): step-level `env` sees the GITHUB_ENV
+          # values the state step wrote; the job-outputs relay drops values
+          # per-job on this runner. A healthy runner binds these to INPUT_*,
+          # and the action's resolver prefers CW_* env either way.
+          base-ref: ${{ env.CW_BASE_REF }}
+          ai-branch: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
       - name: Push the AI branch (a crashed run resumes cleanly)
         run: |
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" \
@@ -271,7 +310,7 @@ jobs:
           if [ -s "$RUNNER_TEMP/cw/stage-fail-reason.txt" ]; then
             cat "$RUNNER_TEMP/cw/stage-fail-reason.txt" > "$RUNNER_TEMP/cw/stage-summary.txt"
           else
-            echo "stage 3 baseline: branch ai/code-weaver/${ISSUE_NUMBER} at ${{ needs.trigger.outputs.base-sha }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
+            echo "stage 3 baseline: branch ai/code-weaver/${ISSUE_NUMBER} at ${CW_BASE_SHA}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
           fi
       - uses: actions/download-artifact@v4
         with:
@@ -296,7 +335,6 @@ jobs:
     timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
       REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
       PLAN_DIR: ${{ inputs.plan-dir }}
@@ -304,23 +342,42 @@ jobs:
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
       MAX_TOKENS: ${{ inputs.max-tokens }}
-      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
-      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+      # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
+      # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
-          token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+          token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
           name: cw-baseline
           path: ${{ runner.temp }}/cw
       - name: Stage 4 — extract the delta requirements (Gherkin)
+        if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/extract-stage/
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
@@ -340,7 +397,6 @@ jobs:
     timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
       REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
       PLAN_DIR: ${{ inputs.plan-dir }}
@@ -348,15 +404,42 @@ jobs:
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
       MAX_TOKENS: ${{ inputs.max-tokens }}
-      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
-      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+      # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
+      # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
           token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-extract
+          path: ${ runner.temp }/cw
       - name: Stage 6 — plan every requirement change (markdown)
+        if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/plan-stage/
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
@@ -376,7 +459,6 @@ jobs:
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
       REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
       PLAN_DIR: ${{ inputs.plan-dir }}
@@ -384,15 +466,42 @@ jobs:
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
       MAX_TOKENS: ${{ inputs.max-tokens }}
-      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
-      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+      # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
+      # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
           token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-plan
+          path: ${ runner.temp }/cw
       - name: Stage 8 — implement the plans (code, tests, arc42, README)
+        if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/implement-stage/
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
@@ -412,7 +521,6 @@ jobs:
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
       REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
       PLAN_DIR: ${{ inputs.plan-dir }}
@@ -420,15 +528,42 @@ jobs:
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
       MAX_TOKENS: ${{ inputs.max-tokens }}
-      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
-      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+      # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
+      # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
           token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-implement
+          path: ${{ runner.temp }}/cw
       - name: Stage 10-11 — run the oracle, review, fix (bounded loop)
+        if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/review-stage/
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
@@ -447,17 +582,36 @@ jobs:
     runs-on: ${{ inputs.runner }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      # stage values via env (CW_*) — this runner build never binds a
-      # composite action's with: values to INPUT_* for its inner steps
-      CW_HEAD: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
       CW_BASE: ${{ inputs.target-branch }}
-      CW_TITLE: "🏭 code-weaver: ${{ needs.trigger.outputs.issue-title }}"
-      CW_ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      # CW_HEAD / CW_TITLE / CW_ISSUE_NUMBER / AI_BRANCH / ISSUE_NUMBER
+      # arrive via GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -519,13 +673,14 @@ jobs:
           open(out, "w").write("\n".join(lines) + "\n")
           EOF
         env:
-          CW_ISSUE: ${{ needs.trigger.outputs.issue-number }}
-          CW_TITLE: ${{ needs.trigger.outputs.issue-title }}
+          CW_ISSUE: ${{ env.CW_ISSUE_NUMBER }}
+          CW_TITLE: ${{ env.CW_ISSUE_TITLE }}
           CW_TARGET: ${{ inputs.target-branch }}
           CW_MODEL: ${{ inputs.llm-model }}
           CW_RUNNER: ${{ inputs.runner }}
       - id: open-pr
         name: Stage 12 — push & open the PR
+        if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/pr-open/
         # step-level env: runner.temp is not a permitted context in a called
         # workflow's job-level env: ("Unrecognized named-value: 'runner'")
@@ -533,11 +688,13 @@ jobs:
         env:
           CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
         with:
-          head: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          # env-based (not needs.-based): the state step's GITHUB_ENV values;
+          # see the baseline job's comment on the relay
+          head: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
           base: ${{ inputs.target-branch }}
-          title: "🏭 code-weaver: ${{ needs.trigger.outputs.issue-title }}"
+          title: "🏭 code-weaver: ${{ env.CW_ISSUE_TITLE }}"
           body-file: ${{ runner.temp }}/cw/pr-body.md
-          issue-number: ${{ needs.trigger.outputs.issue-number }}
+          issue-number: ${{ env.CW_ISSUE_NUMBER }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -557,24 +714,58 @@ jobs:
     timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
-      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
       LLM_MODEL: ${{ inputs.llm-model }}
       REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
       PLAN_DIR: ${{ inputs.plan-dir }}
       DOC_DIR: ${{ inputs.doc-dir }}
       MAX_LOOPS: ${{ inputs.max-loops }}
       MAX_TOKENS: ${{ inputs.max-tokens }}
+      # ISSUE_NUMBER / AI_BRANCH / CW_PR_NUMBER arrive via GITHUB_ENV from
+      # the stage artifacts (Read trigger / Read PR state steps)
     steps:
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
           token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-pr
+          path: ${{ runner.temp }}/cw
+      - name: Read PR state
+        run: |
+          T="$RUNNER_TEMP/cw/state/pr"
+          [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
+          echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
+          [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
+          echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
       - id: head
         name: Resolve the PR's head sha
-        run: echo "head-sha=$(gh api repos/$GITHUB_REPOSITORY/pulls/${{ needs.pr.outputs.pr-number }}/head.sha)" >> "$GITHUB_OUTPUT"
+        run: echo "head-sha=$(gh api repos/$GITHUB_REPOSITORY/pulls/${CW_PR_NUMBER}/head.sha)" >> "$GITHUB_OUTPUT"
       - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
+        if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/gates-stage/
         # step-level env (not job-level): steps.head.outputs is only known
         # after that step ran, and job env is materialized at job start
@@ -602,22 +793,41 @@ jobs:
     runs-on: ${{ inputs.runner }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
       DOC_DIR: ${{ inputs.doc-dir }}
-      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
-      # stage values via env (CW_*) — this runner build never binds a
-      # composite action's with: values to INPUT_* for its inner steps
-      # (no ternary here — a `?` in a reusable workflow's expressions makes the
-      # file invalid ("Unexpected symbol: '?'"); the parenthesized &&/|| chain
-      # with string literals expresses the same if-else)
+      # (no ternary in this job's env — a `?` in a reusable workflow's
+      # expressions makes the file invalid; the parenthesized &&/|| chain with
+      # string literals expresses the same if-else; job-level env stays to
+      # factory inputs + the job-result relay — trigger/PR values arrive via
+      # GITHUB_ENV from the stage artifacts, which is why the state steps sit
+      # where they do)
       CW_RUN_RESULT: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
-      CW_PR_NUMBER: ${{ needs.pr.outputs.pr-number }}
-      CW_ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
     steps:
+      # Value source — the trigger's resolved config rides the ARTIFACT:
+      # the job-outputs relay has been observed dropping a value for one
+      # downstream job while the next job received it (issue-number present
+      # in baseline, missing in extract). The artifact is the oracle's
+      # stage-results channel; GITHUB_ENV then feeds the rest of the job.
+      - name: Stage state — trigger
+        uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ runner.temp }}/cw
+      - name: Read trigger state
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha; do
+            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          done
+          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ needs.baseline.outputs.ai-branch || needs.trigger.outputs.base-ref }}
+          ref: ${{ env.CW_AI_BRANCH || env.CW_BASE_REF }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -651,6 +861,14 @@ jobs:
         with:
           name: cw-gates
           path: ${{ runner.temp }}/cw
+
+      - name: Read PR state
+        run: |
+          T="$RUNNER_TEMP/cw/state/pr"
+          [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
+          echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
+          [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
+          echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
       - name: Stage 15 — PR body = final status; issue comment; arc42 activity
         uses: ./.github/actions/report/
         with:
@@ -658,8 +876,8 @@ jobs:
           # file invalid ("Unexpected symbol: '?'"); the parenthesized &&/|| chain
           # with string literals expresses the same if-else
           run-result: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
-          pr-number: ${{ needs.pr.outputs.pr-number }}
-          issue-number: ${{ needs.trigger.outputs.issue-number }}
+          pr-number: ${{ env.CW_PR_NUMBER }}
+          issue-number: ${{ env.CW_ISSUE_NUMBER }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

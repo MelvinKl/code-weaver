@@ -143,6 +143,13 @@ runs:
                          f"final status report (stage 15 completes it). Merging is a human decision.")
             with open(os.environ["GITHUB_OUTPUT"], "a") as f:
                 f.write(f"pr-number={number}\npr-url={url}\n")
+            # state files — the gates & report jobs read the PR identity from
+            # the artifact (the job-outputs relay is not their value channel)
+            st = os.path.join(os.environ.get("RUNNER_TEMP", ""),
+                              "cw", "state", "pr")
+            os.makedirs(st, exist_ok=True)
+            open(os.path.join(st, "pr-number.txt"), "w").write(str(number))
+            open(os.path.join(st, "pr-url.txt"), "w").write(url)
         except SystemExit:
             raise
         except BaseException as e:

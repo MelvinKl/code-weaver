@@ -75,3 +75,15 @@ Feature: Secrets and safety
     Then the stage code resolves each input as INPUT_<name> falling back to CW_<name>
     And the stage proceeds with its values as on a runner that binds them correctly
     And the with: mappings stay declared for portability to a healthy runner
+
+  Scenario: Stage values ride the trigger artifact, not the job-outputs relay
+    # the job-outputs relay has been observed dropping a value for one
+    # downstream job while the very next job received it (issue-number
+    # present in baseline, missing in extract); GITHUB_ENV, fed by the
+    # trigger artifact's state files, is the per-job, in-process channel
+    Given the trigger stage resolved the run configuration
+    When any later stage job starts
+    Then the job's values come from the trigger artifact's state files
+    And steps after the state read see them in the process environment
+    And no stage job may take trigger values from the job-outputs relay
+    in an expression position
