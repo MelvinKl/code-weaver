@@ -9,4 +9,3 @@ jobs:
 
 # The factory file (output-probe-factory.yml) holds jobs one/two, so the
 # probe runs them inside a CALLED workflow — the factory's exact topology.
-jobs:
