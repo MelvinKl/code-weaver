@@ -86,4 +86,3 @@ Feature: Secrets and safety
     Then the job's values come from the trigger artifact's state files
     And steps after the state read see them in the process environment
     And no stage job may take trigger values from the job-outputs relay
-    in an expression position
