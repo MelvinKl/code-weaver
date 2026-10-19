@@ -36,13 +36,41 @@ runs:
             def log(m):
                 print(m, flush=True)
 
+        # a crashed stage must leave a persistent diagnosis (the job log dies
+        # with the run; a ghost run's logs are unreachable from the API) —
+        # the full traceback goes to the runner's diag dir + one line to the
+        # stage-fail-reason state file the summary/upload steps carry on
+        def _cw_on_uncaught(t, v, tb):
+            import traceback as _tb
+            dump = _tb.format_exc()
+            try:
+                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(d, exist_ok=True)
+                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                    f.write(f"stage 3 baseline FAILED — {v}\n")
+                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                    f.write(f"=== stage 3 baseline FAILED ===\n{dump}\n")
+                print(f"::error::stage 3 baseline failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+            except Exception:
+                print(f"::error::stage 3 baseline failed — {v}")
+            raise SystemExit(1)
+        sys.excepthook = _cw_on_uncaught
         base_ref = os.environ["INPUT_BASE_REF"]
         ai_branch = os.environ["INPUT_AI_BRANCH"]
         repo = os.environ["GITHUB_WORKSPACE"]
 
         def g(*args, check=True):
-            return subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                                  text=True, check=check)
+            r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                               text=True)
+            if check and r.returncode != 0:
+                # surface git's own diagnosis (a bare check=True traceback
+                # hides it in e.stderr) before the uncaught-exception hook
+                # persists everything
+                print(f"::error::git {' '.join(args)} failed (exit {r.returncode}): "
+                      f"{r.stderr.strip()[:400]}")
+                raise subprocess.CalledProcessError(r.returncode, ["git", *args],
+                                                    output=r.stdout, stderr=r.stderr)
+            return r
 
         # baseline ref = head of the target branch
         g("fetch", "--no-recurse-submodules", "origin", base_ref)

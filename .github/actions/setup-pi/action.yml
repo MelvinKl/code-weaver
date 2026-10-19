@@ -36,7 +36,20 @@ runs:
             def log(m):
                 print(m, flush=True)
 
-        fail = lambda msg: (print(f"::error::{msg}"), sys.exit(1))
+        def fail(msg):
+            # the job log dies with the run — persist the reason (the
+            # summary/upload steps carry stage-fail-reason.txt on)
+            try:
+                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(d, exist_ok=True)
+                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                    f.write(f"stage 2 setup-pi FAILED — {msg}\n")
+                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                    f.write(f"=== stage 2 setup-pi FAILED ===\n{msg}\n")
+            except Exception:
+                pass
+            print(f"::error::{msg}")
+            sys.exit(1)
 
         # 1. presence — the factory never installs pi
         if shutil.which("pi") is None:

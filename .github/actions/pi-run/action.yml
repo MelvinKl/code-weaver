@@ -44,6 +44,25 @@ runs:
         scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
         if os.path.isdir(scripts):
             sys.path.insert(0, scripts)
+        # a crashed stage must leave a persistent diagnosis (the job log dies
+        # with the run; a ghost run's logs are unreachable from the API) —
+        # the full traceback goes to the runner's diag dir + one line to the
+        # stage-fail-reason state file the summary/upload steps carry on
+        def _cw_on_uncaught(t, v, tb):
+            import traceback as _tb
+            dump = _tb.format_exc()
+            try:
+                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(d, exist_ok=True)
+                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                    f.write(f"stage pi-run (LLM stages) FAILED — {v}\n")
+                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                    f.write(f"=== stage pi-run (LLM stages) FAILED ===\n{dump}\n")
+                print(f"::error::stage pi-run (LLM stages) failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+            except Exception:
+                print(f"::error::stage pi-run (LLM stages) failed — {v}")
+            raise SystemExit(1)
+        sys.excepthook = _cw_on_uncaught
         from common import pi_invoke, state_file
 
         prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")

@@ -216,8 +216,15 @@ jobs:
         with:
           llm-model: ${{ inputs.llm-model }}
       - name: Stage summary
-        run: 'echo "stage 2 setup-pi: verified — backend ${{ steps.verify.outputs.backend-url }}, model ${{ steps.verify.outputs.model }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"'
+        if: always()
+        run: |
+          if [ -s "$RUNNER_TEMP/cw/stage-fail-reason.txt" ]; then
+            cat "$RUNNER_TEMP/cw/stage-fail-reason.txt" > "$RUNNER_TEMP/cw/stage-summary.txt"
+          else
+            echo "stage 2 setup-pi: verified — backend ${{ steps.verify.outputs.backend-url }}, model ${{ steps.verify.outputs.model }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
+          fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-setup
           path: ${{ runner.temp }}/cw
@@ -248,12 +255,19 @@ jobs:
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" \
             "ai/code-weaver/${ISSUE_NUMBER}"
       - name: Stage summary
-        run: 'echo "stage 3 baseline: branch ai/code-weaver/${ISSUE_NUMBER} at ${{ needs.trigger.outputs.base-sha }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"'
+        if: always()
+        run: |
+          if [ -s "$RUNNER_TEMP/cw/stage-fail-reason.txt" ]; then
+            cat "$RUNNER_TEMP/cw/stage-fail-reason.txt" > "$RUNNER_TEMP/cw/stage-summary.txt"
+          else
+            echo "stage 3 baseline: branch ai/code-weaver/${ISSUE_NUMBER} at ${{ needs.trigger.outputs.base-sha }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
+          fi
       - uses: actions/download-artifact@v4
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-baseline
           path: ${{ runner.temp }}/cw
@@ -300,6 +314,7 @@ jobs:
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-extract
           path: ${{ runner.temp }}/cw
@@ -335,6 +350,7 @@ jobs:
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-plan
           path: ${{ runner.temp }}/cw
@@ -370,6 +386,7 @@ jobs:
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-implement
           path: ${{ runner.temp }}/cw
@@ -405,6 +422,7 @@ jobs:
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-review
           path: ${{ runner.temp }}/cw
@@ -499,6 +517,7 @@ jobs:
           body-file: ${{ runner.temp }}/cw/pr-body.md
           issue-number: ${{ needs.trigger.outputs.issue-number }}
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-pr
           path: ${{ runner.temp }}/cw
@@ -541,6 +560,7 @@ jobs:
         if: ${{ success() || failure() }}
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}" || true
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cw-gates
           path: ${{ runner.temp }}/cw

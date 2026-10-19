@@ -44,6 +44,25 @@ runs:
         except ImportError:
             common = None
 
+        # a crashed stage must leave a persistent diagnosis (the job log dies
+        # with the run; a ghost run's logs are unreachable from the API) —
+        # the full traceback goes to the runner's diag dir + one line to the
+        # stage-fail-reason state file the summary/upload steps carry on
+        def _cw_on_uncaught(t, v, tb):
+            import traceback as _tb
+            dump = _tb.format_exc()
+            try:
+                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(d, exist_ok=True)
+                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                    f.write(f"stage 12 pr-open FAILED — {v}\n")
+                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                    f.write(f"=== stage 12 pr-open FAILED ===\n{dump}\n")
+                print(f"::error::stage 12 pr-open failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+            except Exception:
+                print(f"::error::stage 12 pr-open failed — {v}")
+            raise SystemExit(1)
+        sys.excepthook = _cw_on_uncaught
         head, base = os.environ["INPUT_HEAD"], os.environ["INPUT_BASE"]
         title, body_file, issue = (os.environ["INPUT_TITLE"],
                                    os.environ["INPUT_BODY_FILE"],

@@ -59,3 +59,11 @@ Feature: Secrets and safety
     When the stage uploads its state as a workflow artifact and a later stage starts
     Then the later stage downloads that artifact and sees the previous stage's results
     And the hand-off relies only on workflow storage, never on the repo tree
+
+  @safety
+  Scenario: A crashed stage leaves a persistent diagnosis on the runner
+    Given a stage's program crashed before its step finished
+    When the run ends and its job log is no longer retrievable
+    Then the stage's full traceback is written to the runner's diagnostic log
+    And a one-line failure reason is carried in the stage's artifact
+    And a human can read why the stage failed without the job log
