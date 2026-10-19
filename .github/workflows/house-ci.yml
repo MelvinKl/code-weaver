@@ -22,6 +22,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Install uv (the runner image does not ship it)
+        # pinned to the exact commit of v10.3.0: GitHub's major-only ref
+        # resolution (`@v9`) fails for this action even though the tag exists
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
       - name: Prepare the CI environment (uv)
         run: |
           uv venv /tmp/cw-ci
