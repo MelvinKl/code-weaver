@@ -452,7 +452,6 @@ jobs:
       CW_HEAD: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
       CW_BASE: ${{ inputs.target-branch }}
       CW_TITLE: "🏭 code-weaver: ${{ needs.trigger.outputs.issue-title }}"
-      CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
       CW_ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
     steps:
       - uses: actions/checkout@v5
@@ -528,6 +527,11 @@ jobs:
       - id: open-pr
         name: Stage 12 — push & open the PR
         uses: ./.github/actions/pr-open/
+        # step-level env: runner.temp is not a permitted context in a called
+        # workflow's job-level env: ("Unrecognized named-value: 'runner'")
+        # but is fine in a step's env:/with:
+        env:
+          CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
         with:
           head: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
           base: ${{ inputs.target-branch }}
