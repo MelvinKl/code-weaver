@@ -11,7 +11,7 @@ permissions:
   pull-requests: write
 jobs:
   factory:
-    runs-on: <label of a runner whose environment has pi pre-installed & configured>
+    runs-on: gha-beryllium 
     uses: MelvinsPersonalProjects/code-weaver/.github/workflows/factory.yml@v0.1.0
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
