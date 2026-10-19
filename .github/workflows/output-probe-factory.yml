@@ -55,7 +55,3 @@ jobs:
           name: probe
           path: ${{ runner.temp }}/probe-outputs.txt
           if-no-files-found: warn
-      - name: echo received outputs
-        run: |
-    steps:
-      - name: echo received outputs
