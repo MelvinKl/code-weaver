@@ -43,11 +43,14 @@ runs:
             fail("pi not installed or configured on this runner — pre-requisite of the "
                  "runner environment; the factory never installs or re-configures pi")
 
-        # 2. locate the pi configuration (repo-local .pi/ first, then user)
+        # 2. locate the pi configuration (repo-local .pi/ first, then user;
+        #    recent pi versions keep the user config in the .pi/agent/ subdir
+        #    — probe both layouts)
         candidates = []
         for base in (os.environ["GITHUB_WORKSPACE"], os.path.expanduser("~")):
-            candidates += [os.path.join(base, ".pi", "mcp.json"),
-                           os.path.join(base, ".pi", "models.json")]
+            for sub in ("", "agent"):
+                candidates += [os.path.join(base, ".pi", sub, "mcp.json"),
+                               os.path.join(base, ".pi", sub, "models.json")]
         cfg_src = next((p for p in candidates if os.path.exists(p)), None)
 
         # 3. extract the OpenAI-compatible backend URL from the configuration

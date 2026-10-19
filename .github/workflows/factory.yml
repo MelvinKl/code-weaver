@@ -6,6 +6,11 @@
 # and are referenced from here — an upgrade is a ref bump in the target's
 # one-line invocation; every published tag stays a stable ref.
 #
+# Step `with:` mappings use the `runner.temp` context, never `env.RUNNER_TEMP`:
+# in a step's input expressions the well-known env var evaluates empty (the
+# upload then silently finds no files and every later download fails), while
+# `runner.temp` is the documented, always-populated mirror of the same dir.
+#
 # 15 logical stages → the jobs below. The runner environment must have `pi`
 # pre-installed & pre-configured (LLM backend included) — stage 2 only
 # verifies and fails explicitly.
@@ -190,7 +195,7 @@ jobs:
         if: always()
         with:
           name: cw-trigger
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
 
   # ── stage 2 ────────────────────────────────────────────────────────────
@@ -215,7 +220,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cw-setup
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
 
   # ── stage 3 ────────────────────────────────────────────────────────────
@@ -247,11 +252,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: cw-trigger
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/upload-artifact@v4
         with:
           name: cw-baseline
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
     outputs:
       baseline-ref: ${{ needs.trigger.outputs.base-sha }}
@@ -285,11 +290,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: cw-trigger
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-baseline
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - name: Stage 4 — extract the delta requirements (Gherkin)
         uses: ./.github/actions/extract-stage/
       - name: Push the AI branch
@@ -297,7 +302,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cw-extract
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
 
   # ── stages 6+7 ─────────────────────────────────────────────────────────
@@ -332,7 +337,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cw-plan
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
 
   # ── stages 8+9 ─────────────────────────────────────────────────────────
@@ -367,7 +372,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cw-implement
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
 
   # ── stages 10+11 ───────────────────────────────────────────────────────
@@ -402,7 +407,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cw-review
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
 
   # ── stage 12 ───────────────────────────────────────────────────────────
@@ -422,31 +427,31 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: cw-trigger
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-setup
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-baseline
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-extract
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-plan
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-implement
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-review
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - name: Assemble the PR body (the final status report, stage 15 completes it)
         run: |
           python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
@@ -491,12 +496,12 @@ jobs:
           head: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
           base: ${{ inputs.target-branch }}
           title: "🏭 code-weaver: ${{ needs.trigger.outputs.issue-title }}"
-          body-file: ${{ env.RUNNER_TEMP }}/cw/pr-body.md
+          body-file: ${{ runner.temp }}/cw/pr-body.md
           issue-number: ${{ needs.trigger.outputs.issue-number }}
       - uses: actions/upload-artifact@v4
         with:
           name: cw-pr
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
     outputs:
       pr-number: ${{ steps.open-pr.outputs.pr-number }}
@@ -538,7 +543,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cw-gates
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
 
   # ── stage 15 ───────────────────────────────────────────────────────────
@@ -563,35 +568,35 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: cw-trigger
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-setup
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-baseline
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-extract
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-plan
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-implement
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-review
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
         with:
           name: cw-gates
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
       - name: Stage 15 — PR body = final status; issue comment; arc42 activity
         uses: ./.github/actions/report/
         with:
@@ -605,5 +610,5 @@ jobs:
         if: always()
         with:
           name: cw-report
-          path: ${{ env.RUNNER_TEMP }}/cw
+          path: ${{ runner.temp }}/cw
           if-no-files-found: ignore

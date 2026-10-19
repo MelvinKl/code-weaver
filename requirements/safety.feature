@@ -52,3 +52,10 @@ Feature: Secrets and safety
     Then per-iteration logs exist in the workflow log or an artifact, never committed to the repo
     And the arc42 docs carry an AI-activity section for the run
     And a human reviews the PR before merging
+
+  @safety
+  Scenario: A stage's results reach the later stages as workflow artifacts
+    Given a stage has finished and recorded its results
+    When the stage uploads its state as a workflow artifact and a later stage starts
+    Then the later stage downloads that artifact and sees the previous stage's results
+    And the hand-off relies only on workflow storage, never on the repo tree

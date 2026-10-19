@@ -50,6 +50,12 @@ Feature: pi pre-installed and configured in the runner environment
     When a stage invokes pi with @file arguments for requirements/, README.md and docs/
     Then pi reads the named files as context before answering
 
+  @setup
+  Scenario: pi's user configuration in the agent subdirectory is found
+    Given pi keeps its user configuration in the "~/.pi/agent/" subdirectory
+    When the setup stage locates the pi configuration
+    Then the backend definition in that configuration is used for verification
+
   @setup @safety
   Scenario: A missing or misconfigured pi fails the stage clearly
     Given pi is absent or misconfigured on the runner
