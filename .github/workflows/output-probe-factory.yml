@@ -27,6 +27,12 @@ jobs:
           echo "=== GITHUB_OUTPUT file after step ==="
           cat "$GITHUB_OUTPUT"
           echo "=== end ==="
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-step3
+          path: ${{ runner.temp }}/probe-outputs.txt
+          if-no-files-found: ignore
 
   two:
     runs-on: self-hosted
