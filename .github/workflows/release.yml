@@ -1,0 +1,30 @@
+# Code Weaver — release machinery (reuse-by-ref)
+#
+# Tagging vX.Y.Z publishes a GitHub release: the ref every target pins.
+# Tags are immutable — workflows on a target that pinned an older ref keep
+# working; upgrading is a one-line ref bump in the target's workflow.
+name: code-weaver release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          RANGEFROM=${PREV:-$(git rev-list --max-parents=0 HEAD)}
+          CHANGES=$(git diff --stat "$RANGEFROM" "$TAG" -- .github pi-prompts requirements | tail -n +2)
+          NOTES=$(printf '## %s\n\nChanged since %s:\n\n`%s`\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$TAG" "${PREV:-the first commit}" "$CHANGES" "$TAG")
+          gh release create "$TAG" --title "code-weaver $TAG" --notes "$NOTES"

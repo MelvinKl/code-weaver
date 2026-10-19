@@ -1,0 +1,14 @@
+name: plan-stage
+description: >-
+  Stages 6+7 — planning + plan check, one bounded loop: pi writes markdown
+  plan(s) under the plan dir from the requirements and the arc42
+  documentation — one or more files, combining changes, but covering EVERY
+  requirement change, grounded in the documented architecture; the shared
+  guard verifies only the plan dir changed (a leak reverts + re-runs).
+runs:
+  using: composite
+  steps:
+    - name: Plan loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: python3 "$GITHUB_ACTION_PATH/stage.py"

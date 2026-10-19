@@ -1,0 +1,53 @@
+# Code Weaver — house CI.
+#
+# This is the same gate shape a target repo's pull requests run against the
+# factory's PR (pr-and-gates stage): the repo's own lint/test pipeline,
+# ubuntu-latest, uv-managed python. For this repo the "test suite" is:
+#   - every python script compiles
+#   - every workflow/action YAML parses
+#   - the Gherkin oracle validates with Cucumber's official parser
+#   - the validator's own unit tests pass
+name: code-weaver house CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Prepare the CI environment (uv)
+        run: |
+          uv venv /tmp/cw-ci
+          uv pip install --python /tmp/cw-ci/bin/python \
+            pytest pyyaml \
+            "git+https://github.com/cucumber/gherkin.git#subdirectory=python"
+      - name: Python compiles
+        run: find .github -name '*.py' -print0 | xargs -0 python3 -m py_compile
+      - name: YAML parses (workflows + actions)
+        run: |
+          /tmp/cw-ci/bin/python - <<'EOF'
+          import pathlib, sys, yaml
+          bad = []
+          files = sorted(pathlib.Path(".github/workflows").glob("*.yml"))
+          files += sorted(pathlib.Path(".github/actions").glob("*/action.yml"))
+          for p in files:
+              try:
+                  yaml.safe_load(p.read_text())
+              except Exception as e:
+                  bad.append(f"{p}: {e}")
+          print(f"yaml: {len(files) - len(bad)}/{len(files)} parse clean")
+          if bad:
+              print("FAIL " + "\nFAIL ".join(bad))
+              sys.exit(1)
+          EOF
+      - name: The Gherkin oracle validates
+        run: /tmp/cw-ci/bin/python .github/scripts/gherkin-validate.py requirements/
+      - name: Validator unit tests
+        run: /tmp/cw-ci/bin/python -m pytest tests/ -q

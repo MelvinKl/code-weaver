@@ -1,0 +1,72 @@
+name: baseline
+description: >-
+  Stage 3 — capture the baseline. Creates the AI branch ai/code-weaver/<issue>
+  at the target branch's head (the baseline ref), records the issue's
+  change-set diff as workflow state (never into the repo tree), and pushes
+  the branch so a crashed run resumes cleanly. The branch name is the
+  idempotency key the trigger stage uses.
+inputs:
+  base-ref:
+    description: Branch the AI branch is cut from (the target branch)
+    required: true
+  ai-branch:
+    description: The AI branch name — ai/code-weaver/<issue_number>
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Cut the AI branch and record the baseline
+      shell: python3
+      working-directory: ${{ github.workspace }}
+      run: |
+        import os, subprocess, sys
+        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+        if os.path.isdir(scripts):
+            sys.path.insert(0, scripts)
+        try:
+            from common import state_dir, state_file, log
+        except ImportError:
+            def state_dir():
+                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(d, exist_ok=True)
+                return d
+            def state_file(n):
+                return os.path.join(state_dir(), n)
+            def log(m):
+                print(m, flush=True)
+
+        base_ref = os.environ["INPUT_BASE_REF"]
+        ai_branch = os.environ["INPUT_AI_BRANCH"]
+        repo = os.environ["GITHUB_WORKSPACE"]
+
+        def g(*args, check=True):
+            return subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                                  text=True, check=check)
+
+        # baseline ref = head of the target branch
+        g("fetch", "--no-recurse-submodules", "origin", base_ref)
+        base_sha = g("rev-parse", f"origin/{base_ref}").stdout.strip()
+
+        # re-runs start clean: delete an existing AI branch (local + remote)
+        g("branch", "-D", ai_branch, check=False)
+        g("push", "origin", f"--delete", ai_branch, check=False)
+
+        g("checkout", "-B", ai_branch, base_sha)
+        g("config", "user.name", "Code Weaver")
+        g("config", "user.email", "code-weaver@users.noreply.github.com")
+
+        # the issue's change set, snapshotted as state (empty at a fresh cut —
+        # it grows as stages write, and anchors every guard check)
+        state = state_dir()
+        with open(state_file("baseline.sha"), "w") as f:
+            f.write(base_sha + "\n")
+        diff = g("diff", base_sha).stdout
+        with open(state_file("baseline.diff"), "w") as f:
+            f.write(diff)
+
+        log(f"baseline: {ai_branch} cut at {base_sha} (head of {base_ref}); "
+            f"baseline diff {len(diff)} bytes → state (not the repo tree)")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"baseline-ref={base_sha}\n")
+            f.write(f"ai-branch={ai_branch}\n")

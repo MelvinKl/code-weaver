@@ -1,0 +1,14 @@
+name: extract-stage
+description: >-
+  Stages 4+5 — requirement extraction + requirement check, one bounded
+  loop: pi derives the delta requirements (valid Gherkin, canonical
+  keywords) from the issue into the requirements dir; the shared guard
+  verifies only that dir changed (a leak is reverted and the stage re-run);
+  generated files must parse with Cucumber's official Gherkin parser.
+runs:
+  using: composite
+  steps:
+    - name: Requirement-extraction loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: python3 "$GITHUB_ACTION_PATH/stage.py"

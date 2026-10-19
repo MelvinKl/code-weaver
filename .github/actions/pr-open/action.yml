@@ -1,0 +1,96 @@
+name: pr-open
+description: >-
+  Stage 12 — open the pull request from the AI branch (ai/code-weaver/<issue>)
+  against the target branch. The PR description is the final status report
+  (stage 15 completes it): source issue, the run's stage outcomes, and the
+  resolved configuration. A re-run of the same issue updates the existing PR
+  instead of opening a duplicate.
+inputs:
+  head:
+    description: The AI branch (ai/code-weaver/<issue_number>)
+    required: true
+  base:
+    description: The target branch
+    required: true
+  title:
+    description: PR title
+    required: true
+  body-file:
+    description: File (in the state dir) with the PR description
+    required: true
+  issue-number:
+    description: The source issue to link
+    required: true
+outputs:
+  pr-number:
+    value: ${{ steps.open.outputs.pr-number }}
+  pr-url:
+    value: ${{ steps.open.outputs.pr-url }}
+runs:
+  using: composite
+  steps:
+    - id: open
+      name: Push the AI branch and open (or update) the PR
+      shell: python3
+      working-directory: ${{ github.workspace }}
+      run: |
+        import os, sys
+        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+        if os.path.isdir(scripts):
+            sys.path.insert(0, scripts)
+        try:
+            import common
+        except ImportError:
+            common = None
+
+        head, base = os.environ["INPUT_HEAD"], os.environ["INPUT_BASE"]
+        title, body_file, issue = (os.environ["INPUT_TITLE"],
+                                   os.environ["INPUT_BODY_FILE"],
+                                   os.environ["INPUT_ISSUE_NUMBER"])
+        repo = os.environ["GITHUB_WORKSPACE"]
+        token = os.environ.get("GH_TOKEN", "")
+
+        if common:
+            common.push_branch(head)
+        else:
+            # minimal push without the shared script (degenerate checkout) —
+            # token rides in the push URL only; the origin remote is untouched
+            import subprocess
+            subprocess.run(
+                ["git", "push", "--force",
+                 f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}",
+                 head],
+                cwd=repo, check=True,
+                env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
+
+        def gh(*a):
+            import subprocess
+            return subprocess.run(["gh", *a], cwd=repo, capture_output=True,
+                                  text=True, env={**os.environ, "GH_TOKEN": token})
+
+        # a PR from this head already exists? update it, don't duplicate
+        view = gh("pr", "view", head, "--json", "number,url")
+        if view.returncode == 0 and view.stdout.strip():
+            import json
+            pr = json.loads(view.stdout)
+            gh("pr", "edit", str(pr["number"]), "--body-file", body_file)
+            number, url = str(pr["number"]), pr["url"]
+        else:
+            cr = gh("pr", "create", "--base", base, "--head", head,
+                    "--title", title, "--body-file", body_file)
+            if cr.returncode != 0:
+                print(f"::error::pr create failed: {cr.stderr.strip()[:300]}")
+                sys.exit(1)
+            view = gh("pr", "view", head, "--json", "number,url")
+            pr = json.loads(view.stdout)
+            number, url = str(pr["number"]), pr["url"]
+
+        if common:
+            common.log(f"stage 12: PR #{number} open — {url} (ai-branch {head} → {base})")
+        gh("issue", "comment", issue,
+           "--body", f"🏭 **code-weaver** — pull request open: {url}\n\n"
+                     f"Base: `{base}` — head: `{head}`. The PR body carries the "
+                     f"final status report (stage 15 completes it). Merging is a human decision.")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"pr-number={number}\npr-url={url}\n")

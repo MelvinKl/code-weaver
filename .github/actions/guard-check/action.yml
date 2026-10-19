@@ -1,0 +1,34 @@
+name: guard-check
+description: >-
+  The one shared "only X changed" guard idiom (plan §4.1, in Python per the
+  owner's scripting preference): given the baseline ref and the stage's
+  allowed paths, every file in the baseline diff outside those paths is
+  reverted exactly, and the action exits 1 so the caller re-runs the
+  generation stage. A single script, invoked three times with different
+  allowed paths — after requirement-extraction (stage 5), after plan (stage
+  7) and after implementation (stage 9).
+inputs:
+  baseline-ref:
+    description: Baseline ref (sha or branch) the stage started from
+    required: true
+  allow:
+    description: >-
+      Space-separated allowed paths for this stage (e.g. "requirements",
+      "plans", "docs README.md" or "src tests docs README.md")
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Guard — only the allowed paths may change
+      shell: python3
+      working-directory: ${{ github.workspace }}
+      env:
+        BASELINE_REF: ${{ inputs.baseline-ref }}
+        CW_GUARD_ALLOW: ${{ inputs.allow }}
+      run: |
+        import os, sys, subprocess
+        script = os.path.join(os.environ.get("GITHUB_ACTION_PATH", "."), "guard-check.py")
+        args = [sys.executable, script, os.environ["BASELINE_REF"], *os.environ.get("CW_GUARD_ALLOW", "").split()]
+        r = subprocess.run(args, cwd=os.environ["GITHUB_WORKSPACE"], env=os.environ)
+        sys.exit(r.returncode)

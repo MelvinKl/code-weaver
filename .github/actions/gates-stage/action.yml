@@ -1,0 +1,18 @@
+name: gates-stage
+description: >-
+  Stages 13+14 — PR gates + gate-fix loop: wait until EVERY workflow run
+  triggered on the pull request has completed, all must be green before the
+  factory proceeds; a red gate fetches the failing logs, pi fixes, the branch
+  is re-pushed and the gates re-polled — bounded by MAX_LOOPS (0 = no cap).
+  The factory never merges: merging stays a human decision.
+inputs:
+  head-sha:
+    description: The PR's head sha the gates are polled against
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Gate loop — all PR-triggered workflows green (bounded; never merges)
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: python3 "$GITHUB_ACTION_PATH/stage.py"

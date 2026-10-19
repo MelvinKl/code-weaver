@@ -1,0 +1,560 @@
+# Code Weaver — the factory (reusable workflow, consumed BY REF)
+#
+# A target repo invokes this file with `uses: <owner>/code-weaver/
+# .github/workflows/factory.yml@<ref>` from its own short workflow and passes
+# inputs. The composite actions and pi prompt templates ship in the same repo
+# and are referenced from here — an upgrade is a ref bump in the target's
+# one-line invocation; every published tag stays a stable ref.
+#
+# 15 logical stages → the jobs below. The runner environment must have `pi`
+# pre-installed & pre-configured (LLM backend included) — stage 2 only
+# verifies and fails explicitly.
+name: Code Weaver factory
+
+on:
+  workflow_call:
+    inputs:
+      issue-number:
+        description: Issue to process (empty = the triggering issue)
+        type: string
+        required: false
+        default: ""
+      ai-requirements-label:
+        description: Label whose presence on an issue starts the factory
+        type: string
+        default: ai-requirements
+      target-branch:
+        description: Base branch the PR is opened against
+        type: string
+        default: main
+      requirements-dir:
+        description: Directory the factory writes Gherkin requirements to
+        type: string
+        default: requirements
+      plan-dir:
+        description: Directory the factory writes plans to
+        type: string
+        default: plans
+      doc-dir:
+        description: Directory of the project's arc42 markdown files
+        type: string
+        default: docs
+      llm-model:
+        description: Which configured model pi uses (the backend is a fixed pre-requisite of the runner's pi configuration)
+        type: string
+        default: Qwen3.8
+      max-loops:
+        description: Fix/guard loop cap per stage — 0 means no cap
+        type: string
+        default: "5"
+      max-tokens:
+        description: Token budget across the run — 0 means no cap
+        type: string
+        default: "500000"
+      runner:
+        description: Runner label whose environment has pi pre-installed & configured
+        type: string
+        default: ubuntu-latest
+      workflow-name:
+        description: The target's workflow file name (without .yml) — used for the idempotency query
+        type: string
+        default: code-weaver
+    secrets:
+      GH_TOKEN:
+        description: Token with contents:write + issues:write + pull-requests:write on the target repo
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # ── stage 1 ────────────────────────────────────────────────────────────
+  trigger:
+    name: "1 trigger"
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      started: ${{ steps.resolve.outputs.started }}
+      issue-number: ${{ steps.resolve.outputs.issue-number }}
+      issue-title: ${{ steps.resolve.outputs.issue-title }}
+      base-ref: ${{ steps.resolve.outputs.base-ref }}
+      base-sha: ${{ steps.resolve.outputs.base-sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+      - id: resolve
+        name: Resolve the issue & gate on the trigger label
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          AI_REQUIREMENTS_LABEL: ${{ inputs.ai-requirements-label }}
+        run: |
+          set -uo pipefail
+          echo "started=false" >> "$GITHUB_OUTPUT"
+          ISSUE="${{ inputs.issue-number }}"
+          [ -z "$ISSUE" ] && ISSUE="${{ github.event.issue.number || '' }}"
+          if [ -z "$ISSUE" ]; then
+            echo "no issue to process (no input, no issue event) — factory idle"
+            exit 0
+          fi
+          echo "issue-number=$ISSUE" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            LABELS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE" | jq -r '.labels[].name')
+            if ! grep -qx -- "$AI_REQUIREMENTS_LABEL" <<<"$LABELS"; then
+              echo "issue $ISSUE does not carry '$AI_REQUIREMENTS_LABEL' — factory idle"
+              exit 0
+            fi
+          fi
+          # idempotency: a second run for the same issue while the first is in progress
+          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${{ inputs.workflow-name }}.yml/runs?status=in_progress&per_page=20" \
+            | jq -r --arg n "$ISSUE" '[.workflow_runs[]? | select((.inputs?["issue-number"] // "") == $n) | .id] | join(" ")') || true
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$ISSUE" --body "⏳ **code-weaver** — a factory run for issue #${ISSUE} is already in progress (run ${EXISTING}). This trigger exits without duplicating work."
+            exit 0
+          fi
+          ISSUE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE")
+          mkdir -p "$RUNNER_TEMP/cw"
+          jq -r '.body // ""' <<<"$ISSUE_JSON" > "$RUNNER_TEMP/cw/issue-body.md"
+          BASE_REF="${{ inputs.target-branch }}"
+          BASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE_REF" | jq -r '.commit.sha')
+          TITLE=$(jq -r '.title // "(no title)"' <<<"$ISSUE_JSON" | tr '\n' ' ')
+          cat > "$RUNNER_TEMP/cw/issue-meta.json" <<EOF
+          { "issue": $ISSUE, "title": $(jq -c '.title // ""' <<<"$ISSUE_JSON"), "base_ref": "$BASE_REF", "base_sha": "$BASE_SHA" }
+          EOF
+          echo "started=true" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+          echo "base-sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "issue-title=$TITLE" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Code Weaver — resolved configuration (workflow log; never committed)"
+            echo "- issue: #$ISSUE (event: ${{ github.event_name }})"
+            echo "- runner: \`${{ inputs.runner }}\`"
+            echo "- LLM model (which configured model): \`${{ inputs.llm-model }}\`"
+            echo "- LLM backend: pre-requisite of the runner environment (fixed, not an input)"
+            echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
+            echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
+            echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
+            echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap), max-tokens=\`${{ inputs.max-tokens }}\` (0 = no cap)"
+          } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
+          echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
+            | tee "$RUNNER_TEMP/cw/stage-summary.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cw-trigger
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+
+  # ── stage 2 ────────────────────────────────────────────────────────────
+  setup-pi:
+    name: "2 setup-pi (verify pre-installed pi)"
+    needs: trigger
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    env:
+      LLM_MODEL: ${{ inputs.llm-model }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Stage 2 — verify (never install) pi, backend, model
+        uses: ./.github/actions/setup-pi/
+        with:
+          llm-model: ${{ inputs.llm-model }}
+      - name: Stage summary
+        run: 'echo "stage 2 setup-pi: verified — backend ${{ steps.verify.outputs.backend-url }}, model ${{ steps.verify.outputs.model }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-setup
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+
+  # ── stage 3 ────────────────────────────────────────────────────────────
+  baseline:
+    name: "3 baseline (ai/code-weaver/<issue>)"
+    needs: [trigger, setup-pi]
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.trigger.outputs.base-ref }}
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Stage 3 — cut the AI branch, record the baseline
+        uses: ./.github/actions/baseline/
+        with:
+          base-ref: ${{ needs.trigger.outputs.base-ref }}
+          ai-branch: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      - name: Push the AI branch (a crashed run resumes cleanly)
+        run: |
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" \
+            "ai/code-weaver/${ISSUE_NUMBER}"
+      - name: Stage summary
+        run: 'echo "stage 3 baseline: branch ai/code-weaver/${ISSUE_NUMBER} at ${{ needs.trigger.outputs.base-sha }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"'
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-baseline
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+    outputs:
+      baseline-ref: ${{ needs.trigger.outputs.base-sha }}
+      ai-branch: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+
+  # ── stages 4+5 ─────────────────────────────────────────────────────────
+  extract:
+    name: "4-5 requirement extraction (+ guard)"
+    needs: baseline
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      TARGET_BRANCH: ${{ inputs.target-branch }}
+      REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
+      PLAN_DIR: ${{ inputs.plan-dir }}
+      DOC_DIR: ${{ inputs.doc-dir }}
+      LLM_MODEL: ${{ inputs.llm-model }}
+      MAX_LOOPS: ${{ inputs.max-loops }}
+      MAX_TOKENS: ${{ inputs.max-tokens }}
+      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-baseline
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - name: Stage 4 — extract the delta requirements (Gherkin)
+        uses: ./.github/actions/extract-stage/
+      - name: Push the AI branch
+        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-extract
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+
+  # ── stages 6+7 ─────────────────────────────────────────────────────────
+  plan:
+    name: "6-7 planning (+ guard)"
+    needs: extract
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      TARGET_BRANCH: ${{ inputs.target-branch }}
+      REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
+      PLAN_DIR: ${{ inputs.plan-dir }}
+      DOC_DIR: ${{ inputs.doc-dir }}
+      LLM_MODEL: ${{ inputs.llm-model }}
+      MAX_LOOPS: ${{ inputs.max-loops }}
+      MAX_TOKENS: ${{ inputs.max-tokens }}
+      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Stage 6 — plan every requirement change (markdown)
+        uses: ./.github/actions/plan-stage/
+      - name: Push the AI branch
+        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-plan
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+
+  # ── stages 8+9 ─────────────────────────────────────────────────────────
+  implement:
+    name: "8-9 implementation (+ guard; requirement edits loop back to plan)"
+    needs: plan
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      TARGET_BRANCH: ${{ inputs.target-branch }}
+      REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
+      PLAN_DIR: ${{ inputs.plan-dir }}
+      DOC_DIR: ${{ inputs.doc-dir }}
+      LLM_MODEL: ${{ inputs.llm-model }}
+      MAX_LOOPS: ${{ inputs.max-loops }}
+      MAX_TOKENS: ${{ inputs.max-tokens }}
+      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Stage 8 — implement the plans (code, tests, arc42, README)
+        uses: ./.github/actions/implement-stage/
+      - name: Push the AI branch
+        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-implement
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+
+  # ── stages 10+11 ───────────────────────────────────────────────────────
+  review:
+    name: "10-11 test & review (self-correcting loop)"
+    needs: implement
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      TARGET_BRANCH: ${{ inputs.target-branch }}
+      REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
+      PLAN_DIR: ${{ inputs.plan-dir }}
+      DOC_DIR: ${{ inputs.doc-dir }}
+      LLM_MODEL: ${{ inputs.llm-model }}
+      MAX_LOOPS: ${{ inputs.max-loops }}
+      MAX_TOKENS: ${{ inputs.max-tokens }}
+      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      BASELINE_REF: ${{ needs.baseline.outputs.baseline-ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Stage 10-11 — run the oracle, review, fix (bounded loop)
+        uses: ./.github/actions/review-stage/
+      - name: Push the AI branch
+        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-review
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+
+  # ── stage 12 ───────────────────────────────────────────────────────────
+  pr:
+    name: "12 open the pull request (its body = the status report)"
+    needs: [trigger, baseline, review]
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-setup
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-baseline
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-extract
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-plan
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-implement
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-review
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - name: Assemble the PR body (the final status report, stage 15 completes it)
+        run: |
+          python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
+          import glob, os, sys
+          out = sys.argv[1]
+          cw = os.path.join(os.environ["RUNNER_TEMP"], "cw")
+          lines = ["# Code Weaver — AI branch `ai/code-weaver/%s`" % os.environ.get("CW_ISSUE", "?"),
+                   "",
+                   "Opened by the Code Weaver factory (15-stage pipeline). This "
+                   "pull request IS the final status report — its body is "
+                   "completed in stage 15.",
+                   "",
+                   "## Source",
+                   "- issue: #%s — %s" % (os.environ.get("CW_ISSUE", "?"),
+                                           os.environ.get("CW_TITLE", "")),
+                   "- target branch: `%s`" % os.environ.get("CW_TARGET", "main"),
+                   "- LLM model: `%s` (backend: a pre-requisite of the runner's pi configuration)"
+                   % os.environ.get("CW_MODEL", "?"),
+                   "- runner: `%s`" % os.environ.get("CW_RUNNER", "?"),
+                   ""]
+          cfg = os.path.join(cw, "resolved-config.txt")
+          if os.path.exists(cfg):
+              lines += ["## Resolved configuration", "```"] + open(cfg).read().splitlines() + ["```", ""]
+          stages = []
+          for f in sorted(glob.glob(os.path.join(cw, "**", "stage-summary.txt"), recursive=True)):
+              stages += [l for l in open(f) if l.strip()]
+          lines.append("## Stage outcomes so far")
+          lines += ["- " + l for l in dict.fromkeys(stages)] or ["- (none captured yet)"]
+          lines += ["", "_Stage 15 (final status) appends the complete table once the gates are green."]
+          open(out, "w").write("\n".join(lines) + "\n")
+          EOF
+        env:
+          CW_ISSUE: ${{ needs.trigger.outputs.issue-number }}
+          CW_TITLE: ${{ needs.trigger.outputs.issue-title }}
+          CW_TARGET: ${{ inputs.target-branch }}
+          CW_MODEL: ${{ inputs.llm-model }}
+          CW_RUNNER: ${{ inputs.runner }}
+      - id: open-pr
+        name: Stage 12 — push & open the PR
+        uses: ./.github/actions/pr-open/
+        with:
+          head: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          base: ${{ inputs.target-branch }}
+          title: "🏭 code-weaver: ${{ needs.trigger.outputs.issue-title }}"
+          body-file: ${{ env.RUNNER_TEMP }}/cw/pr-body.md
+          issue-number: ${{ needs.trigger.outputs.issue-number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-pr
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+    outputs:
+      pr-number: ${{ steps.open-pr.outputs.pr-number }}
+      pr-url: ${{ steps.open-pr.outputs.pr-url }}
+
+  # ── stages 13+14 ───────────────────────────────────────────────────────
+  gates:
+    name: "13-14 PR gates (all green; fix loop bounded; never merges)"
+    needs: [pr, baseline]
+    if: ${{ needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      LLM_MODEL: ${{ inputs.llm-model }}
+      REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
+      PLAN_DIR: ${{ inputs.plan-dir }}
+      DOC_DIR: ${{ inputs.doc-dir }}
+      MAX_LOOPS: ${{ inputs.max-loops }}
+      MAX_TOKENS: ${{ inputs.max-tokens }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+          token: ${{ secrets.GH_TOKEN }}
+      - id: head
+        name: Resolve the PR's head sha
+        run: echo "head-sha=$(gh api repos/$GITHUB_REPOSITORY/pulls/${{ needs.pr.outputs.pr-number }}/head.sha)" >> "$GITHUB_OUTPUT"
+      - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
+        uses: ./.github/actions/gates-stage/
+        with:
+          head-sha: ${{ steps.head.outputs.head-sha }}
+      - name: Push the AI branch (post-fix state)
+        if: ${{ success() || failure() }}
+        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cw-gates
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore
+
+  # ── stage 15 ───────────────────────────────────────────────────────────
+  report:
+    name: "15 final status report (the PR is the report)"
+    needs: [trigger, setup-pi, baseline, extract, plan, implement, review, pr, gates]
+    # runs on success AND failure (a run that died early is reported too), but
+    # stays silent when the trigger decided no factory run should start
+    if: ${{ always() && needs.trigger.outputs.started == 'true' }}
+    runs-on: ${{ inputs.runner }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      DOC_DIR: ${{ inputs.doc-dir }}
+      AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.baseline.outputs.ai-branch || needs.trigger.outputs.base-ref }}
+          token: ${{ secrets.GH_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-trigger
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-setup
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-baseline
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-extract
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-plan
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-implement
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-review
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - uses: actions/download-artifact@v4
+        with:
+          name: cw-gates
+          path: ${{ env.RUNNER_TEMP }}/cw
+      - name: Stage 15 — PR body = final status; issue comment; arc42 activity
+        uses: ./.github/actions/report/
+        with:
+          run-result: "${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') ? 'success' : 'failure' }}"
+          pr-number: ${{ needs.pr.outputs.pr-number }}
+          issue-number: ${{ needs.trigger.outputs.issue-number }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cw-report
+          path: ${{ env.RUNNER_TEMP }}/cw
+          if-no-files-found: ignore

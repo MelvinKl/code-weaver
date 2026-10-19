@@ -1,0 +1,14 @@
+name: implement-stage
+description: >-
+  Stages 8+9 — implementation + implement check, one bounded loop: pi
+  implements the plan(s) as code, generates tests, keeps the arc42 markdown
+  (doc dir) complete and the README current; the shared guard allows code,
+  tests, docs and README — never the requirements (or plans): a leak there
+  loops back to the plan stage (stage 6) before implementing again.
+runs:
+  using: composite
+  steps:
+    - name: Implementation loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: python3 "$GITHUB_ACTION_PATH/stage.py"

@@ -1,0 +1,66 @@
+name: pi-run
+description: >-
+  One headless pi run (stage 4/6/8/10 primitive): pi --print --model <model>
+  --system-prompt @pi-prompts/<template>.md <prompt> <@context refs>. The LLM
+  backend comes from the pi configuration that is a pre-requisite of the
+  runner environment — this action selects the model and supplies the prompt
+  only, and records pi's token usage into the run's budget counter.
+inputs:
+  model:
+    description: Which configured model to run (validated by setup-pi)
+    required: true
+  template:
+    description: Prompt template under pi-prompts/ (requirements|plan|implement|review)
+    required: true
+  prompt-file:
+    description: Optional file in the target repo whose content is the main prompt
+    required: false
+    default: ""
+  context:
+    description: Space-separated @file/@dir context refs pi reads from the project
+    required: false
+    default: ""
+  timeout:
+    description: Per-run timeout in seconds
+    required: false
+    default: "1800"
+outputs:
+  exit-code:
+    description: pi's exit code
+    value: ${{ steps.run.outputs.pi-exit-code }}
+  out-file:
+    description: Path of pi's captured stdout (state dir, never the repo tree)
+    value: ${{ steps.run.outputs.pi-out-file }}
+runs:
+  using: composite
+  steps:
+    - id: run
+      name: Headless pi run
+      shell: python3
+      working-directory: ${{ github.workspace }}
+      run: |
+        import os, sys
+        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+        if os.path.isdir(scripts):
+            sys.path.insert(0, scripts)
+        from common import pi_invoke, state_file
+
+        prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")
+        sp = os.path.join(prompts, os.environ["INPUT_TEMPLATE"] + ".md")
+        if not os.path.exists(sp):
+            print(f"::error::unknown pi prompt template '{os.environ['INPUT_TEMPLATE']}' (have: "
+                  f"{sorted(os.path.basename(p) for p in os.listdir(prompts)) if os.path.isdir(prompts) else 'none'})")
+            sys.exit(1)
+        r = pi_invoke(
+            model=os.environ["INPUT_MODEL"],
+            system_prompt_file=sp,
+            prompt_file=os.environ.get("INPUT_PROMPT_FILE") or None,
+            context=os.environ.get("INPUT_CONTEXT", "").split(),
+            timeout=int(os.environ.get("INPUT_TIMEOUT") or 1800),
+        )
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"pi-exit-code={r.returncode}\n")
+            f.write(f"pi-out-file={state_file('last-pi.out')}\n")
+        if r.returncode != 0:
+            sys.exit(1)

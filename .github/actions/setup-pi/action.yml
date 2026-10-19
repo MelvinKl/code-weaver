@@ -1,0 +1,116 @@
+name: setup-pi
+description: >-
+  Stage 2 — verify the pre-installed, pre-configured pi. pi's presence and its
+  LLM-backend configuration are pre-requisites of the runner environment: the
+  action only VERIFIES (presence → configuration → backend reachability →
+  configured-model set → headless smoke check on the selected model) and
+  fails with an explicit message. It never installs or re-configures pi, and
+  the only adjustable LLM setting is which configured model is used.
+inputs:
+  llm-model:
+    description: Which configured model the run uses (must be in the configured set)
+    required: false
+    default: Qwen3.8
+runs:
+  using: composite
+  steps:
+    - id: verify
+      name: Verify pi (pre-requisite of the runner environment)
+      shell: python3
+      working-directory: ${{ github.workspace }}
+      env:
+        LLM_MODEL: ${{ inputs.llm-model }}
+      run: |
+        import os, shutil, sys, urllib.request, json, subprocess
+        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+        if os.path.isdir(scripts):
+            sys.path.insert(0, scripts)
+        try:
+            from common import state_dir, log
+        except ImportError:  # degenerate sparse checkout — minimal local stand-ins
+            def state_dir():
+                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(d, exist_ok=True)
+                return d
+            def log(m):
+                print(m, flush=True)
+
+        fail = lambda msg: (print(f"::error::{msg}"), sys.exit(1))
+
+        # 1. presence — the factory never installs pi
+        if shutil.which("pi") is None:
+            fail("pi not installed or configured on this runner — pre-requisite of the "
+                 "runner environment; the factory never installs or re-configures pi")
+
+        # 2. locate the pi configuration (repo-local .pi/ first, then user)
+        candidates = []
+        for base in (os.environ["GITHUB_WORKSPACE"], os.path.expanduser("~")):
+            candidates += [os.path.join(base, ".pi", "mcp.json"),
+                           os.path.join(base, ".pi", "models.json")]
+        cfg_src = next((p for p in candidates if os.path.exists(p)), None)
+
+        # 3. extract the OpenAI-compatible backend URL from the configuration
+        backend = None
+        if cfg_src:
+            try:
+                raw = open(cfg_src, encoding="utf-8").read()
+                data = json.loads(raw)
+            except Exception:
+                data, raw = {}, ""
+            def walk(o):
+                if isinstance(o, dict):
+                    for k, v in o.items():
+                        if k.lower() in ("url", "baseurl", "base_url") and isinstance(v, str) and v.startswith("http"):
+                            yield v.rstrip("/")
+                        else:
+                            yield from walk(v)
+                elif isinstance(o, list):
+                    for v in o:
+                        yield from walk(v)
+            backend = next(iter(walk(data)), None)
+            if backend is None:
+                import re
+                m = re.search(r"https?://[^\s\"'<>]+/v1", raw)
+                backend = m.group(0).rstrip("/") if m else None
+        if backend is None:
+            fail("LLM backend not found in the runner's pi configuration "
+                 "(pre-requisite of the environment) — no OpenAI-compatible URL in .pi/")
+        backend = backend if backend.endswith("/v1") else backend + "/v1"
+
+        # 4. backend reachability
+        try:
+            req = urllib.request.Request(backend + "/models", headers={"User-Agent": "code-weaver-setup"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                models = json.load(r)
+            ids = [m.get("id") for m in models.get("data", []) if m.get("id")]
+        except Exception as e:
+            fail(f"LLM backend {backend} unreachable — pre-requisite of the runner "
+                 f"environment: {e.__class__.__name__}")
+
+        # 5. the selected model must be in the configured set
+        model = os.environ.get("LLM_MODEL", "")
+        if model not in ids:
+            fail(f"model '{model}' is not in the configured model set: {ids}")
+
+        # 6. headless smoke check on the selected model
+        import subprocess
+        r = subprocess.run(["pi", "--print", "--model", model,
+                            "Reply with exactly: OK"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0 or not r.stdout.strip():
+            fail(f"pi smoke check failed for model '{model}' (exit {r.returncode}) — "
+                 f"check the runner's pi configuration: {r.stderr.strip()[:200]}")
+
+        env_f = os.path.join(state_dir(), "setup-env")
+        with open(env_f, "w") as f:
+            f.write(f"BACKEND_URL={backend}\nMODEL={model}\nCONFIG_SRC={cfg_src or '(pi built-in defaults)'}\n")
+        log(f"setup-pi: OK — pi present, backend {backend} reachable, model '{model}' "
+            f"in configured set, smoke check passed (config: {cfg_src or 'pi defaults'})")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"backend-url={backend}\nmodel={model}\n")
+outputs:
+  backend-url:
+    value: ${{ steps.verify.outputs.backend-url }}
+  model:
+    value: ${{ steps.verify.outputs.model }}

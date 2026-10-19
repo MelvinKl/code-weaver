@@ -1,0 +1,15 @@
+name: review-stage
+description: >-
+  Stages 10+11 — test & review: the self-correcting loop. The target's test
+  suite (contract: `make test`, npm/pytest fallbacks) executes the Gherkin
+  oracle — every scenario is an acceptance test; pi marks each scenario
+  fulfilled/unfulfilled and reviews the diff; unfulfilled scenarios or a red
+  suite drive a bounded fix loop. Every iteration is logged to the state dir
+  (→ workflow artifact) — nothing under test-results/ is ever committed.
+runs:
+  using: composite
+  steps:
+    - name: Test & review loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: python3 "$GITHUB_ACTION_PATH/stage.py"
