@@ -83,19 +83,38 @@ runs:
                 raise SystemExit(1)
             sys.excepthook = _cw_on_uncaught
             from common import pi_invoke, state_file
+            def _cw_in(name):
+                # INPUT_<name> (a healthy runner's action-input binding) or
+                # CW_<name> (the job/step env the factory sets — on this
+                # runner build, composite actions' with: values never reach
+                # the inner steps as INPUT_* at all; see probe v4)
+                n = name.upper().replace("-", "_")
+                for k in (f"INPUT_{n}", f"CW_{n}"):
+                    v = os.environ.get(k)
+                    if v:
+                        return v
+                raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+            def _cw_in_opt(name):
+                n = name.upper().replace("-", "_")
+                for k in (f"INPUT_{n}", f"CW_{n}"):
+                    v = os.environ.get(k)
+                    if v:
+                        return v
+                return None
 
             prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")
-            sp = os.path.join(prompts, os.environ["INPUT_TEMPLATE"] + ".md")
+            template = _cw_in("template")
+            sp = os.path.join(prompts, template + ".md")
             if not os.path.exists(sp):
-                print(f"::error::unknown pi prompt template '{os.environ['INPUT_TEMPLATE']}' (have: "
+                print(f"::error::unknown pi prompt template '{template}' (have: "
                       f"{sorted(os.path.basename(p) for p in os.listdir(prompts)) if os.path.isdir(prompts) else 'none'})")
                 sys.exit(1)
             r = pi_invoke(
-                model=os.environ["INPUT_MODEL"],
+                model=_cw_in("model"),
                 system_prompt_file=sp,
-                prompt_file=os.environ.get("INPUT_PROMPT_FILE") or None,
-                context=os.environ.get("INPUT_CONTEXT", "").split(),
-                timeout=int(os.environ.get("INPUT_TIMEOUT") or 1800),
+                prompt_file=_cw_in_opt("prompt-file"),
+                context=(_cw_in_opt("context") or "").split(),
+                timeout=int(_cw_in_opt("timeout") or 1800),
             )
             with open(os.environ["GITHUB_OUTPUT"], "a") as f:
                 f.write(f"pi-exit-code={r.returncode}\n")

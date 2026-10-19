@@ -67,3 +67,11 @@ Feature: Secrets and safety
     Then the stage's full traceback is written to the runner's diagnostic log
     And a one-line failure reason is carried in the stage's artifact
     And a human can read why the stage failed without the job log
+
+  @safety
+  Scenario: Stage inputs reach stage code even on a runner that breaks composite input binding
+    Given a runner whose composite action steps never receive with: values as INPUT_* env
+    When the factory passes each stage value in the job env as CW_<name> beside the with: mapping
+    Then the stage code resolves each input as INPUT_<name> falling back to CW_<name>
+    And the stage proceeds with its values as on a runner that binds them correctly
+    And the with: mappings stay declared for portability to a healthy runner

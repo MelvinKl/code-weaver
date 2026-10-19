@@ -98,10 +98,28 @@ runs:
                 _cw_persist("15 report", dump, v)
                 raise SystemExit(1)
             sys.excepthook = _cw_on_uncaught
+            def _cw_in(name):
+                # INPUT_<name> (a healthy runner's action-input binding) or
+                # CW_<name> (the job/step env the factory sets — on this
+                # runner build, composite actions' with: values never reach
+                # the inner steps as INPUT_* at all; see probe v4)
+                n = name.upper().replace("-", "_")
+                for k in (f"INPUT_{n}", f"CW_{n}"):
+                    v = os.environ.get(k)
+                    if v:
+                        return v
+                raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+            def _cw_in_opt(name):
+                n = name.upper().replace("-", "_")
+                for k in (f"INPUT_{n}", f"CW_{n}"):
+                    v = os.environ.get(k)
+                    if v:
+                        return v
+                return None
             repo = os.environ["GITHUB_WORKSPACE"]
-            result = os.environ["INPUT_RUN_RESULT"]
-            pr = os.environ.get("INPUT_PR_NUMBER", "").strip()
-            issue = os.environ["INPUT_ISSUE_NUMBER"]
+            result = _cw_in("run-result")
+            pr = (_cw_in_opt("pr-number") or "").strip()
+            issue = _cw_in("issue-number")
             now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
 
             # merge every stage's summary line (the jobs downloaded their

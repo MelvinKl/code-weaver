@@ -82,10 +82,21 @@ runs:
                 _cw_persist("12 pr-open", dump, v)
                 raise SystemExit(1)
             sys.excepthook = _cw_on_uncaught
-            head, base = os.environ["INPUT_HEAD"], os.environ["INPUT_BASE"]
-            title, body_file, issue = (os.environ["INPUT_TITLE"],
-                                       os.environ["INPUT_BODY_FILE"],
-                                       os.environ["INPUT_ISSUE_NUMBER"])
+            def _cw_in(name):
+                # INPUT_<name> (a healthy runner's action-input binding) or
+                # CW_<name> (the job/step env the factory sets — on this
+                # runner build, composite actions' with: values never reach
+                # the inner steps as INPUT_* at all; see probe v4)
+                n = name.upper().replace("-", "_")
+                for k in (f"INPUT_{n}", f"CW_{n}"):
+                    v = os.environ.get(k)
+                    if v:
+                        return v
+                raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+            head, base = _cw_in("head"), _cw_in("base")
+            title, body_file, issue = (_cw_in("title"),
+                                       _cw_in("body-file"),
+                                       _cw_in("issue-number"))
             repo = os.environ["GITHUB_WORKSPACE"]
             token = os.environ.get("GH_TOKEN", "")
 

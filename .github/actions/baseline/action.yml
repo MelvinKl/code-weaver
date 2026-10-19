@@ -74,8 +74,19 @@ runs:
                 _cw_persist("3 baseline", dump, v)
                 raise SystemExit(1)
             sys.excepthook = _cw_on_uncaught
-            base_ref = os.environ["INPUT_BASE_REF"]
-            ai_branch = os.environ["INPUT_AI_BRANCH"]
+            def _cw_in(name):
+                # INPUT_<name> (a healthy runner's action-input binding) or
+                # CW_<name> (the job/step env the factory sets — on this
+                # runner build, composite actions' with: values never reach
+                # the inner steps as INPUT_* at all; see probe v4)
+                n = name.upper().replace("-", "_")
+                for k in (f"INPUT_{n}", f"CW_{n}"):
+                    v = os.environ.get(k)
+                    if v:
+                        return v
+                raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+            base_ref = _cw_in("base-ref")
+            ai_branch = _cw_in("ai-branch")
             repo = os.environ["GITHUB_WORKSPACE"]
 
             def g(*args, check=True):

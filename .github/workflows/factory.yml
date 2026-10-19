@@ -11,6 +11,13 @@
 # upload then silently finds no files and every later download fails), while
 # `runner.temp` is the documented, always-populated mirror of the same dir.
 #
+# On this runner build (v2.338, .NET) a composite action's `with:` values are
+# never materialized as INPUT_* env for its inner steps — probe v4 showed even
+# literal values arriving unbound — so every stage job ALSO passes its stage
+# values in the job (or step) `env:` block as CW_<name>; the stage code
+# resolves each input as INPUT_<name> falling back to CW_<name>. The `with:`
+# blocks stay for portability to a runner that binds them correctly.
+#
 # 15 logical stages → the jobs below. The runner environment must have `pi`
 # pre-installed & pre-configured (LLM backend included) — stage 2 only
 # verifies and fails explicitly.
@@ -239,6 +246,10 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
+      # stage values via env (CW_*) — this runner build never binds a
+      # composite action's with: values to INPUT_* for its inner steps
+      CW_BASE_REF: ${{ needs.trigger.outputs.base-ref }}
+      CW_AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -436,6 +447,13 @@ jobs:
     runs-on: ${{ inputs.runner }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      # stage values via env (CW_*) — this runner build never binds a
+      # composite action's with: values to INPUT_* for its inner steps
+      CW_HEAD: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      CW_BASE: ${{ inputs.target-branch }}
+      CW_TITLE: "🏭 code-weaver: ${{ needs.trigger.outputs.issue-title }}"
+      CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
+      CW_ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -554,6 +572,10 @@ jobs:
         run: echo "head-sha=$(gh api repos/$GITHUB_REPOSITORY/pulls/${{ needs.pr.outputs.pr-number }}/head.sha)" >> "$GITHUB_OUTPUT"
       - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
         uses: ./.github/actions/gates-stage/
+        # step-level env (not job-level): steps.head.outputs is only known
+        # after that step ran, and job env is materialized at job start
+        env:
+          CW_HEAD_SHA: ${{ steps.head.outputs.head-sha }}
         with:
           head-sha: ${{ steps.head.outputs.head-sha }}
       - name: Push the AI branch (post-fix state)
@@ -579,6 +601,14 @@ jobs:
       ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
       DOC_DIR: ${{ inputs.doc-dir }}
       AI_BRANCH: ai/code-weaver/${{ needs.trigger.outputs.issue-number }}
+      # stage values via env (CW_*) — this runner build never binds a
+      # composite action's with: values to INPUT_* for its inner steps
+      # (no ternary here — a `?` in a reusable workflow's expressions makes the
+      # file invalid ("Unexpected symbol: '?'"); the parenthesized &&/|| chain
+      # with string literals expresses the same if-else)
+      CW_RUN_RESULT: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
+      CW_PR_NUMBER: ${{ needs.pr.outputs.pr-number }}
+      CW_ISSUE_NUMBER: ${{ needs.trigger.outputs.issue-number }}
     steps:
       - uses: actions/checkout@v5
         with:

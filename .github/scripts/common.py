@@ -259,3 +259,26 @@ def main_guard_cli() -> None:
     baseline, allow = args[0], args[1:]
     r = guard(baseline, allow)
     sys.exit(0 if r.ok else 1)
+
+
+def cw_input(name: str) -> str:
+    """A stage input's value: INPUT_<name> first (a healthy runner's
+    action-input binding), then CW_<name> (the job/step env the factory
+    sets — on this runner build a composite action's with: values never
+    reach its inner steps as INPUT_* at all), else a precise error."""
+    n = name.upper().replace("-", "_")
+    for key in (f"INPUT_{n}", f"CW_{n}"):
+        v = os.environ.get(key)
+        if v:
+            return v
+    raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+
+
+def cw_input_opt(name: str) -> str | None:
+    """Like cw_input but optional: None instead of an error."""
+    n = name.upper().replace("-", "_")
+    for key in (f"INPUT_{n}", f"CW_{n}"):
+        v = os.environ.get(key)
+        if v:
+            return v
+    return None

@@ -62,8 +62,21 @@ def failing_logs(runs: list[dict]) -> str:
     return "\n\n".join(chunks) if chunks else "(no failing job logs retrievable)"
 
 
+def _cw_in(name: str) -> str:
+    """INPUT_<name> (a healthy runner's action-input binding) or CW_<name>
+    (the step env the factory sets — on this runner build, composite
+    actions' with: values never reach the inner steps as INPUT_* at all).
+    """
+    n = name.upper().replace("-", "_")
+    for k in (f"INPUT_{n}", f"CW_{n}"):
+        v = os.environ.get(k)
+        if v:
+            return v
+    raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+
+
 def main() -> None:
-    head_sha = os.environ["INPUT_HEAD_SHA"]
+    head_sha = _cw_in("head-sha")
     polls = 0
     fix_iter = 0
     while True:
