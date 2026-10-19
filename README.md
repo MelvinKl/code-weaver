@@ -58,13 +58,16 @@ permissions:
   pull-requests: write
 jobs:
   factory:
-    runs-on: <label of a runner whose environment has pi pre-installed & configured>
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@v0.1.0
+    # a reusable-workflow job may only carry `uses`/`with`/`secrets` — a
+    # `runs-on:` here makes the file schema-invalid. Choose the runner
+    # through the factory's `runner` input instead.
+    uses: MelvinsPersonalProjects/code-weaver/.github/workflows/factory.yml@v0.1.0
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Qwen3.8        # which configured model — the one adjustable LLM setting
+      runner: <label of a runner whose environment has pi pre-installed & configured>
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
 ```
