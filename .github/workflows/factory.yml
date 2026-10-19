@@ -549,7 +549,10 @@ jobs:
       - name: Stage 15 — PR body = final status; issue comment; arc42 activity
         uses: ./.github/actions/report/
         with:
-          run-result: "${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') ? 'success' : 'failure' }}"
+          # no ternary here — a `?` in a reusable workflow's expressions makes the
+          # file invalid ("Unexpected symbol: '?'"); the parenthesized &&/|| chain
+          # with string literals expresses the same if-else
+          run-result: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
           pr-number: ${{ needs.pr.outputs.pr-number }}
           issue-number: ${{ needs.trigger.outputs.issue-number }}
       - uses: actions/upload-artifact@v4
