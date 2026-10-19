@@ -43,6 +43,20 @@ Feature: Factory trigger
     Then the factory runs for issue 42
 
   @trigger @safety
+  Scenario: A broken runner pre-requisite fails the trigger stage with a precise diagnosis
+    Given the factory's runner environment is <state>
+    When the factory's trigger stage starts
+    Then the stage fails before any checkout or issue work
+    And the failure message names <diagnosis>
+
+    Examples:
+      | state                                          | diagnosis                                        |
+      | the GH_TOKEN secret is not set                   | the secret is empty                              |
+      | the GH_TOKEN secret holds an expired token      | the token is rejected by GitHub                  |
+      | the GH_TOKEN token has no access to the repo    | the token authenticates but cannot read the repo |
+      | the runner is missing a required tool           | the missing tool is named                        |
+
+  @trigger @safety
   Scenario: Re-entrant runs on the same issue do not duplicate work
     Given a factory run for issue 7 is already in progress
     When a second trigger fires for issue 7

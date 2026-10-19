@@ -81,6 +81,52 @@ jobs:
       base-ref: ${{ steps.resolve.outputs.base-ref }}
       base-sha: ${{ steps.resolve.outputs.base-sha }}
     steps:
+      - id: preflight
+        name: Preflight — verify the GH_TOKEN secret can serve this repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # Every stage authenticates with GH_TOKEN. A misconfigured secret used
+          # to surface as an opaque checkout failure (403, empty logs) — so fail
+          # here, first, and name the exact cause:
+          #   empty  → the secret was never set (or the caller did not pass it)
+          #   401    → the token is invalid, expired or was revoked
+          #   403    → the token authenticates but has no access to this repo
+          #            (its user/app is not a member of the owning org, or a
+          #            fine-grained PAT is scoped to a different repository)
+          #   other  → the runner has no egress to api.github.com
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_TOKEN secret is empty — set a repo/org secret GH_TOKEN that can read this repo, and pass it from the caller's workflow"
+            exit 1
+          fi
+          # Every factory stage shells out to these; a missing one would die
+          # mid-stage with an unhelpful exit 127 ("command not found")
+          for TOOL in git jq gh python3; do
+            command -v "$TOOL" >/dev/null 2>&1 || {
+              echo "::error::required tool '$TOOL' is not installed on this runner — install it in the runner environment (pi is verified separately in stage 2)"
+              exit 1
+            }
+          done
+          echo "runner tools verified: git, jq, gh, python3"
+          HTTP=$(curl -s -o /tmp/cw-preflight.json -w '%{http_code}' --max-time 30 \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY") || {
+            echo "::error::GitHub API unreachable from this runner — check the runner's internet egress"
+            exit 1
+          }
+          case "$HTTP" in
+            200) echo "GH_TOKEN verified: authenticates and can read $GITHUB_REPOSITORY" ;;
+            401) echo "::error::GH_TOKEN was rejected by GitHub (401) — the token is invalid, expired or was revoked"; exit 1 ;;
+            403) if grep -q 'Bad credentials' /tmp/cw-preflight.json 2>/dev/null; then
+                    echo "::error::GH_TOKEN was rejected by GitHub (403, bad credentials) — the token is invalid, expired or was revoked"
+                  else
+                    echo "::error::GH_TOKEN authenticates but has NO access to $GITHUB_REPOSITORY (403) — its user/app is not a member of the owning org, or a fine-grained PAT is scoped to a different repository"
+                  fi
+                  exit 1 ;;
+            *) echo "::error::GitHub API answered HTTP $HTTP (expected 200) — check the runner's internet egress"; cat /tmp/cw-preflight.json; exit 1 ;;
+          esac
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0

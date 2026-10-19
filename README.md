@@ -72,6 +72,12 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
 ```
 
+The `GH_TOKEN` secret holds the token every factory stage authenticates with
+— it must be a token that **can read the target repo** (its user/app a member
+of the owning org; a fine-grained PAT scoped to *this* repository). Stage 1
+verifies this up front: a missing, dead or wrongly-scoped token fails within
+seconds with the exact cause in the log — not as an opaque red checkout.
+
 **Upgrading is a ref bump** in that one `uses:` line — a reusable workflow
 (plus the composite actions and pi prompt templates it references, all from
 this repo). **Every published version is a stable ref**: tag `vX.Y.Z` →
