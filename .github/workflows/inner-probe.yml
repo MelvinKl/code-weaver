@@ -16,6 +16,17 @@ jobs:
           ref: main
       - name: Inner-step variable dump
         uses: ./.github/actions/inner-probe/
+      - name: Set up synthetic trigger state for the stage
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          mkdir -p "$T"
+          echo true > "$T/started.txt"
+          echo 3 > "$T/issue-number.txt"
+          echo "Merge PR target branch into feature branch before the final action check" > "$T/issue-title.txt"
+          echo main > "$T/base-ref.txt"
+          git rev-parse HEAD > "$T/base-sha.txt"
+          echo "ai/code-weaver/3" > "$T/head.txt"
+          echo main > "$T/base.txt"
       - name: Run the extract stage exactly as the factory (console captured)
         uses: ./.github/actions/stage-capture/
         env:
