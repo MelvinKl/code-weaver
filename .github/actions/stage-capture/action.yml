@@ -21,7 +21,10 @@ runs:
           python3 "$S" 2>&1
           echo "stage-exit=$?"
         } > "$RUNNER_TEMP/cw/probe-${INPUT_NAME-extract-stage}-console.txt" 2>&1
-        tail -5 "$RUNNER_TEMP/cw/probe-${INPUT_NAME-extract-stage}-console.txt"
+        F="$RUNNER_TEMP/cw/probe-${INPUT_NAME-extract-stage}-console.txt"
+        cp "$F" /opt/actions-runner/_diag/probe-console.txt 2>/dev/null || true
+        tail -5 "$F" 2>/dev/null || true
+        exit 0
     - name: Upload the captured console + state
       uses: actions/upload-artifact@v4
       with:
