@@ -32,3 +32,10 @@ Feature: Reporting
     Then the failure summary states which stage failed and why
     And the source issue is commented with the failure summary
     And no report file is written into the repo
+
+  Scenario: A report is not blocked by a stage that never ran
+    Given an earlier stage failed and its job was skipped downstream
+    When the report job downloads the stage artifacts
+    Then the missing artifacts are downloaded with continue-on-error
+    And the stage summary lists only the stages that actually ran
+    And the run still concludes failure from the failed stage

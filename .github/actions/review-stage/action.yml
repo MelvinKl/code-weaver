@@ -13,6 +13,10 @@ runs:
       # The guard judges THIS stage's work only: earlier stages' committed
       # outputs must not look like off-limits changes against the trigger's
       # base sha.
+      # shell: is declared on every script step — this runner build's
+      # manifest loader rejects a composite step that has run: but no
+      # shell: (v2.338: "Required property is missing: shell").
+      shell: bash
       run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
     - name: Test & review loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
       shell: bash

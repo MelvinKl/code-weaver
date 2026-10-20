@@ -41,3 +41,11 @@ Feature: Reuse by ref, never copy-paste
     When a maintainer tags a new release
     Then the tag follows vX.Y.Z semver
     And workflows pinned to an older ref keep working
+
+  Scenario: Composite action steps declare their shell explicitly
+    Given a reusable-workflow factory consumed by this repo's ref
+    And the factory's stage actions are composite actions whose steps run scripts
+    When a stage action defines a step with a run: but no shell:
+    Then the runner's action loader rejects the action (required property missing)
+    And the stage step fails before any of its processes start
+    So every composite step in the factory declares its shell explicitly

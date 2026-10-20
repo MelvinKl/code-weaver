@@ -1036,34 +1036,42 @@ jobs:
           ref: ${{ steps.state.outputs.checkout-ref || steps.state.outputs.base-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-setup
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-baseline
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-extract
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-plan
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-implement
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-review
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v4
+        continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-gates
           path: ${{ runner.temp }}/cw
