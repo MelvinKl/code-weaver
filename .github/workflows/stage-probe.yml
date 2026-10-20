@@ -1,0 +1,42 @@
+# Temporary probe: reproduce the extract-stage crash on the real runner;
+# the traceback lands in an artifact (failed-job logs are ghosts here)
+name: stage-probe (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+          ref: main
+      - name: Repro the stage.py preamble
+        env:
+          LLM_MODEL: Qwen3.8
+          TARGET_BRANCH: main
+          REQUIREMENTS_DIR: requirements
+          PLAN_DIR: plan
+          DOC_DIR: doc
+          MAX_LOOPS: 1
+          MAX_TOKENS: 0
+        run: |
+          mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+          printf 'true' > "$RUNNER_TEMP/cw/state/trigger/started.txt"
+          printf '3' > "$RUNNER_TEMP/cw/state/trigger/issue-number.txt"
+          printf 'probe-title' > "$RUNNER_TEMP/cw/state/trigger/issue-title.txt"
+          printf 'main' > "$RUNNER_TEMP/cw/state/trigger/base-ref.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/cw/state/trigger/base-sha.txt"
+          printf 'probe body' > "$RUNNER_TEMP/cw/issue-body.md"
+          set +e
+          python3 .github/actions/extract-stage/stage.py > /tmp/trace.txt 2>&1
+          echo "stage exit: $?"
+          head -30 /tmp/trace.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-trace
+          path: /tmp/trace.txt
