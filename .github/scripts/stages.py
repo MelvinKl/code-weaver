@@ -112,7 +112,7 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
     the loop budget (it would otherwise burn an iteration the guard can
     only trivially pass); it is retried in place, itself bounded, so a
     silently-wedged model cannot loop the stage forever."""
-    baseline = baseline_sha()
+    baseline = stage_baseline()
     i = 0
     empty = 0
     while True:
