@@ -50,16 +50,23 @@ def run_guard(baseline: str, allow: list[str]):
 
 def project_context() -> list[str]:
     """The project files pi reads as context — the arc42 markdown under the
-    doc dir (a set of files, structure may vary), the existing Gherkin
-    oracle, and the README. Missing parts are skipped, not fatal."""
+    doc dir, the existing Gherkin oracle, and the README. Missing parts are
+    skipped, not fatal.
+
+    pi's @-argument handling reads every argument as a file (it even sniffs
+    image mime types), so a directory there crashes pi with EISDIR — context
+    entries are always concrete files, with directories expanded to the files
+    they contain (sorted for a deterministic prompt)."""
     ctx: list[str] = []
     req, doc = common.env_dir("REQUIREMENTS_DIR"), common.env_dir("DOC_DIR")
-    if req and os.path.isdir(req):
-        ctx.append("@" + req)
+    for d in (req, doc):
+        if d and os.path.isdir(d):
+            for f in sorted(os.listdir(d)):
+                p = os.path.join(d, f)
+                if os.path.isfile(p):
+                    ctx.append("@" + p)
     if os.path.isfile("README.md"):
         ctx.append("@README.md")
-    if doc and os.path.isdir(doc):
-        ctx.append("@" + doc)
     return ctx
 
 

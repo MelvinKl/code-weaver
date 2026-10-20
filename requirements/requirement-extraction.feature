@@ -52,3 +52,11 @@ Feature: Requirement extraction
     Given the extraction stage already wrote the requirements for issue 7
     When the extraction stage runs again for issue 7
     Then the requirement files are unchanged
+
+  Scenario: The context handed to pi is concrete files, never directories
+    # pi's @-argument handling reads each argument as a file (it even
+    # sniffs image mime types) — a directory there crashes pi with EISDIR
+    Given the requirements dir and the doc dir exist in the checkout
+    When the stage assembles the pi context arguments
+    Then every context argument is a file that exists
+    And directories are expanded to the files they contain
