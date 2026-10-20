@@ -100,7 +100,14 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
         # (e.g. the validator's verdict on the previous attempt) rides the
         # next prompt
         pf = prompt_file() if callable(prompt_file) else prompt_file
-        r = pi_stage(template, pf, context)
+        try:
+            r = pi_stage(template, pf, context)
+        except Exception:
+            import traceback
+            common.log(f"::error::{stage}: pi run crashed (the environment is "
+                       f"broken, not the model) —\n"
+                       f"{traceback.format_exc().rstrip()}")
+            sys.exit(1)
         if r.returncode != 0:
             common.log(f"::error::{stage}: pi run failed (exit {r.returncode}) — "
                        f"a broken environment is not looped over")
@@ -110,6 +117,18 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
             produced = open(out_f, encoding="utf-8", errors="replace").read()
         except OSError:
             produced = ""
+        # The stage's console persists the model's words per iteration: the
+        # next iteration truncates the live file, and failed-job logs are
+        # ghosts on this runner build.
+        if produced.strip():
+            import shutil
+            try:
+                shutil.copyfile(out_f, common.state_file(f"pi-{template}-iter{i}.out"))
+            except OSError:
+                pass
+            common.log(f"{stage}: model output (iteration {i}, "
+                       f"{len(produced)} chars) tail:\n"
+                       f"{'—' * 40}\n{produced[-1500:]}")
         if not produced.strip() and not common.changed_files(baseline):
             empty += 1
             if empty > 3:
@@ -120,18 +139,24 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                        f"without consuming the loop budget (extra {empty}/3)")
             continue
         empty = 0
-        common.commit_all(f"{stage}: generated (iteration {i})")
-        res = run_guard(baseline, allow)
-        if res.ok:
-            if post_ok is not None and post_ok() is False:
+        try:
+            common.commit_all(f"{stage}: generated (iteration {i})")
+            res = run_guard(baseline, allow)
+            if res.ok:
+                if post_ok is not None and post_ok() is False:
+                    i += 1
+                    continue
+                common.log(f"{stage}: clean — stage complete")
+                return
+            common.log(f"{stage}: guard violations → {' '.join(res.violations)}")
+            if on_violation is not None and on_violation(res.violations):
+                # the hook took ownership (e.g. implement looping back to plan)
                 i += 1
                 continue
-            common.log(f"{stage}: clean — stage complete")
-            return
-        common.log(f"{stage}: guard violations → {' '.join(res.violations)}")
-        if on_violation is not None and on_violation(res.violations):
-            # the hook took ownership (e.g. implement looping back to plan)
+            common.commit_all(f"{stage}: guard reverted off-limits files")
             i += 1
-            continue
-        common.commit_all(f"{stage}: guard reverted off-limits files")
-        i += 1
+        except Exception:
+            import traceback
+            common.log(f"::error::{stage}: stage logic crashed —\n"
+                       f"{traceback.format_exc().rstrip()}")
+            sys.exit(1)

@@ -39,8 +39,21 @@ def state_file(name: str) -> str:
 
 def log(msg: str) -> None:
     """The workflow log is the audit trail — human review reads it, and it
-    is never written into the repo tree."""
+    is never written into the repo tree.
+
+    On this runner build failed-job logs are ghosts, so every line is
+    mirrored into the cw state dir; the stage's artifact carries the
+    stage's own narrative."""
     print(msg, flush=True)
+    try:
+        rt = os.environ.get("RUNNER_TEMP")
+        if rt:
+            d = os.path.join(rt, "cw")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "stage-console.log"), "a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+    except OSError:
+        pass
 
 
 class CapReached(SystemExit):
