@@ -261,17 +261,40 @@ def main_guard_cli() -> None:
     sys.exit(0 if r.ok else 1)
 
 
+def cw_state(name: str) -> str | None:
+    """The stage-artifact state files — the oracle's stage-results
+    channel: <RUNNER_TEMP>/cw/state/<trigger|pr>/<name>.txt.
+
+    On this runner build a composite action's inner steps receive neither
+    the with:→INPUT_* binding nor the job-level GITHUB_ENV values, so the
+    file the triggering stage wrote is the authoritative source."""
+    root = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "state")
+    for d in ("trigger", "pr"):
+        f = os.path.join(root, d, name + ".txt")
+        if os.path.isfile(f):
+            v = open(f).read().strip()
+            if v:
+                return v
+    return None
+
+
 def cw_input(name: str) -> str:
     """A stage input's value: INPUT_<name> first (a healthy runner's
     action-input binding), then CW_<name> (the job/step env the factory
     sets — on this runner build a composite action's with: values never
-    reach its inner steps as INPUT_* at all), else a precise error."""
+    reach its inner steps as INPUT_* at all), then the trigger artifact's
+    state file, else a precise error."""
     n = name.upper().replace("-", "_")
     for key in (f"INPUT_{n}", f"CW_{n}"):
         v = os.environ.get(key)
         if v:
             return v
-    raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+    v = cw_state(name)
+    if v:
+        return v
+    raise SystemExit(
+        f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n}, "
+        f"no state file)")
 
 
 def cw_input_opt(name: str) -> str | None:
@@ -281,4 +304,4 @@ def cw_input_opt(name: str) -> str | None:
         v = os.environ.get(key)
         if v:
             return v
-    return None
+    return cw_state(name)

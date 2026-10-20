@@ -86,3 +86,13 @@ Feature: Secrets and safety
     Then the job's values come from the trigger artifact's state files
     And steps after the state read see them in the process environment
     And no stage job may take trigger values from the job-outputs relay
+
+  Scenario: A stage resolves its inputs without trusting the runner's env plumbing
+    # on this runner build a composite action's inner steps receive neither
+    # the with:→INPUT_* binding nor the job-level GITHUB_ENV values, so the
+    # stage code resolves each input as INPUT_<name>, then CW_<name>, then
+    # the trigger artifact's state files — which exist regardless
+    Given a stage starts on a runner that breaks the env plumbing
+    When the stage code resolves one of its inputs
+    Then the value comes from the action input, the CW env, or a state file
+    And the stage fails with a precise error only if all three are absent

@@ -84,7 +84,20 @@ runs:
                     v = os.environ.get(k)
                     if v:
                         return v
-                raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+                # state files — this runner build's composite-action inner
+                # steps also miss the job-level GITHUB_ENV values, so the
+                # files the triggering stage wrote into the artifact are
+                # the authoritative source
+                import pathlib
+                for d in ("trigger", "pr"):
+                    f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                    if f.is_file():
+                        v = f.read_text().strip()
+                        if v:
+                            return v
+                raise SystemExit(
+                    f"::error::input '{name}' unbound (no INPUT_{n}, "
+                    f"no CW_{n}, no state file)")
             base_ref = _cw_in("base-ref")
             ai_branch = _cw_in("ai-branch")
             repo = os.environ["GITHUB_WORKSPACE"]

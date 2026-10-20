@@ -93,13 +93,33 @@ runs:
                     v = os.environ.get(k)
                     if v:
                         return v
-                raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+                # state files — this runner build's composite-action inner
+                # steps also miss the job-level GITHUB_ENV values, so the
+                # files the triggering stage wrote into the artifact are
+                # the authoritative source
+                import pathlib
+                for d in ("trigger", "pr"):
+                    f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                    if f.is_file():
+                        v = f.read_text().strip()
+                        if v:
+                            return v
+                raise SystemExit(
+                    f"::error::input '{name}' unbound (no INPUT_{n}, "
+                    f"no CW_{n}, no state file)")
             def _cw_in_opt(name):
                 n = name.upper().replace("-", "_")
                 for k in (f"INPUT_{n}", f"CW_{n}"):
                     v = os.environ.get(k)
                     if v:
                         return v
+                import pathlib
+                for d in ("trigger", "pr"):
+                    f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                    if f.is_file():
+                        v = f.read_text().strip()
+                        if v:
+                            return v
                 return None
 
             prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")

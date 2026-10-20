@@ -72,7 +72,16 @@ def _cw_in(name: str) -> str:
         v = os.environ.get(k)
         if v:
             return v
-    raise SystemExit(f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n})")
+    import pathlib
+    for d in ("trigger", "pr"):
+        f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+        if f.is_file():
+            v = f.read_text().strip()
+            if v:
+                return v
+    raise SystemExit(
+        f"::error::input '{name}' unbound (no INPUT_{n}, no CW_{n}, "
+        f"no state file)")
 
 
 def main() -> None:

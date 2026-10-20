@@ -212,6 +212,11 @@ jobs:
           echo "$TITLE" > "$RUNNER_TEMP/cw/state/trigger/issue-title.txt"
           echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base-ref.txt"
           echo "$BASE_SHA" > "$RUNNER_TEMP/cw/state/trigger/base-sha.txt"
+          # the pr stage's derived input set (head/base/title follow the
+          # factory's PR naming from the same resolved values)
+          echo "ai/code-weaver/$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/head.txt"
+          echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base.txt"
+          echo "🏭 code-weaver: $TITLE" > "$RUNNER_TEMP/cw/state/trigger/title.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -293,6 +298,14 @@ jobs:
       - name: Stage 3 — cut the AI branch, record the baseline
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/baseline/
+        # step-level env: this runner build does not propagate job-level
+        # GITHUB_ENV values into a composite action's inner steps (and never
+        # binds with: to INPUT_* either); a step's own env: does reach them
+        env:
+          CW_BASE_REF: ${{ env.CW_BASE_REF }}
+          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
+          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
+
         with:
           # env-based (not needs.-based): step-level `env` sees the GITHUB_ENV
           # values the state step wrote; the job-outputs relay drops values
@@ -379,6 +392,17 @@ jobs:
       - name: Stage 4 — extract the delta requirements (Gherkin)
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/extract-stage/
+        # step-level env: this runner build does not propagate job-level
+        # GITHUB_ENV values into a composite action's inner steps (and never
+        # binds with: to INPUT_* either); a step's own env: does reach them
+        env:
+          AI_BRANCH: ${{ env.AI_BRANCH }}
+          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
+          BASELINE_REF: ${{ env.BASELINE_REF }}
+          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
+          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
+          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
+
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
@@ -441,6 +465,17 @@ jobs:
       - name: Stage 6 — plan every requirement change (markdown)
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/plan-stage/
+        # step-level env: this runner build does not propagate job-level
+        # GITHUB_ENV values into a composite action's inner steps (and never
+        # binds with: to INPUT_* either); a step's own env: does reach them
+        env:
+          AI_BRANCH: ${{ env.AI_BRANCH }}
+          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
+          BASELINE_REF: ${{ env.BASELINE_REF }}
+          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
+          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
+          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
+
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
@@ -503,6 +538,17 @@ jobs:
       - name: Stage 8 — implement the plans (code, tests, arc42, README)
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/implement-stage/
+        # step-level env: this runner build does not propagate job-level
+        # GITHUB_ENV values into a composite action's inner steps (and never
+        # binds with: to INPUT_* either); a step's own env: does reach them
+        env:
+          AI_BRANCH: ${{ env.AI_BRANCH }}
+          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
+          BASELINE_REF: ${{ env.BASELINE_REF }}
+          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
+          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
+          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
+
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
@@ -565,6 +611,17 @@ jobs:
       - name: Stage 10-11 — run the oracle, review, fix (bounded loop)
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/review-stage/
+        # step-level env: this runner build does not propagate job-level
+        # GITHUB_ENV values into a composite action's inner steps (and never
+        # binds with: to INPUT_* either); a step's own env: does reach them
+        env:
+          AI_BRANCH: ${{ env.AI_BRANCH }}
+          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
+          BASELINE_REF: ${{ env.BASELINE_REF }}
+          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
+          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
+          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
+
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v4
@@ -686,6 +743,10 @@ jobs:
         # workflow's job-level env: ("Unrecognized named-value: 'runner'")
         # but is fine in a step's env:/with:
         env:
+          CW_HEAD: ${{ env.CW_AI_BRANCH }}
+          CW_BASE: ${{ env.CW_BASE_REF }}
+          CW_TITLE: ${{ env.CW_ISSUE_TITLE }}
+          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
           CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
         with:
           # env-based (not needs.-based): the state step's GITHUB_ENV values;
@@ -771,6 +832,7 @@ jobs:
         # after that step ran, and job env is materialized at job start
         env:
           CW_HEAD_SHA: ${{ steps.head.outputs.head-sha }}
+          CW_PR_NUMBER: ${{ env.CW_PR_NUMBER }}
         with:
           head-sha: ${{ steps.head.outputs.head-sha }}
       - name: Push the AI branch (post-fix state)
@@ -871,6 +933,12 @@ jobs:
           echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
       - name: Stage 15 — PR body = final status; issue comment; arc42 activity
         uses: ./.github/actions/report/
+        # step-level env: this runner build does not propagate job-level
+        # GITHUB_ENV values into a composite action's inner steps (and never
+        # binds with: to INPUT_* either); a step's own env: does reach them
+        env:
+          CW_PR_NUMBER: ${{ env.CW_PR_NUMBER }}
+          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
         with:
           # no ternary here — a `?` in a reusable workflow's expressions makes the
           # file invalid ("Unexpected symbol: '?'"); the parenthesized &&/|| chain
