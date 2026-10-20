@@ -22,11 +22,17 @@ def repo_root() -> str:
 
 
 def baseline_sha() -> str:
-    """The stage-3 baseline ref (state file wins, then the job env)."""
+    """The stage-3 baseline ref (state file wins, then the job env).
+
+    A materialized-but-empty value counts as absent: this runner build
+    turns missing step env entries into empty variables, and
+    'git diff --name-only ""' dies with exit 128."""
     f = common.state_file("baseline.sha")
     if os.path.exists(f):
-        return open(f).read().strip()
-    return os.environ.get("BASELINE_REF", "HEAD")
+        v = open(f).read().strip()
+        if v:
+            return v
+    return os.environ.get("BASELINE_REF") or "HEAD"
 
 
 def pi_stage(template: str, prompt_file: str | None = None,
