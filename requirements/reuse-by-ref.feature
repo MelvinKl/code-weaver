@@ -48,4 +48,4 @@ Feature: Reuse by ref, never copy-paste
     When a stage action defines a step with a run: but no shell:
     Then the runner's action loader rejects the action (required property missing)
     And the stage step fails before any of its processes start
-    So every composite step in the factory declares its shell explicitly
+    And every composite step in the factory declares its shell explicitly
