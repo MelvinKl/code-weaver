@@ -23,6 +23,12 @@ runs:
           S2="$GITHUB_WORKSPACE/.github/actions/extract-stage/stage.py"
           echo "WS-derived S2=[$S2] exists=$([ -f "$S2" ] && echo yes || echo no)"
           ls .github/actions/ 2>&1 | head -8
+          echo "=== stage run-line simulation ==="
+          S="${GITHUB_ACTION_PATH}/stage.py"
+          [ -f "$S" ] || S="$GITHUB_WORKSPACE/.github/actions/extract-stage/stage.py"
+          echo "resolved S=[$S]"
+          [ -f "$S" ] && echo "S exists: yes" || echo "S exists: NO"
+          head -25 "$S" 2>&1 | head -26
         } > /tmp/inner-probe.txt 2>&1
         echo "dump done: $(wc -l < /tmp/inner-probe.txt) lines"
     - name: Upload the dump
