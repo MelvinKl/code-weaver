@@ -95,6 +95,15 @@ runs:
                         v = f.read_text().strip()
                         if v:
                             return v
+                # a value that ends in a separator is a mangled derivation
+                # (e.g. an empty issue number in 'ai/code-weaver/') — treat
+                # it as unbound rather than creating a broken ref
+                for k in (f"INPUT_{n}", f"CW_{n}"):
+                    v = os.environ.get(k) or ""
+                    if v and v.endswith(("/", ".", "_")):
+                        raise SystemExit(
+                            f"::error::input '{name}' value {v!r} is a "
+                            f"mangled derivation (empty component)")
                 raise SystemExit(
                     f"::error::input '{name}' unbound (no INPUT_{n}, "
                     f"no CW_{n}, no state file)")

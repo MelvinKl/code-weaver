@@ -282,14 +282,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -372,14 +381,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -445,14 +463,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -518,14 +545,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -591,14 +627,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -657,14 +702,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -798,14 +852,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -878,14 +941,23 @@ jobs:
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha; do
-            printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$(cat "$T/$k.txt" 2>/dev/null)" >> "$GITHUB_ENV"
+          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+          # this shell — deriving from $CW_* here would export empty values
+          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+          for k in started issue-number issue-title base-ref base-sha head title base; do
+            v=$(cat "$T/$k.txt" 2>/dev/null || true)
+            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
           done
-          echo "AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$CW_ISSUE_NUMBER" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$CW_BASE_SHA" >> "$GITHUB_ENV"
-          echo "trigger state: started=$CW_STARTED issue=$CW_ISSUE_NUMBER title=$CW_ISSUE_TITLE base=$CW_BASE_REF@$CW_BASE_SHA"
+          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
