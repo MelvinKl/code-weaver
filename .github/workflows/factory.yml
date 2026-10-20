@@ -217,7 +217,7 @@ jobs:
           echo "ai/code-weaver/$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/head.txt"
           echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base.txt"
           echo "🏭 code-weaver: $TITLE" > "$RUNNER_TEMP/cw/state/trigger/title.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-trigger
@@ -249,7 +249,7 @@ jobs:
           else
             echo "stage 2 setup-pi: verified — backend ${{ steps.verify.outputs.backend-url }}, model ${{ steps.verify.outputs.model }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-setup
@@ -274,7 +274,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -343,11 +343,11 @@ jobs:
           else
             echo "stage 3 baseline: branch ai/code-weaver/${ISSUE_NUMBER} at ${CW_BASE_SHA}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-baseline
@@ -382,7 +382,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -421,7 +421,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-baseline
           path: ${{ runner.temp }}/cw
@@ -441,7 +441,7 @@ jobs:
 
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-extract
@@ -473,7 +473,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -512,7 +512,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-extract
           path: ${{ runner.temp }}/cw
@@ -532,7 +532,7 @@ jobs:
 
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-plan
@@ -564,7 +564,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -603,7 +603,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-plan
           path: ${{ runner.temp }}/cw
@@ -623,7 +623,7 @@ jobs:
 
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-implement
@@ -655,7 +655,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -694,7 +694,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-implement
           path: ${{ runner.temp }}/cw
@@ -714,7 +714,7 @@ jobs:
 
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-review
@@ -739,7 +739,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -778,31 +778,31 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-setup
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-baseline
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-extract
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-plan
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-implement
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-review
           path: ${{ runner.temp }}/cw
@@ -864,7 +864,7 @@ jobs:
           title: "🏭 code-weaver: ${{ env.CW_ISSUE_TITLE }}"
           body-file: ${{ runner.temp }}/cw/pr-body.md
           issue-number: ${{ env.CW_ISSUE_NUMBER }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-pr
@@ -898,7 +898,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -937,7 +937,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cw-pr
           path: ${{ runner.temp }}/cw
@@ -964,7 +964,7 @@ jobs:
       - name: Push the AI branch (post-fix state)
         if: ${{ success() || failure() }}
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-gates
@@ -996,7 +996,7 @@ jobs:
       # in baseline, missing in extract). The artifact is the oracle's
       # stage-results channel; GITHUB_ENV then feeds the rest of the job.
       - name: Stage state — trigger
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
@@ -1035,42 +1035,42 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref || steps.state.outputs.base-ref }}
           token: ${{ secrets.GH_TOKEN }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-setup
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-baseline
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-extract
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-plan
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-implement
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-review
           path: ${{ runner.temp }}/cw
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         continue-on-error: true  # an upstream stage that never ran never uploads its artifact; the report lists it as not-run
         with:
           name: cw-gates
@@ -1098,7 +1098,7 @@ jobs:
           run-result: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
           pr-number: ${{ env.CW_PR_NUMBER }}
           issue-number: ${{ env.CW_ISSUE_NUMBER }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cw-report
