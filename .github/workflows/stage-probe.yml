@@ -25,6 +25,7 @@ jobs:
           MAX_LOOPS: 5
           MAX_TOKENS: 500000
         run: |
+          echo "GITHUB_ACTION_PATH=[$GITHUB_ACTION_PATH]"
           T="$RUNNER_TEMP/cw/state/trigger"
           mkdir -p "$T"
           echo true > "$T/started.txt"
