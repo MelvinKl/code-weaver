@@ -1,0 +1,58 @@
+# Temporary probe v3: run the extract stage as the factory does; capture
+# the next failure layer (trace + env + pi binary diagnostics)
+name: stage-probe (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: self-hosted
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: $\{\{ secrets.GH_TOKEN \}\}
+          ref: main
+      - name: Run the extract stage (factory env)
+        env:
+          GH_TOKEN: $\{\{ secrets.GH_TOKEN \}\}
+          LLM_MODEL: Qwen3.8
+          TARGET_BRANCH: main
+          REQUIREMENTS_DIR: requirements
+          PLAN_DIR: plan
+          DOC_DIR: doc
+          MAX_LOOPS: 5
+          MAX_TOKENS: 500000
+        run: |
+          T="$RUNNER_TEMP/cw/state/trigger"
+          mkdir -p "$T"
+          echo true > "$T/started.txt"
+          echo 3 > "$T/issue-number.txt"
+          echo "Merge PR target branch into feature branch before the final action check" > "$T/issue-title.txt"
+          echo main > "$T/base-ref.txt"
+          git rev-parse HEAD > "$T/base-sha.txt"
+          echo "ai/code-weaver/3" > "$T/head.txt"
+          echo main > "$T/base.txt"
+          echo "IyMgUHJvYmxlbQoKQmVmb3JlIHBlcmZvcm1pbmcgdGhlIGZpbmFsIGNoZWNrIHRoYXQgYWxsIGFjdGlvbnMgaW4gdGhlIFBSIGFyZSBzdWNjZXNzZnVsLCB0aGUgY3VycmVudCBQUiB0YXJnZXQgYnJhbmNoIG5lZWRzIHRvIGJlIG1lcmdlZCBpbnRvIHRoZSBmZWF0dXJlIGJyYW5jaC4KCiMjIEV4cGVjdGVkIGJlaGF2aW9yCgoxLiBEZXRlcm1pbmUgdGhlIFBSJ3MgdGFyZ2V0IGJyYW5jaC4KMi4gTWVyZ2UgdGhlIHRhcmdldCBicmFuY2ggaW50byB0aGUgZmVhdHVyZSBicmFuY2ggKGUuZy4gYGdpdCBtZXJnZSBvcmlnaW4vPHRhcmdldC1icmFuY2g+YCkuCjMuIFB1c2ggdGhlIG1lcmdlZCBmZWF0dXJlIGJyYW5jaCBiYWNrIHRvIHRoZSBQUi4KNC4gT25seSBhZnRlciB0aGF0LCBydW4gdGhlIGZpbmFsIHZlcmlmaWNhdGlvbiB0aGF0IGFsbCBhY3Rpb25zL3dvcmtmbG93IHJ1bnMgaW4gdGhlIFBSIGhhdmUgY29tcGxldGVkIHN1Y2Nlc3NmdWxseS4KCiMjIFdoeQoKV2l0aG91dCBmaXJzdCB1cGRhdGluZyB0aGUgZmVhdHVyZSBicmFuY2ggd2l0aCB0aGUgbGF0ZXN0IGNoYW5nZXMgZnJvbSB0aGUgdGFyZ2V0IGJyYW5jaCwgdGhlIGZpbmFsIGNoZWNrIGNhbiBiZSBiYXNlZCBvbiBzdGFsZSBjb2RlIGFuZCBtYXkgbm90IHJlZmxlY3QgdGhlIHN0YXRlIG9mIHRoZSBQUiB0aGF0IHdpbGwgYWN0dWFsbHkgYmUgbWVyZ2VkLgo=" | base64 -d > "$RUNNER_TEMP/cw/issue-body.md"
+          {
+            echo "GITHUB_ACTION_PATH=[]"
+            echo "which pi: /usr/local/bin/pi"
+            echo "pi --version: 1.3.0"
+            echo "=== extract stage run ==="
+            python3 .github/actions/extract-stage/stage.py 2>&1 | tail -40
+            echo "stage-exit=${PIPESTATUS[0]}"
+          } > /tmp/trace.txt 2>&1
+          tail -25 /tmp/trace.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-trace
+          path: /tmp/trace.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-tree
+          path: |
+            $\{\{ runner.temp \}\}/cw
+            requirements
