@@ -11,6 +11,12 @@ runs:
     - name: Plan loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
       shell: bash
       working-directory: ${{ github.workspace }}
-      # GITHUB_ACTION_PATH is unset in composite inner steps on
-      # this runner build; fall back to the checkout-relative path
-      run: python3 "${GITHUB_ACTION_PATH:-$GITHUB_WORKSPACE/.github/actions/plan-stage}/stage.py"
+      # GITHUB_ACTION_PATH is unreliable inside composite inner
+      # steps on this runner build (unset or mis-pointed), so the
+      # run line verifies its target and falls back to the
+      # checkout-relative action path — a healthy runner resolves
+      # the var to the same directory anyway
+      run: |-
+        S="${GITHUB_ACTION_PATH}/stage.py"
+        [ -f "$S" ] || S="$GITHUB_WORKSPACE/.github/actions/plan-stage/stage.py"
+        python3 "$S"
