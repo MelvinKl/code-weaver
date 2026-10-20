@@ -235,8 +235,17 @@ def git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
 
 def action_path() -> str:
     """Directory of the running composite action inside the code-weaver
-    checkout — sibling actions/scripts resolve from here."""
-    return os.environ["GITHUB_ACTION_PATH"]
+    checkout — sibling actions/scripts resolve from here.
+
+    On this runner build GITHUB_ACTION_PATH is unset inside composite
+    action inner steps (same bug family as the missing INPUT_* binding),
+    so the actions directory is anchored from this file's own location:
+    common.py lives at <repo>/.github/scripts/common.py."""
+    p = os.environ.get("GITHUB_ACTION_PATH")
+    if p:
+        return p
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(repo_root, ".github", "actions", "stage")
 
 
 def sibling_action(name: str) -> str:

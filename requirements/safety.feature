@@ -105,3 +105,11 @@ Feature: Secrets and safety
     When it needs the shared scripts directory
     Then it derives the action directory from its own location
     And the import of the shared modules succeeds
+
+  Scenario: Shared helpers locate the actions directory without the runner's action var
+    # GITHUB_ACTION_PATH is unset in composite inner steps on this runner
+    # build, but common.py's own path always yields the checkout root
+    Given a stage calls for a sibling action or the scripts directory
+    When the runner's action var is unset
+    Then it anchors the actions directory from the location of common.py
+    And sibling actions and the guard script resolve to real paths
