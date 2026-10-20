@@ -1,0 +1,23 @@
+# Temporary probe: does GITHUB_ENV written by step N reach step N+1's
+# process env on this runner build? (manual dispatch only)
+name: env-probe (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Write GITHUB_ENV
+        run: |
+          echo "PROBE_ONE=alpha" >> "$GITHUB_ENV"
+          echo "PROBE_TWO=beta" >> "$GITHUB_OUTPUT"
+          echo "github_env file after write: $(ls -la "$GITHUB_ENV" 2>/dev/null || echo ABSENT)"
+          echo "content: [$(cat "$GITHUB_ENV" 2>/dev/null)]"
+      - name: Read back (bash)
+        run: echo "bash sees PROBE_ONE=[$PROBE_ONE] PROBE_TWO=[$PROBE_TWO]"
+      - name: Read back (python)
+        run: |
+          echo "python sees PROBE_ONE=[$(python3 -c 'import os;print(os.environ.get("PROBE_ONE","<ABSENT>"))')]"
+          echo "github_env var=[$(python3 -c 'import os;print(os.environ.get("GITHUB_ENV","<ABSENT>"))')]"
