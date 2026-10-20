@@ -25,14 +25,23 @@ import stages
 
 
 def source_dirs() -> list[str]:
+    """The dirs the implementation may touch.
+
+    Every top-level directory except the protected ones (requirements,
+    plans) and the VCS/dependency noise. The conventional source dirs
+    (src, tests, lib, app, packages, services, internal) are included
+    wherever they exist — and so are the repo's other code locations:
+    a factory repo keeps its own source under .github/, and having a
+    tests/ dir must not make the guard conclude the implementation
+    lives only there. Hidden dirs are excluded except .github, where
+    the factory's own workflows and actions live."""
     protected = {common.env_dir("REQUIREMENTS_DIR"), common.env_dir("PLAN_DIR")}
-    known = ["src", "tests", "lib", "app", "packages", "services", "internal"]
-    if any(os.path.isdir(d) for d in known):
-        return [d for d in known if os.path.isdir(d)]
-    # Flat repo: allow every top-level entry except the protected dirs
-    # ("." itself allows nothing in the guard's prefix test).
+    noise = {".git", "node_modules", "__pycache__", ".venv", ".tox", ".mypy_cache"}
     return [e for e in sorted(os.listdir("."))
-            if e not in protected and e not in (".git", "node_modules")]
+            if os.path.isdir(e)
+            and e not in protected
+            and e not in noise
+            and (not e.startswith(".") or e == ".github")]
 
 
 def plan_loop_back(violations: list[str]) -> bool | None:

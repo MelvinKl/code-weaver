@@ -46,3 +46,10 @@ Feature: Implementation
     When the implementation stage builds pi's context
     Then the plan directory is expanded to the files it contains
     And no directory is ever passed as an @-argument
+
+  Scenario: The allow set covers the repo's real layout
+    Given a repo whose code lives outside the conventional source dirs (such as .github/)
+    And the repo also has a tests/ directory
+    When the implementation guard computes its allow set
+    Then the set includes the conventional dirs and the other top-level code dirs
+    And the protected requirements and plans dirs stay off-limits

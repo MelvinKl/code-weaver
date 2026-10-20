@@ -87,7 +87,9 @@ def review(i: int, test_out: str):
     context = ["@" + test_out, *stages.dir_files(req)] if req else ["@" + test_out]
     r = stages.pi_stage("review", prompt_file=prompt, context=context)
     if r.returncode != 0:
-        return None
+        # 124 = cut off at the call cap (a slow model) — the loop retries
+        # it; any other non-zero is a broken environment — the loop fails
+        return None, r.returncode
     out = common.state_file("last-pi.out")
     text = open(out, encoding="utf-8", errors="replace").read()
     verdicts = parse_verdicts(text)
@@ -96,8 +98,8 @@ def review(i: int, test_out: str):
         # stage failure, never a silent pass
         common.log("::error::stage 10: the review emitted no parseable "
                    "SCENARIO verdicts — the oracle cannot be assumed green")
-        return None
-    return verdicts, text
+        return None, r.returncode
+    return (verdicts, text), r.returncode
 
 
 def tail(path: str, n: int = 200) -> str:
@@ -107,12 +109,24 @@ def tail(path: str, n: int = 200) -> str:
 
 def main() -> None:
     i = 0
+    prev_cut = False
     while True:
         common.caps_ok(i)
         rc, out = run_tests(i)
-        res = review(i, out) if rc == 0 else None
+        res, rrc = review(i, out) if rc == 0 else (None, 0)
         verdicts = res[0] if res else None
 
+        if rc == 0 and res is None:
+            if rrc == 124:
+                common.log("::warning::stage 10: the review call was cut off "
+                           "at its cap — a slow model, not a broken one; the "
+                           "loop retries (the iteration is consumed)")
+                prev_cut = True
+                i += 1
+                continue
+            common.log("::error::stage 10: review failed or unparseable — "
+                       "stage fails")
+            sys.exit(1)
         if rc == 0 and verdicts is not None:
             unfulfilled = [v for v in verdicts if v[2] != "FULFILLED"]
             if not unfulfilled:

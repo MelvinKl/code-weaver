@@ -55,3 +55,10 @@ Feature: Test and review loop
     When the requirements directory is included
     Then it is expanded to its feature files
     And no directory is ever passed as an @-argument
+
+  Scenario: A review or fix call cut off at its cap is retried, not fatal
+    Given a review or fix pi call outlives its time cap and is cut off
+    When the self-correcting loop continues
+    Then the iteration is consumed and the call is not treated as a broken environment
+    And partial edits from the cut-off call are never committed
+    And the next prompt tells the model to audit the partial work before continuing
