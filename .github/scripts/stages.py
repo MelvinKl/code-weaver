@@ -36,7 +36,11 @@ def baseline_sha() -> str:
 
 
 def pi_stage(template: str, prompt_file: str | None = None,
-             context: list[str] | tuple[str, ...] = (), timeout: int = 1800):
+             context: list[str] | tuple[str, ...] = (),
+             timeout: int = 5400):
+    # 90-minute cap: a thinking model (long reasoning phase, ~13 tok/s) can
+    # legitimately outlive 30 minutes on a large context; the stage jobs give
+    # it 4-6h, and a cut-off call is retried inside the bounded loop.
     """One pi invocation against a pi-prompts/ template — the same
     common.pi_invoke the declarative pi-run action wraps."""
     sp = os.path.join(repo_root(), "pi-prompts", template + ".md")
@@ -108,7 +112,11 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                        f"broken, not the model) —\n"
                        f"{traceback.format_exc().rstrip()}")
             sys.exit(1)
-        if r.returncode != 0:
+        if r.returncode == 124:
+            common.log(f"::warning::{stage}: pi run cut off at the call cap "
+                       f"(exit 124) — the iteration is consumed and the loop "
+                       f"retries; a slow model is not a broken environment")
+        elif r.returncode != 0:
             common.log(f"::error::{stage}: pi run failed (exit {r.returncode}) — "
                        f"a broken environment is not looped over")
             sys.exit(1)

@@ -86,3 +86,11 @@ Feature: Requirement extraction
     When the loop re-runs the model
     Then the next prompt carries the parser's complaint
     And the model repairs the file against that exact error
+
+  Scenario: A pi call cut off at its time cap is retried, not treated as a broken environment
+    Given a reasoning model whose generation outlives the pi call cap
+    When a stage runs the bounded generation loop
+    Then the call is cut off at the cap and reports exit code 124
+    And the stage does not fail on the grounds of a broken environment
+    And the partial output is committed and judged like any other iteration
+    And the loop retries the model within its bounded budget

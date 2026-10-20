@@ -133,7 +133,18 @@ def pi_invoke(
     err_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.err")
     log(f"$ pi --print --model {model} --system-prompt @{os.path.basename(system_prompt_file)} {' '.join(context)}")
     with open(out_f, "w") as out, open(err_f, "w") as err:
-        r = subprocess.run(cmd, stdout=out, stderr=err, cwd=repo(), timeout=timeout)
+        try:
+            r = subprocess.run(cmd, stdout=out, stderr=err, cwd=repo(),
+                               timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # A slow model is not a broken environment: the call is cut off
+            # cleanly (exit 124) and the stage's bounded loop decides what to
+            # do with the partial work — it is not a hard failure.
+            log(f"::warning::pi call exceeded its {timeout}s cap and was cut "
+                f"off (exit 124) — treated as a slow model, not a broken "
+                f"environment")
+            r = subprocess.CompletedProcess(args=cmd, returncode=124,
+                                            stdout=None, stderr=None)
     usage = 0
     try:
         err_text = open(err_f, encoding="utf-8", errors="replace").read()
