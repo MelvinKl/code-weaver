@@ -243,7 +243,11 @@ def action_path() -> str:
     common.py lives at <repo>/.github/scripts/common.py."""
     p = os.environ.get("GITHUB_ACTION_PATH")
     if p:
-        return p
+        # This runner build points it at the action dir with a "/./"
+        # segment and a trailing slash; raw dirname() arithmetic eats the
+        # trailing slash as a level and lands one dir too deep, so
+        # normalize before any caller walks up from here.
+        return os.path.normpath(p)
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return os.path.join(repo_root, ".github", "actions", "stage")
 
