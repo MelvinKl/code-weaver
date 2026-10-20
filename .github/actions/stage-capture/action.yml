@@ -1,0 +1,30 @@
+# Temporary probe: run the extract stage exactly as the factory does, but
+# capture its console into the cw tree so a green run can upload it
+name: stage-capture (temporary)
+description: tee the stage console to the cw state dir (never fails)
+inputs:
+  name:
+    description: stage name for the console file
+    required: false
+    default: extract-stage
+runs:
+  using: "composite"
+  steps:
+    - name: Run the stage with the console captured
+      shell: bash
+      run: |
+        {
+          S="${GITHUB_ACTION_PATH}/../extract-stage/stage.py"
+          [ -f "$S" ] || S="$GITHUB_WORKSPACE/.github/actions/extract-stage/stage.py"
+          echo "S=[$S]"
+          echo "AP=[$GITHUB_ACTION_PATH] WS=[$GITHUB_WORKSPACE] RT=[$RUNNER_TEMP]"
+          python3 "$S" 2>&1
+          echo "stage-exit=$?"
+        } > "$RUNNER_TEMP/cw/probe-${INPUT_NAME-extract-stage}-console.txt" 2>&1
+        tail -5 "$RUNNER_TEMP/cw/probe-${INPUT_NAME-extract-stage}-console.txt"
+    - name: Upload the captured console + state
+      uses: actions/upload-artifact@v4
+      with:
+        name: probe-stage-console
+        path: ${{ runner.temp }}/cw
+        if-no-files-found: warn
