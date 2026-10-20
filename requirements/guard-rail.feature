@@ -55,3 +55,9 @@ Feature: Only-X-changed guard-rail
     Then each check collects changed files with git status --porcelain
     And compares them against its allowed set with comm
     And reverts the violations with git checkout -- plus git clean -fdq
+
+  Scenario: A stage's guard judges only that stage's work
+    Given a stage started after earlier stages had committed their outputs
+    When the stage's guard collects working-tree changes
+    Then it measures them against the branch tip recorded as that stage started
+    And outputs committed by earlier stages are not treated as off-limits

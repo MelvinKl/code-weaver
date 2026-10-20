@@ -35,6 +35,23 @@ def baseline_sha() -> str:
     return os.environ.get("BASELINE_REF") or "HEAD"
 
 
+def stage_baseline() -> str:
+    """The rolling baseline the guard measures this stage against: the
+    branch tip as the stage started (the stage action records it), falling
+    back to the trigger's base sha.
+
+    A stage's guard must judge only THIS stage's work. The trigger's base
+    sha would re-flag every earlier stage's committed outputs (extraction's
+    feature file) as off-limits changes and revert them out of the tree —
+    which then breaks the next stage's context files."""
+    p = common.state_file("stage-baseline.sha")
+    try:
+        v = open(p, encoding="utf-8").read().strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    return baseline_sha()
 def pi_stage(template: str, prompt_file: str | None = None,
              context: list[str] | tuple[str, ...] = (),
              timeout: int = 5400):

@@ -21,6 +21,11 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Record the stage baseline (the branch tip as this stage started)
+      # The guard judges THIS stage's work only: earlier stages' committed
+      # outputs must not look like off-limits changes against the trigger's
+      # base sha.
+      run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
     - name: Write the final status report (PR body + issue comment + arc42 activity)
       shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
       working-directory: ${{ github.workspace }}

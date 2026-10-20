@@ -9,6 +9,11 @@ description: >-
 runs:
   using: composite
   steps:
+    - name: Record the stage baseline (the branch tip as this stage started)
+      # The guard judges THIS stage's work only: earlier stages' committed
+      # outputs must not look like off-limits changes against the trigger's
+      # base sha.
+      run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
     - name: Test & review loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
       shell: bash
       working-directory: ${{ github.workspace }}

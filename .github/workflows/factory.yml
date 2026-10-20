@@ -515,7 +515,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: cw-extract
-          path: ${ runner.temp }/cw
+          path: ${{ runner.temp }}/cw
       - name: Stage 6 — plan every requirement change (markdown)
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/plan-stage/
@@ -606,7 +606,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: cw-plan
-          path: ${ runner.temp }/cw
+          path: ${{ runner.temp }}/cw
       - name: Stage 8 — implement the plans (code, tests, arc42, README)
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/implement-stage/
