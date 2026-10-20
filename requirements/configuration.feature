@@ -73,3 +73,10 @@ Feature: Configuration surface
     When the target repo wires the token
     Then it passes it via the reusable workflow's secrets block
     And no secret value appears in with inputs or committed files
+
+  Scenario: A stage's pi calls bound the model's thinking
+    Given a reasoning model whose chat template runs thinking unbounded by default
+    When a stage builds a headless pi invocation
+    Then the command passes an explicit bounded --thinking level
+    And the runner's pre-installed pi configuration is never modified
+    And a single call cannot reason past the loop's time cap

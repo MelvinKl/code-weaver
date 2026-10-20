@@ -118,20 +118,33 @@ def pi_invoke(
     prompt_file: str | None = None,
     context: list[str] | tuple[str, ...] = (),
     timeout: int = 1800,
+    thinking: str | None = "medium",
 ) -> subprocess.CompletedProcess:
     """One headless pi run. The backend comes from the pi configuration that
     is a pre-requisite of the runner environment — this never passes or
-    overrides it (setup-pi requirement). Only the model is selected here."""
+    overrides it (setup-pi requirement). Only the model is selected here.
+
+    Reasoning models run UNBOUNDED thinking when pi is invoked without an
+    explicit --thinking level (the model's config maps the default level to
+    'no directive', and the chat template then lets the model think as long
+    as it pleases) — a single call can outlive the loop's time cap. The
+    stage passes a bounded level per call; the runner's configuration itself
+    is never touched."""
     with open(system_prompt_file, encoding="utf-8") as f:
         system_prompt = f.read()
-    cmd = ["pi", "--print", "--model", model, "--system-prompt", system_prompt]
+    cmd = ["pi", "--print", "--model", model]
+    if thinking:
+        cmd += ["--thinking", thinking]
+    cmd += ["--system-prompt", system_prompt]
     if prompt_file:
         with open(prompt_file, encoding="utf-8") as f:
             cmd.append(f.read())
     cmd += list(context)
     out_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.out")
     err_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.err")
-    log(f"$ pi --print --model {model} --system-prompt @{os.path.basename(system_prompt_file)} {' '.join(context)}")
+    log(f"$ pi --print --model {model} --thinking {thinking or '(unset)'} "
+        f"--system-prompt @{os.path.basename(system_prompt_file)} "
+        f"{' '.join(context)}")
     with open(out_f, "w") as out, open(err_f, "w") as err:
         try:
             r = subprocess.run(cmd, stdout=out, stderr=err, cwd=repo(),

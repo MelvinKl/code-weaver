@@ -54,14 +54,15 @@ def stage_baseline() -> str:
     return baseline_sha()
 def pi_stage(template: str, prompt_file: str | None = None,
              context: list[str] | tuple[str, ...] = (),
-             timeout: int = 5400):
+             timeout: int = 5400, thinking: str | None = "medium"):
     # 90-minute cap: a thinking model (long reasoning phase, ~13 tok/s) can
     # legitimately outlive 30 minutes on a large context; the stage jobs give
     # it 4-6h, and a cut-off call is retried inside the bounded loop.
     """One pi invocation against a pi-prompts/ template — the same
     common.pi_invoke the declarative pi-run action wraps."""
     sp = os.path.join(repo_root(), "pi-prompts", template + ".md")
-    return common.pi_invoke(os.environ["LLM_MODEL"], sp, prompt_file, list(context), timeout)
+    return common.pi_invoke(os.environ["LLM_MODEL"], sp, prompt_file,
+                            list(context), timeout, thinking)
 
 
 def run_guard(baseline: str, allow: list[str]):
