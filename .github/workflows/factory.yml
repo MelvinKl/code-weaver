@@ -278,7 +278,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -298,11 +299,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ env.CW_BASE_REF }}
+          ref: ${{ steps.state.outputs.base-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - name: Stage 3 — cut the AI branch, record the baseline
         if: ${{ env.CW_STARTED == 'true' }}
@@ -377,7 +386,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -397,11 +407,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+          ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -459,7 +477,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -479,11 +498,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+          ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -541,7 +568,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -561,11 +589,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+          ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -623,7 +659,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -643,11 +680,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+          ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -698,7 +743,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -718,11 +764,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+          ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -848,7 +902,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -868,11 +923,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+          ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
@@ -937,7 +1000,8 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
-      - name: Read trigger state
+      - id: state
+        name: Read trigger state
         run: |
           T="$RUNNER_TEMP/cw/state/trigger"
           [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
@@ -957,11 +1021,19 @@ jobs:
           echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
           echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
           echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+          # GITHUB_OUTPUT — the checkout steps take their refs from this step
+          # output, not from the env context: on this runner build the env
+          # context does not reliably see GITHUB_ENV entries in a later step's
+          # expression (observed: baseline's checkout got the value, extract's
+          # did not, from the same file); a step's own outputs are the
+          # deterministic in-job relay
+          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ env.CW_AI_BRANCH || env.CW_BASE_REF }}
+          ref: ${{ steps.state.outputs.checkout-ref || steps.state.outputs.base-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
