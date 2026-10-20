@@ -96,7 +96,11 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
     empty = 0
     while True:
         common.caps_ok(i)
-        r = pi_stage(template, prompt_file, context)
+        # a callable prompt_file is rebuilt every iteration: loop feedback
+        # (e.g. the validator's verdict on the previous attempt) rides the
+        # next prompt
+        pf = prompt_file() if callable(prompt_file) else prompt_file
+        r = pi_stage(template, pf, context)
         if r.returncode != 0:
             common.log(f"::error::{stage}: pi run failed (exit {r.returncode}) — "
                        f"a broken environment is not looped over")

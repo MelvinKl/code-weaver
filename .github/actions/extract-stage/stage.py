@@ -39,9 +39,17 @@ def post_ok() -> bool:
     if not files:
         return True  # nothing generated — valid vacuously (empty-body case)
     r = subprocess.run([sys.executable, validator, *files], capture_output=True, text=True)
+    verdict = common.state_file("extract-validation.txt")
     if r.returncode == 0:
+        with open(verdict, "w", encoding="utf-8") as f:
+            f.write("PASS")
         common.log(f"stage 5: {len(files)} feature file(s) parse with the official Gherkin parser")
         return True
+    # The parser's verdict is persisted: the next loop iteration's prompt
+    # carries it, so the model repairs its own Gherkin against the exact
+    # complaint instead of regenerating blind.
+    with open(verdict, "w", encoding="utf-8") as f:
+        f.write(r.stderr.strip() or "the official Gherkin parser rejected the file")
     bad: list[str] = []
     for line in r.stderr.splitlines():
         if line.startswith("FAIL "):
@@ -58,12 +66,16 @@ def post_ok() -> bool:
 
 def main() -> None:
     req = common.env_dir("REQUIREMENTS_DIR")
-    # The model names its output file after the issue — the number and
-    # title ride a small header above the body, so the file name it
-    # chooses is deterministic for the issue (idempotent re-runs)
-    prompt_file = None
     body = common.state_file("issue-body.md")
-    if os.path.exists(body):
+
+    def build_prompt():
+        # The model names its output file after the issue — the number and
+        # title ride a small header above the body, so the file name it
+        # chooses is deterministic for the issue (idempotent re-runs).
+        # Rebuilt every iteration: after a failed validation the parser's
+        # verdict is appended, so the model repairs its own Gherkin.
+        if not os.path.exists(body):
+            return None
         text = open(body, encoding="utf-8").read()
         num = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
         title = common.cw_state("issue-title") or common.cw_input_opt("issue-title") or ""
@@ -75,13 +87,23 @@ def main() -> None:
             if title:
                 head += f": {title}"
             f.write(head + "\n\n" + text)
-        prompt_file = pf
+            verdict = common.state_file("extract-validation.txt")
+            if os.path.exists(verdict):
+                v = open(verdict, encoding="utf-8").read().strip()
+                if v and v != "PASS":
+                    f.write("\n\n## Your previous attempt failed validation\n"
+                            "The official Gherkin parser rejected it with:\n"
+                            f"```\n{v}\n```\n"
+                            "Regenerate the file so every line parses — keep the same "
+                            "scenarios, fix only the grammar the parser flagged.\n")
+        return pf
+
     stages.run_generation_stage(
         stage="stage 4 requirements-extraction",
         template="requirements",
         allow=[req],
         context=existing_context(),
-        prompt_file=prompt_file,
+        prompt_file=build_prompt,
         post_ok=post_ok,
     )
 

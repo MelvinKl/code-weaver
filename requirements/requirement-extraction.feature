@@ -80,3 +80,9 @@ Feature: Requirement extraction
     When the file is checked against the official Gherkin parser
     Then every line is a Gherkin keyword line or blank
     And no markdown, prose or scratchpad text is present
+
+  Scenario: A failed validation feeds the parser's verdict back into the next attempt
+    Given a generated feature file the official parser rejected
+    When the loop re-runs the model
+    Then the next prompt carries the parser's complaint
+    And the model repairs the file against that exact error
