@@ -75,23 +75,26 @@ def run_guard(baseline: str, allow: list[str]):
     return common.guard(baseline, allow)
 
 
-def project_context() -> list[str]:
-    """The project files pi reads as context — the arc42 markdown under the
-    doc dir, the existing Gherkin oracle, and the README. Missing parts are
-    skipped, not fatal.
+def dir_files(d: str) -> list[str]:
+    """A directory's files as pi @-arguments, sorted for a deterministic
+    prompt.
 
     pi's @-argument handling reads every argument as a file (it even sniffs
     image mime types), so a directory there crashes pi with EISDIR — context
-    entries are always concrete files, with directories expanded to the files
-    they contain (sorted for a deterministic prompt)."""
-    ctx: list[str] = []
+    entries are always concrete files; directories are expanded to the files
+    they contain. A missing dir yields an empty list (skipped, not fatal)."""
+    if not d or not os.path.isdir(d):
+        return []
+    return ["@" + os.path.join(d, f)
+            for f in sorted(os.listdir(d))
+            if os.path.isfile(os.path.join(d, f))]
+
+
+def project_context() -> list[str]:
+    """The project files pi reads as context — the arc42 markdown under the
+    doc dir, the existing Gherkin oracle, and the README."""
     req, doc = common.env_dir("REQUIREMENTS_DIR"), common.env_dir("DOC_DIR")
-    for d in (req, doc):
-        if d and os.path.isdir(d):
-            for f in sorted(os.listdir(d)):
-                p = os.path.join(d, f)
-                if os.path.isfile(p):
-                    ctx.append("@" + p)
+    ctx: list[str] = dir_files(req) + dir_files(doc)
     if os.path.isfile("README.md"):
         ctx.append("@README.md")
     return ctx

@@ -49,3 +49,9 @@ Feature: Test and review loop
     Given the review loop ran N iterations
     Then each iteration's log is written to the workflow log or an artifact
     And no file under test-results/ is committed to the repo
+
+  Scenario: The requirements reach the review's pi as feature files
+    Given the review stage builds pi's context
+    When the requirements directory is included
+    Then it is expanded to its feature files
+    And no directory is ever passed as an @-argument

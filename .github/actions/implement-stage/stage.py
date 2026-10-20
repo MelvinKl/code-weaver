@@ -64,7 +64,9 @@ def main() -> None:
     context = stages.project_context()
     plan = common.env_dir("PLAN_DIR")
     if plan:
-        context.append("@" + plan)
+        # the plan dir's files (pi reads every @-argument as a file; a
+        # directory argument crashes it with EISDIR)
+        context.extend(stages.dir_files(plan))
     stages.run_generation_stage(
         stage="stage 8 implementation",
         template="implement",

@@ -40,3 +40,9 @@ Feature: Implementation
     When the implement-check stage runs
     Then no file under requirements/ has changed
     And any such edit is reverted and the pipeline loops back to the plan stage
+
+  Scenario: The plan is handed to pi as its files
+    Given the planning stage wrote plan files under the plan directory
+    When the implementation stage builds pi's context
+    Then the plan directory is expanded to the files it contains
+    And no directory is ever passed as an @-argument

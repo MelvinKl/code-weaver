@@ -82,7 +82,9 @@ def review(i: int, test_out: str):
             f"Review it together with the Gherkin requirements and the current diff.\n"
         )
     req = common.env_dir("REQUIREMENTS_DIR")
-    context = ["@" + test_out, "@" + req] if req else ["@" + test_out]
+    # every @-argument is read as a file — the requirements dir expands to
+    # its feature files (a directory argument would crash pi with EISDIR)
+    context = ["@" + test_out, *stages.dir_files(req)] if req else ["@" + test_out]
     r = stages.pi_stage("review", prompt_file=prompt, context=context)
     if r.returncode != 0:
         return None
