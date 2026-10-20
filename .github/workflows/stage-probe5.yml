@@ -1,0 +1,56 @@
+# Temporary probe v5: run the extract stage in the runner's existing
+# workspace (no fresh clone — no token needed for the stage itself)
+name: stage-probe5 (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: self-hosted
+    timeout-minutes: 25
+    steps:
+      - name: Run the extract stage (factory env)
+        env:
+          LLM_MODEL: Qwen3.8
+          TARGET_BRANCH: main
+          REQUIREMENTS_DIR: requirements
+          PLAN_DIR: plan
+          DOC_DIR: doc
+          MAX_LOOPS: 5
+          MAX_TOKENS: 500000
+        run: |
+          WS=/opt/actions-runner/_work/code-weaver/code-weaver
+          [ -d "$WS/.git" ] || { echo "workspace ABSENT"; exit 0; }
+          cd "$WS"
+          echo "workspace HEAD: $(git rev-parse HEAD 2>/dev/null) branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+          T="$RUNNER_TEMP/cw/state/trigger"
+          mkdir -p "$T"
+          echo true > "$T/started.txt"
+          echo 3 > "$T/issue-number.txt"
+          echo "Merge PR target branch into feature branch before the final action check" > "$T/issue-title.txt"
+          echo main > "$T/base-ref.txt"
+          git rev-parse HEAD > "$T/base-sha.txt"
+          echo "ai/code-weaver/3" > "$T/head.txt"
+          echo main > "$T/base.txt"
+          echo "$B64" | base64 -d > "$RUNNER_TEMP/cw/issue-body.md"
+          {
+            echo "GITHUB_ACTION_PATH=[$GITHUB_ACTION_PATH]"
+            echo "which pi: $(command -v pi || echo ABSENT)"
+            echo "=== extract stage run ==="
+            python3 .github/actions/extract-stage/stage.py 2>&1 | tail -40
+            echo "stage-exit=${PIPESTATUS[0]}"
+          } > /tmp/trace5.txt 2>&1
+          tail -30 /tmp/trace5.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe5-trace
+          path: /tmp/trace5.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe5-tree
+          path: |
+            ${{ runner.temp }}/cw
+            /opt/actions-runner/_work/code-weaver/code-weaver/requirements
