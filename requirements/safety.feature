@@ -96,3 +96,12 @@ Feature: Secrets and safety
     When the stage code resolves one of its inputs
     Then the value comes from the action input, the CW env, or a state file
     And the stage fails with a precise error only if all three are absent
+
+  Scenario: A stage resolves its own code location without the runner's action vars
+    # this runner build leaves GITHUB_ACTION_PATH unset inside a composite
+    # action's inner steps, so a stage module locates the shared scripts from
+    # its own file path, with the action var as the first choice
+    Given a stage module runs inside a composite action
+    When it needs the shared scripts directory
+    Then it derives the action directory from its own location
+    And the import of the shared modules succeeds

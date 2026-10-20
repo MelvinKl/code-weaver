@@ -14,7 +14,13 @@ from __future__ import annotations
 import os
 import sys
 
-action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+# GITHUB_ACTION_PATH is unset in composite-action inner steps on this
+# runner build (same bug family as the missing INPUT_* binding);
+# __file__ is always exact — stage.py lives in the action dir
+if os.environ.get("GITHUB_ACTION_PATH"):
+    action_dir = os.environ["GITHUB_ACTION_PATH"]
+else:
+    action_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts"))
 
 import common
