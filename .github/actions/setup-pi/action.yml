@@ -22,7 +22,7 @@ runs:
         LLM_MODEL: ${{ inputs.llm-model }}
       run: |
         import os, shutil, sys, urllib.request, json, subprocess
-        action_dir = os.environ.get("GITHUB_ACTION_PATH", ".")
+        action_dir = os.environ.get("GITHUB_ACTION_PATH") or os.path.join(os.environ.get("GITHUB_WORKSPACE", ""), ".github", "actions", "setup-pi")
         scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
         if os.path.isdir(scripts):
             sys.path.insert(0, scripts)

@@ -15,4 +15,6 @@ runs:
     - name: Gate loop — all PR-triggered workflows green (bounded; never merges)
       shell: bash
       working-directory: ${{ github.workspace }}
-      run: python3 "$GITHUB_ACTION_PATH/stage.py"
+      # GITHUB_ACTION_PATH is unset in composite inner steps on
+      # this runner build; fall back to the checkout-relative path
+      run: python3 "${GITHUB_ACTION_PATH:-$GITHUB_WORKSPACE/.github/actions/gates-stage}/stage.py"

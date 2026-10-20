@@ -113,3 +113,12 @@ Feature: Secrets and safety
     When the runner's action var is unset
     Then it anchors the actions directory from the location of common.py
     And sibling actions and the guard script resolve to real paths
+
+  Scenario: A composite run line locates the stage script without the runner's action var
+    # the run line must not be built from GITHUB_ACTION_PATH (unset in
+    # composite inner steps on this runner build): it falls back to the
+    # checkout-relative action path, which a healthy runner resolves identically
+    Given a composite action whose run line invokes the stage module
+    When the runner's action var is unset
+    Then the run line falls back to the checkout-relative action path
+    And the stage module starts from its real location

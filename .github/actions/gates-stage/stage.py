@@ -19,9 +19,8 @@ import sys
 import time
 
 # The action directory comes from this file's own location: on this
-# runner build GITHUB_ACTION_PATH is populated with a value that does
-# not point at the action dir (composite inner steps included), and on a
-# healthy runner the two are identical anyway
+# runner build GITHUB_ACTION_PATH is unset inside composite action
+# inner steps, and on a healthy runner both sources agree anyway
 action_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts"))
 

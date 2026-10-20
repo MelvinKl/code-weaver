@@ -11,4 +11,6 @@ runs:
     - name: Requirement-extraction loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
       shell: bash
       working-directory: ${{ github.workspace }}
-      run: python3 "$GITHUB_ACTION_PATH/stage.py"
+      # GITHUB_ACTION_PATH is unset in composite inner steps on
+      # this runner build; fall back to the checkout-relative path
+      run: python3 "${GITHUB_ACTION_PATH:-$GITHUB_WORKSPACE/.github/actions/extract-stage}/stage.py"
