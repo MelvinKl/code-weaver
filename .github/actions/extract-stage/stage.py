@@ -58,13 +58,30 @@ def post_ok() -> bool:
 
 def main() -> None:
     req = common.env_dir("REQUIREMENTS_DIR")
+    # The model names its output file after the issue — the number and
+    # title ride a small header above the body, so the file name it
+    # chooses is deterministic for the issue (idempotent re-runs)
+    prompt_file = None
+    body = common.state_file("issue-body.md")
+    if os.path.exists(body):
+        text = open(body, encoding="utf-8").read()
+        num = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
+        title = common.cw_state("issue-title") or common.cw_input_opt("issue-title") or ""
+        pf = common.state_file("issue-prompt.md")
+        with open(pf, "w", encoding="utf-8") as f:
+            head = "GitHub issue"
+            if num:
+                head += f" #{num}"
+            if title:
+                head += f": {title}"
+            f.write(head + "\n\n" + text)
+        prompt_file = pf
     stages.run_generation_stage(
         stage="stage 4 requirements-extraction",
         template="requirements",
         allow=[req],
         context=existing_context(),
-        prompt_file=common.state_file("issue-body.md")
-        if os.path.exists(common.state_file("issue-body.md")) else None,
+        prompt_file=prompt_file,
         post_ok=post_ok,
     )
 

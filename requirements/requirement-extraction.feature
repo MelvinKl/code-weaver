@@ -60,3 +60,23 @@ Feature: Requirement extraction
     When the stage assembles the pi context arguments
     Then every context argument is a file that exists
     And directories are expanded to the files they contain
+
+  Scenario: Extraction writes one new file named after the issue
+    Given an issue with a number and a title
+    When the extraction stage writes its delta requirements
+    Then it creates exactly one new feature file named after the issue number
+    And no existing feature file differs from the baseline
+
+  Scenario: An empty model response does not consume the loop budget
+    # a wedged or silent model must not burn a bounded-loop iteration the
+    # guard could only trivially pass; the retry tolerance is itself bounded
+    Given a generation loop bounded by the loop cap
+    When the model returns no output and changes no file
+    Then the same iteration is retried without counting against the cap
+    And the empty-response tolerance is itself bounded
+
+  Scenario: Generated feature files contain only Gherkin the official parser accepts
+    Given a model response that produced a feature file
+    When the file is checked against the official Gherkin parser
+    Then every line is a Gherkin keyword line or blank
+    And no markdown, prose or scratchpad text is present

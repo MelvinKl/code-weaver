@@ -85,9 +85,15 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                          context: list[str], prompt_file: str | None = None,
                          post_ok=None, on_violation=None) -> None:
     """generate → commit → guard → (clean: post_ok check / break;
-    leak: revert + re-run) — bounded by the loop caps."""
+    leak: revert + re-run) — bounded by the loop caps.
+
+    A model response that is empty AND changes nothing does not consume
+    the loop budget (it would otherwise burn an iteration the guard can
+    only trivially pass); it is retried in place, itself bounded, so a
+    silently-wedged model cannot loop the stage forever."""
     baseline = baseline_sha()
     i = 0
+    empty = 0
     while True:
         common.caps_ok(i)
         r = pi_stage(template, prompt_file, context)
@@ -95,6 +101,21 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
             common.log(f"::error::{stage}: pi run failed (exit {r.returncode}) — "
                        f"a broken environment is not looped over")
             sys.exit(1)
+        out_f = common.state_file(f"pi-{template}.md.out")
+        try:
+            produced = open(out_f, encoding="utf-8", errors="replace").read()
+        except OSError:
+            produced = ""
+        if not produced.strip() and not common.changed_files(baseline):
+            empty += 1
+            if empty > 3:
+                common.log(f"::error::{stage}: model kept returning empty output — "
+                           f"the retry tolerance is bounded, the stage fails clean")
+                sys.exit(1)
+            common.log(f"{stage}: empty model response, no file changes — retrying "
+                       f"without consuming the loop budget (extra {empty}/3)")
+            continue
+        empty = 0
         common.commit_all(f"{stage}: generated (iteration {i})")
         res = run_guard(baseline, allow)
         if res.ok:
