@@ -77,3 +77,11 @@ Feature: pi pre-installed and configured in the runner environment
     When the runner validates the step's shell declaration before executing it
     Then the declaration is a built-in shell or a format string naming the interpreter and the script placeholder
     And the step's program actually executes and the stage sees its result
+
+  Scenario: A repo-local model config shadows the runner's user config
+    Given the repo ships its own .pi agent model configuration
+    And the runner environment carries its own user-level configuration
+    When a factory stage invokes pi inside the checked-out workspace
+    Then the repo-local configuration is what the invocation resolves
+    And the runner's user-level configuration is never modified
+    And a factory can pin its model backend without touching the runner

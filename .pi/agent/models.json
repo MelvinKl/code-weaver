@@ -1,0 +1,33 @@
+{
+  "providers": {
+    "llama-swap": {
+      "baseUrl": "http://192.168.5.202:5801/v1",
+      "api": "openai-completions",
+      "apiKey": "factory-direct-vllm",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "thinkingFormat": "qwen-chat-template"
+      },
+      "models": [
+        {
+          "id": "Qwen3.8",
+          "name": "Qwen3.8 27B (vLLM direct — the repo-local config shadows the runner's user-level config for factory runs: the swap proxy has been observed to complete a response upstream and never deliver it downstream; the runner's own config stays untouched)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 200000,
+          "maxTokens": 32768,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": "medium",
+            "high": null,
+            "xhigh": "xhigh",
+            "max": null
+          }
+        }
+      ]
+    }
+  }
+}
