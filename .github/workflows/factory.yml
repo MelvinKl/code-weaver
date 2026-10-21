@@ -363,7 +363,7 @@ jobs:
     needs: baseline
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 240
+    timeout-minutes: 480
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -454,7 +454,7 @@ jobs:
     needs: extract
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 240
+    timeout-minutes: 480
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -545,7 +545,7 @@ jobs:
     needs: plan
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 360
+    timeout-minutes: 480
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -636,7 +636,7 @@ jobs:
     needs: implement
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 360
+    timeout-minutes: 480
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -880,7 +880,7 @@ jobs:
     needs: [pr, baseline]
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 240
+    timeout-minutes: 480
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       LLM_MODEL: ${{ inputs.llm-model }}

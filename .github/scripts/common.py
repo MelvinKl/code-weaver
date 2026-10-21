@@ -117,7 +117,7 @@ def pi_invoke(
     system_prompt_file: str,
     prompt_file: str | None = None,
     context: list[str] | tuple[str, ...] = (),
-    timeout: int = 1800,
+    timeout: int = 21600,
     thinking: str | None = "medium",
 ) -> subprocess.CompletedProcess:
     """One headless pi run. The backend comes from the pi configuration that
