@@ -80,3 +80,10 @@ Feature: Configuration surface
     Then the command passes an explicit bounded --thinking level
     And the runner's pre-installed pi configuration is never modified
     And a single call cannot reason past the loop's time cap
+
+  Scenario: A pi call that dies with no output is a dropped stream, not a broken environment
+    Given the model backend process is recreated while a stage's pi call is in flight
+    And the call's stream closes with nothing delivered
+    When the stage classifies the call's non-zero exit
+    Then it retries the iteration, consuming the budget
+    And only a failure that produced output fails the stage

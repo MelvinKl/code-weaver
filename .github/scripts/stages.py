@@ -139,9 +139,29 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                        f"(exit 124) — the iteration is consumed and the loop "
                        f"retries; a slow model is not a broken environment")
         elif r.returncode != 0:
-            common.log(f"::error::{stage}: pi run failed (exit {r.returncode}) — "
-                       f"a broken environment is not looped over")
-            sys.exit(1)
+            out_f = common.state_file(f"pi-{template}.md.out")
+            try:
+                out_now = open(out_f, encoding="utf-8",
+                                errors="replace").read()
+            except OSError:
+                out_now = ""
+            if not out_now.strip():
+                # the provider stream died under us (the backend process was
+                # recreated / the connection dropped): pi exits with no
+                # output and no file changes. That is a transport hiccup, not
+                # a broken environment — retry it exactly as a cut-off call.
+                tail = (r.stderr or "").strip().splitlines()
+                tail = tail[-1] if tail else "no stderr"
+                common.log(
+                    f"::warning::{stage}: pi run died with no output "
+                    f"(exit {r.returncode}; stderr: {tail[:120]}) — a "
+                    f"dropped model stream, not a broken environment; the "
+                    f"iteration is consumed and the loop retries")
+            else:
+                common.log(f"::error::{stage}: pi run failed (exit "
+                           f"{r.returncode}) — a broken environment is not "
+                           f"looped over")
+                sys.exit(1)
         out_f = common.state_file(f"pi-{template}.md.out")
         try:
             produced = open(out_f, encoding="utf-8", errors="replace").read()

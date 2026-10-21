@@ -87,8 +87,17 @@ def review(i: int, test_out: str):
     context = ["@" + test_out, *stages.dir_files(req)] if req else ["@" + test_out]
     r = stages.pi_stage("review", prompt_file=prompt, context=context)
     if r.returncode != 0:
-        # 124 = cut off at the call cap (a slow model) — the loop retries
-        # it; any other non-zero is a broken environment — the loop fails
+        out = common.state_file("last-pi.out")
+        try:
+            out_now = open(out, encoding="utf-8", errors="replace").read()
+        except OSError:
+            out_now = ""
+        if not out_now.strip():
+            # no output and non-zero exit = the provider stream died under
+            # us (backend recreated / connection dropped) — ride the 124
+            # path: a dropped stream is retried, not fatal
+            return None, 124
+        # any other non-zero WITH output is a broken environment — the loop fails
         return None, r.returncode
     out = common.state_file("last-pi.out")
     text = open(out, encoding="utf-8", errors="replace").read()
@@ -161,9 +170,27 @@ def main() -> None:
         common.log(f"stage 11: fix loop — iteration {i} (log: review-iteration-{i}.md)")
         r = stages.pi_stage("implement", prompt_file=fix_prompt,
                             context=stages.project_context())
-        if r.returncode != 0:
-            common.log("::error::stage 11: pi fix run failed — stage fails")
-            sys.exit(1)
+        if r.returncode not in (0, 124):
+            out = common.state_file("pi-implement.md.out")
+            try:
+                out_now = open(out, encoding="utf-8", errors="replace").read()
+            except OSError:
+                out_now = ""
+            if out_now.strip():
+                common.log("::error::stage 11: pi fix run failed — stage fails")
+                sys.exit(1)
+            # died with no output = the provider stream dropped under it —
+            # ride the 124 path
+            r.returncode = 124
+        if r.returncode == 124:
+            # cut off (or the stream died) mid-flight: whatever it touched was
+            # never committed; the next iteration audits the tree and
+            # finishes the work
+            common.log(f"::warning::stage 11: fix run {i} died (exit 124) — "
+                       f"no partial work is committed; the next prompt audits "
+                       f"the tree and finishes it")
+            i += 1
+            continue
         if common.commit_all(f"stage 11: fix (iteration {i})"):
             common.push_branch(os.environ["AI_BRANCH"])
         i += 1
