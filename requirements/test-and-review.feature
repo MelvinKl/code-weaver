@@ -62,3 +62,11 @@ Feature: Test and review loop
     Then the iteration is consumed and the call is not treated as a broken environment
     And partial edits from the cut-off call are never committed
     And the next prompt tells the model to audit the partial work before continuing
+
+  Scenario: The suite runs on an interpreter without pytest
+    Given the runner's default python interpreter has no pytest module
+    And it has no venv or ensurepip to install one
+    When the test stage derives its driver
+    Then it takes the repo's make test target
+    And the suite's runner is a stdlib-only script in the tree
+    And the oracle is skipped-not-failed where the parser port is absent
