@@ -139,7 +139,7 @@ jobs:
                   exit 1 ;;
             *) echo "::error::GitHub API answered HTTP $HTTP (expected 200) — check the runner's internet egress"; cat /tmp/cw-preflight.json; exit 1 ;;
           esac
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
@@ -234,7 +234,7 @@ jobs:
       LLM_MODEL: ${{ inputs.llm-model }}
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GH_TOKEN }}
       - name: Stage 2 — verify (never install) pi, backend, model
@@ -308,7 +308,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.base-ref }}
@@ -416,7 +416,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
@@ -507,7 +507,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
@@ -598,7 +598,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
@@ -689,7 +689,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
@@ -773,7 +773,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
@@ -932,7 +932,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
@@ -1030,7 +1030,7 @@ jobs:
           echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
           echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
           echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref || steps.state.outputs.base-ref }}
