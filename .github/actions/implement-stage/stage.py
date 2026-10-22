@@ -6,11 +6,12 @@ keeps the arc42 markdown under the doc dir complete and the README current,
 and keeps the plan(s) current as a STATE TRACKER: each plan task it finishes
 is marked done in the plan file, so a re-run of the stage sees what is left.
 The guard's allow set is therefore code + tests + docs + README + the PLAN
-dir; it deliberately EXCLUDES only the requirements dir: if implementation
-edits a requirement, the guard reverts the file and the stage loops back to
-the plan stage (regenerating the plan against the unchanged requirement)
-before implementing again — “a requirement edited during implementation loops
-back to planning”."""
+dir, plus — in a repo whose arc42 set is its top-level planning markdown
+(no `docs/` dir) — `PLAN.md` itself; it deliberately EXCLUDES only the
+requirements dir: if implementation edits a requirement, the guard reverts
+the file and the stage loops back to the plan stage (regenerating the plan
+against the unchanged requirement) before implementing again —
+“a requirement edited during implementation loops back to planning”."""
 from __future__ import annotations
 
 import os
@@ -86,6 +87,16 @@ def main() -> None:
         allow.append(doc)
     if "README.md" not in allow:
         allow.append("README.md")
+    # A repo with no docs/ dir documents itself in its top-level planning
+    # markdown: PLAN.md is that repo's arc42 set AND its task-state tracker
+    # (finished work is marked done in it). Like README.md it is a top-level
+    # doc the implementation keeps current, so it joins the allow set —
+    # reverting those edits would burn the loop budget re-fighting the same
+    # doc update every iteration (that is exactly how the self-hosted run
+    # for issue #3 died: every iteration re-applied the PLAN.md update the
+    # plan named, and the guard reverted it).
+    if os.path.isfile("PLAN.md") and "PLAN.md" not in allow:
+        allow.append("PLAN.md")
     context = stages.project_context()
     if plan:
         # the plan dir's files (pi reads every @-argument as a file; a

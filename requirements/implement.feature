@@ -62,4 +62,5 @@ Feature: Implementation
     When the implementation guard computes its allow set
     Then the set includes the conventional dirs and the other top-level code dirs
     And the set also includes the plans dir — the plan is a live tracker of task state
+    And the top-level documentation (README.md, PLAN.md) is allowed
     And the requirements dir stays off-limits

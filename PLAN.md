@@ -60,8 +60,8 @@ no state passing needed).
 | 5 requirement-check | (in `extract`) | `guard-check <baseline-ref> --allow "<requirements-dir>"`; violation → revert off-limits files (`git checkout <ref> -- …` + `git clean`), **re-run stage 4**. | guard-rail: “clean stage passes”, “leaking stage is reverted and re-run”, “allowed set is per-stage” |
 | 6 plan | `plan` | `pi-run` with `pi-prompts/plan.md`; context = `@requirements/**` + the arc42 markdown files + `@docs/`. The prompt: markdown plans under `plan-dir` — **one or more files may be combined**, but the plans must **cover every requirement change**; grounded in the documented architecture. | plan: “plans cover every requirement change”, “describes how”, “grounded in the current architecture” |
 | 7 plan-check | (in `plan`) | `guard-check --allow "<plan-dir>"`; leak → revert + re-run stage 6. | plan: “the plan stage may only touch plans/” |
-| 8 implement | `implement` | `pi-run` with `pi-prompts/implement.md`; context = plans + requirements. The prompt: implement the plans (code); generate tests; **update the arc42 markdown files under `doc-dir` so the set stays complete**; keep `README.md` current; **mark finished plan tasks done** (the plan is a live state tracker — the implement-check allows `plan-dir` for it). | implement: “implemented as code”, “tests generated”, “arc42 updated and complete”, “README kept current”, “marks finished plan tasks as done” |
-| 9 implement-check | (in `implement`) | `guard-check --allow "<src> <tests> <doc-dir> <plan-dir> README.md"` — the allow set **excludes `requirements-dir`** (it includes `plan-dir`: the plan tracks task state); violation → revert + **loop back to stage 6** (not stage 8). | implement: “must not edit requirements”, “may mark plan tasks as done”, “allow set covers the repo's real layout”; guard-rail: “a requirement edited during implementation loops back to planning” |
+| 8 implement | `implement` | `pi-run` with `pi-prompts/implement.md`; context = plans + requirements. The prompt: implement the plans (code); generate tests; **update the arc42 markdown files under `doc-dir` so the set stays complete** (a repo without `doc-dir` keeps its top-level `PLAN.md` set complete); keep `README.md` current; **mark finished plan tasks done** (the plan is a live state tracker — the implement-check allows `plan-dir` and `PLAN.md` for it). | implement: “implemented as code”, “tests generated”, “arc42 updated and complete”, “README kept current”, “marks finished plan tasks as done” |
+| 9 implement-check | (in `implement`) | `guard-check --allow "<src> <tests> <doc-dir> <plan-dir> PLAN.md README.md"` — the allow set **excludes `requirements-dir`** (it includes `plan-dir` — the plan tracks task state — and, for a repo without a `doc-dir`, the top-level `PLAN.md` that plays the same role); violation → revert + **loop back to stage 6** (not stage 8). | implement: “must not edit requirements”, “may mark plan tasks as done”, “allow set covers the repo's real layout”; guard-rail: “a requirement edited during implementation loops back to planning” |
 | 10 test-and-review | `review` | Run the target's suite (`make test` — the target-repo contract wires `requirements/**.feature` into a Cucumber runner, so every Gherkin scenario is an executable acceptance test); then `pi-run` with `pi-prompts/review.md` → mark each scenario **fulfilled/unfulfilled** + produce the diff review. Each iteration's log → **workflow log / artifact only — never committed to the repo**. | test-and-review: “Gherkin runs as executable acceptance tests”, “each requirement checked for fulfilment”, “every iteration logged without touching the repo tree” |
 | 11 fix loop | (in `review`) | While scenarios are unfulfilled: pi fix → commit → re-run stage 10. The loop respects `max-loops` (**0 = no cap**) and the token budget. | test-and-review: “failed scenario is fixed and re-reviewed”, “fix loop bounded by MAX_LOOPS”, “loop respects the token budget”; safety: “every loop respects its cap” |
 | 12 pr-open | `pr` | Push `ai/<issue_number>`; `gh pr create` (head → `target-branch`); **the PR description is the final status report** — run status, source issue, every stage outcome (rendered from the stage-result state accumulated in workflow storage). | pr-and-gates: “a PR is opened against the target branch”, “PR body links back to the work” |
@@ -294,10 +294,13 @@ version is a stable ref”).
   meet it simply doesn't run the factory.
 - **Self-editing separation** — implement/gate allow sets exclude `requirements-dir`:
   intra-PR test fixes are fine, requirement edits are not (safety/guard-rail
-  scenarios). The implement allow set **includes `plan-dir`**: the plan is a
-  live state tracker (finished tasks are marked done in the plan file), so
-  those edits must survive the implement-check — reverting them would burn
-  the loop budget re-fighting the same state update every iteration.
+  scenarios). The implement allow set **includes `plan-dir` and `PLAN.md`**:
+  the plan is a live state tracker (finished tasks are marked done in the
+  plan file; in a repo without a `docs/` dir the top-level `PLAN.md` is the
+  arc42 set that tracks the same state), so those edits must survive the
+  implement-check — reverting them would burn the loop budget re-fighting
+  the same state update every iteration (the failed self-hosted run for
+  issue #3 died exactly this way).
 - **arc42 structure varies per target** — the extraction prompt tolerates the readable
   parts (safety scenario).
 - **Open item for the owner** — the “JS actions ship as npm packages” scenario is **not

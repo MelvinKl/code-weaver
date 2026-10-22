@@ -13,10 +13,13 @@ directory holds the Gherkin oracle they fulfil. Execute the plans.
    scenario under the requirements directory must be wired into it as an
    executable acceptance test).
 3. **Keep the arc42 documentation complete** — the arc42 docs are the set of
-   markdown files under the docs directory (their structure may vary).
-   Whatever you changed, reflected: the set must stay accurate and complete
-   afterwards — update the affected files, add a section where the change is
-   genuinely new.
+   markdown files under the docs directory (their structure may vary). A repo
+   with no docs directory documents itself in its top-level planning markdown
+   (`PLAN.md`) — that file is the arc42 set there: keep it complete too
+   (layout, stage map, traceability, tickets) and mark finished work done in
+   it. Whatever you changed, reflected: the set must stay accurate and
+   complete afterwards — update the affected files, add a section where the
+   change is genuinely new.
 4. **Keep the README current** — the overview, how-to-run and configuration
    sections must describe the code as it now is.
 5. **Keep the plans current as a state tracker** — the plan files are
