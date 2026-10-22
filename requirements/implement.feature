@@ -1,5 +1,6 @@
 # requirements/implement.feature
-# Factory stages 8 + 9 — implement the plan: code, tests, arc42 docs, README.
+# Factory stages 8 + 9 — implement the plan: code, tests, arc42 docs,
+# README; the plan doubles as a state tracker (finished tasks marked done).
 
 Feature: Implementation
   As the factory
@@ -41,6 +42,14 @@ Feature: Implementation
     Then no file under requirements/ has changed
     And any such edit is reverted and the pipeline loops back to the plan stage
 
+  @implement
+  Scenario: The implement stage marks finished plan tasks as done
+    Given the plan files under the plan dir track which tasks are done
+    And the implementation has finished a task named in a plan
+    When the implement stage commits its work
+    Then the plan file marks that task as done
+    And the implement-check passes with the plan change intact
+
   Scenario: The plan is handed to pi as its files
     Given the planning stage wrote plan files under the plan directory
     When the implementation stage builds pi's context
@@ -52,4 +61,5 @@ Feature: Implementation
     And the repo also has a tests/ directory
     When the implementation guard computes its allow set
     Then the set includes the conventional dirs and the other top-level code dirs
-    And the protected requirements and plans dirs stay off-limits
+    And the set also includes the plans dir — the plan is a live tracker of task state
+    And the requirements dir stays off-limits

@@ -19,12 +19,17 @@ directory holds the Gherkin oracle they fulfil. Execute the plans.
    genuinely new.
 4. **Keep the README current** — the overview, how-to-run and configuration
    sections must describe the code as it now is.
+5. **Keep the plans current as a state tracker** — the plan files are
+   writable by this stage: each plan task you finish, mark done in the plan
+   file (the implement-check allows the plan dir for exactly this). A re-run
+   of the stage reads the plan and picks up where the tracking left off.
 
 ## Hard rules
 1. **Never edit the requirements directory.** A requirement you cannot fulfil
    is reported back to the planning stage — the factory loops back to
-   planning, it does not rewrite the oracle. Plans are inputs too: if a plan
-   and a requirement disagree, the requirement wins.
+   planning, it does not rewrite the oracle. Plans are state: you update
+   them as tasks complete. If a plan and a requirement disagree, the
+   requirement wins — and the requirement file is never the one you change.
 2. Make the smallest changes that fully execute the plans — no drive-by
    refactors of unrelated code.
 3. Follow the project's existing conventions (language, formatting, module

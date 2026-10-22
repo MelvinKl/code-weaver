@@ -1,6 +1,6 @@
 # Code Weaver — Implementation Plan
 
-**Oracle:** the Gherkin requirements in `requirements/` — 12 files, 73 scenarios.
+**Oracle:** the Gherkin requirements in `requirements/` — 12 files, 102 scenarios.
 **Rule of this plan:** the requirements win. Where this plan and a scenario disagree, one of them changes — they must never drift, because the factory's own stage 10 later checks the implementation against every scenario.
 
 ---
@@ -60,8 +60,8 @@ no state passing needed).
 | 5 requirement-check | (in `extract`) | `guard-check <baseline-ref> --allow "<requirements-dir>"`; violation → revert off-limits files (`git checkout <ref> -- …` + `git clean`), **re-run stage 4**. | guard-rail: “clean stage passes”, “leaking stage is reverted and re-run”, “allowed set is per-stage” |
 | 6 plan | `plan` | `pi-run` with `pi-prompts/plan.md`; context = `@requirements/**` + the arc42 markdown files + `@docs/`. The prompt: markdown plans under `plan-dir` — **one or more files may be combined**, but the plans must **cover every requirement change**; grounded in the documented architecture. | plan: “plans cover every requirement change”, “describes how”, “grounded in the current architecture” |
 | 7 plan-check | (in `plan`) | `guard-check --allow "<plan-dir>"`; leak → revert + re-run stage 6. | plan: “the plan stage may only touch plans/” |
-| 8 implement | `implement` | `pi-run` with `pi-prompts/implement.md`; context = plans + requirements. The prompt: implement the plans (code); generate tests; **update the arc42 markdown files under `doc-dir` so the set stays complete**; keep `README.md` current. | implement: “implemented as code”, “tests generated”, “arc42 updated and complete”, “README kept current” |
-| 9 implement-check | (in `implement`) | `guard-check --allow "<src> <tests> <doc-dir> README.md"` — the allow set **excludes `requirements-dir`**; violation → revert + **loop back to stage 6** (not stage 8). | implement: “must not edit requirements”; guard-rail: “a requirement edited during implementation loops back to planning” |
+| 8 implement | `implement` | `pi-run` with `pi-prompts/implement.md`; context = plans + requirements. The prompt: implement the plans (code); generate tests; **update the arc42 markdown files under `doc-dir` so the set stays complete**; keep `README.md` current; **mark finished plan tasks done** (the plan is a live state tracker — the implement-check allows `plan-dir` for it). | implement: “implemented as code”, “tests generated”, “arc42 updated and complete”, “README kept current”, “marks finished plan tasks as done” |
+| 9 implement-check | (in `implement`) | `guard-check --allow "<src> <tests> <doc-dir> <plan-dir> README.md"` — the allow set **excludes `requirements-dir`** (it includes `plan-dir`: the plan tracks task state); violation → revert + **loop back to stage 6** (not stage 8). | implement: “must not edit requirements”, “may mark plan tasks as done”, “allow set covers the repo's real layout”; guard-rail: “a requirement edited during implementation loops back to planning” |
 | 10 test-and-review | `review` | Run the target's suite (`make test` — the target-repo contract wires `requirements/**.feature` into a Cucumber runner, so every Gherkin scenario is an executable acceptance test); then `pi-run` with `pi-prompts/review.md` → mark each scenario **fulfilled/unfulfilled** + produce the diff review. Each iteration's log → **workflow log / artifact only — never committed to the repo**. | test-and-review: “Gherkin runs as executable acceptance tests”, “each requirement checked for fulfilment”, “every iteration logged without touching the repo tree” |
 | 11 fix loop | (in `review`) | While scenarios are unfulfilled: pi fix → commit → re-run stage 10. The loop respects `max-loops` (**0 = no cap**) and the token budget. | test-and-review: “failed scenario is fixed and re-reviewed”, “fix loop bounded by MAX_LOOPS”, “loop respects the token budget”; safety: “every loop respects its cap” |
 | 12 pr-open | `pr` | Push `ai/<issue_number>`; `gh pr create` (head → `target-branch`); **the PR description is the final status report** — run status, source issue, every stage outcome (rendered from the stage-result state accumulated in workflow storage). | pr-and-gates: “a PR is opened against the target branch”, “PR body links back to the work” |
@@ -173,7 +173,7 @@ bump”). `release.yml` tags semver `vX.Y.Z` and publishes a GitHub release; tag
 immutable, so **workflows pinned to an older ref keep working** (“every published
 version is a stable ref”).
 
-## 7. Traceability — every one of the 73 scenarios
+## 7. Traceability — every one of the 102 scenarios
 
 | Feature | Scenario | Implemented by | Ticket |
 |---|---|---|---|
@@ -212,6 +212,9 @@ version is a stable ref”).
 | | the arc42 documentation is updated and complete | prompt updates the arc42 markdown under `doc-dir` | CW-7 |
 | | the README is kept current | prompt | CW-7 |
 | | implementation must not edit requirements | implement-check exclude set | CW-5, CW-7 |
+| | the implement stage may mark plan tasks as done | implement-check allow set includes `plan-dir` (the plan tracks state) | CW-5, CW-7 |
+| | the plan is handed to pi as its files | `dir_files()` expands the plan dir to file @-arguments (a dir argument crashes pi) | CW-3, CW-7 |
+| | the allow set covers the repo's real layout | `source_dirs()` + explicit allow additions | CW-5, CW-7 |
 | **test-and-review** | Gherkin scenarios run as executable acceptance tests | target's `make test` contract (Cucumber runner over `requirements/`) | CW-8 |
 | | each requirement is checked for fulfilment | `review.md` prompt over the results | CW-3, CW-8 |
 | | a failed scenario is fixed and re-reviewed | fix loop (§3, stage 11) | CW-8 |
@@ -255,14 +258,14 @@ version is a stable ref”).
 
 | Ticket | Scope | Acceptance = scenarios |
 |---|---|---|
-| **CW-0** | *epic*: end-to-end reusable workflow + actions, all stages wired, first release tagged | all 73 |
+| **CW-0** | *epic*: end-to-end reusable workflow + actions, all stages wired, first release tagged | all 102 |
 | CW-1 | `factory.yml` skeleton: trigger job (label gate, dispatch, idempotency lock), `with:`→env mapping, permissions, job graph | trigger ×6; configuration: inputs flow, label, target branch, directories |
 | CW-2 | `setup-pi` action: verify-never-install flow (presence; backend pre-requisite; model in configured set; smoke check; explicit failures) | setup-pi ×6 (of 8 — headless/context are CW-3); configuration: backend pre-requisite, model adjustable; safety: backend needs no secret |
-| CW-3 | `pi-run` action + the four prompt templates (`requirements.md`, `plan.md`, `implement.md`, `review.md`) | setup-pi: headless, context; requirement-extraction: derive/Gherkin/no-invention/idempotent; plan: cover/describe/grounded; implement: all 4 generation scenarios; test-and-review: “each requirement checked”; safety: arc42 structure variance |
+| CW-3 | `pi-run` action + the four prompt templates (`requirements.md`, `plan.md`, `implement.md`, `review.md`) | setup-pi: headless, context; requirement-extraction: derive/Gherkin/no-invention/idempotent; plan: cover/describe/grounded; implement: all 5 generation scenarios (incl. plan state tracking); test-and-review: “each requirement checked”; safety: arc42 structure variance |
 | CW-4 | `baseline` action: branch `ai/<issue_number>`, baseline ref, issue-diff artifact | requirement-extraction: baseline |
 | CW-5 | `guard-check` idiom + the three check stages with their re-run loops | guard-rail ×6; implement: “must not edit requirements”; safety: “broken stage cannot corrupt” |
 | CW-6 | plan stage + plan-check (combined plans covering every change) | plan ×4 |
-| CW-7 | implement stage + implement-check (code, tests, arc42 markdown set complete, README) | implement ×5 |
+| CW-7 | implement stage + implement-check (code, tests, arc42 markdown set complete, README, plan state tracking) | implement ×8 |
 | CW-8 | test-and-review: Gherkin-oracle wiring (target `make test` contract), review, fix loop, per-iteration logging outside the repo tree | test-and-review ×6 |
 | CW-9 | `pr-open` + `pr-gates` + gate-fix loop (PR `ai/<n>` → `target-branch`; PR body = report; all-gates-wait; no merge) | pr-and-gates ×6 |
 | CW-10 | `report` stage (PR body = final status; issue comment; arc42 AI-activity section; failure path, no repo files) | reporting ×4 |
@@ -290,7 +293,11 @@ version is a stable ref”).
   reachable from the runner. Stage 2 fails explicitly; a target whose runner can't
   meet it simply doesn't run the factory.
 - **Self-editing separation** — implement/gate allow sets exclude `requirements-dir`:
-  intra-PR test fixes are fine, requirement edits are not (safety/guard-rail scenarios).
+  intra-PR test fixes are fine, requirement edits are not (safety/guard-rail
+  scenarios). The implement allow set **includes `plan-dir`**: the plan is a
+  live state tracker (finished tasks are marked done in the plan file), so
+  those edits must survive the implement-check — reverting them would burn
+  the loop budget re-fighting the same state update every iteration.
 - **arc42 structure varies per target** — the extraction prompt tolerates the readable
   parts (safety scenario).
 - **Open item for the owner** — the “JS actions ship as npm packages” scenario is **not

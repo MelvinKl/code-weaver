@@ -25,8 +25,9 @@ this repo's reusable workflow takes over:
 7. **plan check** — same guard idiom;
 8. **implement** — code, generated tests, the arc42 docs kept complete, README
    current;
-9. **implement check** — same guard; a requirement edited here **loops back to
-   the plan stage**;
+9. **implement check** — same guard (its allow set also covers the plan dir
+   — the plan is a live state tracker: finished tasks are marked done); a
+   requirement edited here **loops back to the plan stage**;
 10. **test-and-review** — the target's test suite (`make test`) runs every
     Gherkin scenario as an acceptance test; pi marks each scenario
     fulfilled/unfulfilled and reviews the diff;
@@ -129,14 +130,14 @@ an explicit message if any of that is missing.
     stages.py          the shared generation/review loop machinery
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
 pi-prompts/            the four pi prompt templates
-requirements/          the Gherkin oracle for THIS repo (73 scenarios)
+requirements/          the Gherkin oracle for THIS repo (102 scenarios)
 tests/                 unit tests (the validator)
 PLAN.md                the implementation plan this code implements
 ```
 
 ## Requirements
 
-`requirements/` holds **73 Gherkin scenarios** — the oracle this
+`requirements/` holds **102 Gherkin scenarios** — the oracle this
 implementation satisfies. House CI validates them with Cucumber's official
 parser on every push/PR; in a target repo the test-and-review stage runs them
 as executable acceptance tests.
