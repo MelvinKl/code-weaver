@@ -50,11 +50,11 @@ Feature: Only-X-changed guard-rail
     Then the pipeline stops with a failure report listing the violations
 
   @guard
-  Scenario: All three checks share one shell idiom
-    Given the checks are implemented as a single reusable idiom
-    Then each check collects changed files with git status --porcelain
-    And compares them against its allowed set with comm
-    And reverts the violations with git checkout -- plus git clean -fdq
+  Scenario: All three checks share one implementation
+    Given the checks are implemented as one shared guard (one script, three call sites)
+    Then each check collects the files changed against its own baseline
+    And compares them against its per-stage allowed set
+    And reverts exactly the off-limits files (tracked restored, added removed)
 
   Scenario: A stage's guard judges only that stage's work
     Given a stage started after earlier stages had committed their outputs

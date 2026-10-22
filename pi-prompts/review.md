@@ -22,6 +22,11 @@ diff for anything the tests cannot see.
    END-REVIEW-VERDICT
    ```
 
+   The parser reads each line as `SCENARIO <file>::<name>: <verdict>` — the
+   colon between the name and the verdict is part of the machine format. Do
+   not replace it with a dash or any other punctuation, and do not break a
+   scenario across two lines.
+
 2. A short **diff review** beneath the block: risks the tests do not cover
    (security, error paths, the documented architecture per the arc42 docs,
    the "only X changed" invariants), and anything the fix must change.

@@ -14,8 +14,9 @@ Feature: Test and review loop
 
   @review
   Scenario: Gherkin scenarios run as executable acceptance tests
-    When the test-and-review stage runs make test
-    Then every Scenario under requirements/ is executed as an acceptance test
+    When the test-and-review stage runs the target's suite and pi reviews the results
+    Then every Scenario under requirements/ is checked against the suite output and the committed code
+    And each is marked fulfilled or unfulfilled as its acceptance verdict
 
   @review
   Scenario: Each requirement is checked for fulfilment

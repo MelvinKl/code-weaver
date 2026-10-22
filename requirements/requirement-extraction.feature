@@ -49,9 +49,10 @@ Feature: Requirement extraction
 
   @extraction
   Scenario: Re-running extraction on unchanged input is idempotent
-    Given the extraction stage already wrote the requirements for issue 7
-    When the extraction stage runs again for issue 7
-    Then the requirement files are unchanged
+    Given the extraction stage already wrote the requirements for an issue
+    When the extraction stage runs again for the same issue
+    Then it updates the same requirement file in place (named after the issue)
+    And no duplicate requirement files fork
 
   Scenario: The context handed to pi is concrete files, never directories
     # pi's @-argument handling reads each argument as a file (it even

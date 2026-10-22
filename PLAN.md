@@ -71,11 +71,16 @@ no state passing needed).
 
 ## 4. Key mechanisms
 
-### 4.1 The guard idiom — one script, three stages
-*guard-rail: “all three checks share one shell idiom”*
+### 4.1 The guard idiom — one shared implementation, three call sites
+*guard-rail: “all three checks share one implementation”*
+
+One script, three call sites (requirement-check, plan-check, implement-check)
+with different allowed path sets. The committed form is a single Python
+script (`.github/scripts/guard-check.py`, the shared `common.guard`); its
+idiom, sketched:
 
 ```bash
-# guard-check.sh <baseline-ref> <allowed-path>…
+# guard-check.py <baseline-ref> <allowed-path>…
 changed=$( { git diff --name-only "$BASELINE" -- .; git ls-files --others --exclude-standard; } | sort -u )
 violations=()
 for f in $changed; do
@@ -86,7 +91,7 @@ for f in $changed; do
 done
 [ "${#violations[@]}" -eq 0 ] && { echo "OK: only $* changed"; exit 0; }
 git checkout "$BASELINE" -- "${violations[@]}"        # revert exactly the files that leaked
-git clean -fdq -- $(printf '%s\n' "${violations[@]}" | xargs -r dirname | sort -u)
+# (a file the stage added is removed instead: git rm / clean)
 echo "REVERT: ${violations[*]}"
 exit 1                                                 # the workflow re-runs the generation stage
 ```
@@ -202,7 +207,7 @@ version is a stable ref”).
 | | the allowed file set is per-stage | per-stage allow arguments | CW-5 |
 | | a requirement edited during implementation loops back to planning | implement-check excludes `requirements-dir` → back to stage 6 | CW-5 |
 | | guard re-runs are capped | loop counter + `max-loops` (0 = no cap) | CW-5, CW-11 |
-| | all three checks share one shell idiom | one script, three call sites (§4.1) | CW-5 |
+| | all three checks share one implementation | one shared guard, three call sites (§4.1) | CW-5 |
 | **plan** | the plans cover every requirement change | `plan.md` prompt (coverage of all changes) | CW-3, CW-6 |
 | | the plan describes how the requirements are fulfilled | prompt output contract (slices + file-level changes) | CW-3 |
 | | the plan is grounded in the current architecture | arc42-markdown + `docs/` context | CW-3 |
@@ -215,12 +220,15 @@ version is a stable ref”).
 | | the implement stage may mark plan tasks as done | implement-check allow set includes `plan-dir` (the plan tracks state) | CW-5, CW-7 |
 | | the plan is handed to pi as its files | `dir_files()` expands the plan dir to file @-arguments (a dir argument crashes pi) | CW-3, CW-7 |
 | | the allow set covers the repo's real layout | `source_dirs()` + explicit allow additions | CW-5, CW-7 |
-| **test-and-review** | Gherkin scenarios run as executable acceptance tests | target's `make test` contract (Cucumber runner over `requirements/`) | CW-8 |
+| **test-and-review** | Gherkin scenarios run as executable acceptance tests | the suite's output + the committed code are the oracle's evidence; pi marks each scenario (the review oracle) | CW-3, CW-8 |
 | | each requirement is checked for fulfilment | `review.md` prompt over the results | CW-3, CW-8 |
 | | a failed scenario is fixed and re-reviewed | fix loop (§3, stage 11) | CW-8 |
 | | the fix loop is bounded by MAX_LOOPS | loop counter (non-zero cap) | CW-8, CW-11 |
 | | the loop respects the token budget | usage accumulator | CW-11 |
 | | every iteration is logged without touching the repo tree | workflow log + artifact only | CW-8, CW-12 |
+| | the requirements reach the review's pi as feature files | the review context expands `requirements/` to its files | CW-3, CW-8 |
+| | a review or fix call cut off at its cap is retried, not fatal | the 124 path: the call retries; the next prompt carries an audit directive for the partial work | CW-8, CW-11 |
+| | the suite runs on an interpreter without pytest | stdlib runner (`tests/run.py` via `make test`) | CW-8, CW-15 |
 | **pr-and-gates** | a pull request is opened against the target branch | `pr-open` action (`gh pr create`, head `ai/<issue_number>`) | CW-9 |
 | | the PR body links back to the work | body template (source issue + status report) | CW-9 |
 | | all PR-triggered workflows must be green | `pr-gates` poller | CW-9 |

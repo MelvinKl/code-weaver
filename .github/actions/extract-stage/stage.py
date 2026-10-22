@@ -29,44 +29,114 @@ def existing_context() -> list[str]:
     return stages.project_context()
 
 
+def _revert(f: str, baseline: str) -> None:
+    """Revert exactly one file, the guard's way: tracked at the baseline →
+    restore its baseline content; a file the stage added → remove it from
+    the tree (committed or not)."""
+    p = os.path.join(common.repo(), f)
+    if subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
+                      cwd=common.repo(), capture_output=True).returncode == 0:
+        subprocess.run(["git", "checkout", baseline, "--", f], cwd=common.repo(), check=False)
+    elif subprocess.run(["git", "ls-files", "--", f], cwd=common.repo(),
+                        capture_output=True).stdout.strip():
+        subprocess.run(["git", "rm", "-f", "--", f], cwd=common.repo(), check=False)
+    elif os.path.exists(p):
+        os.remove(p)
+
+
 def post_ok() -> bool:
     """The Gherkin-oracle half of stage 5: every generated .feature must
-    parse; an invalid file is reverted and the loop continues."""
+    parse with the official parser, and the delta's shape is pinned — at most
+    ONE new file, named after the issue; existing requirement files stay
+    byte-identical (scenario: \"Extraction writes one new file named after
+    the issue\"). A violation is reverted and its verdict persisted, so the
+    next iteration's prompt carries it and the model repairs against the
+    exact complaint instead of regenerating blind."""
     baseline = stages.baseline_sha()
     req = common.env_dir("REQUIREMENTS_DIR").rstrip("/")
     validator = os.path.join(stages.repo_root(), ".github", "scripts", "gherkin-validate.py")
-    files = [f for f in common.changed_files(baseline) if f.endswith(".feature") and stages.under(f, req)]
-    if not files:
-        return True  # nothing generated — valid vacuously (empty-body case)
-    r = subprocess.run([sys.executable, validator, *files], capture_output=True, text=True)
     verdict = common.state_file("extract-validation.txt")
-    if r.returncode == 0:
+
+    complaints: list[str] = []
+    revert: list[str] = []
+    changed = common.changed_files(baseline)
+
+    # Delta shape: the guard keeps changes inside the requirements dir; the
+    # stage pins what is allowed inside it.
+    num = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
+    new: list[str] = []
+    for f in changed:
+        if not stages.under(f, req):
+            continue  # the guard's territory
+        existed = subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
+                                 cwd=common.repo(), capture_output=True).returncode == 0
+        if existed:
+            complaints.append(f"an existing requirement file must not change: {f}")
+            revert.append(f)
+        else:
+            new.append(f)
+    if len(new) > 1:
+        complaints.append(f"at most one new file is allowed — found {len(new)}: "
+                          + ", ".join(new))
+        revert += new
+    elif len(new) == 1 and num and str(num) not in os.path.basename(new[0]):
+        complaints.append(f"the one new file must be named after the issue — expected "
+                          f"a name containing #{num}, got '{os.path.basename(new[0])}'")
+        revert.append(new[0])
+
+    # Parse oracle: every generated .feature must parse with the official
+    # Cucumber Gherkin parser (a requirement must be executable).
+    files = [f for f in changed if f.endswith(".feature") and stages.under(f, req)]
+    if files:
+        r = subprocess.run([sys.executable, validator, *files],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            for line in r.stderr.splitlines():
+                if line.startswith("FAIL "):
+                    name = line[len("FAIL "):].split(":", 1)[0].strip()
+                    complaints.append(f"the official Gherkin parser rejected {name}")
+                    if name not in revert:
+                        revert.append(name)
+            parser_verdict = r.stderr.strip()
+        else:
+            parser_verdict = ""
+    else:
+        parser_verdict = ""
+
+    if not complaints:
         with open(verdict, "w", encoding="utf-8") as f:
             f.write("PASS")
-        common.log(f"stage 5: {len(files)} feature file(s) parse with the official Gherkin parser")
+        common.log(f"stage 5: {len(files)} feature file(s) parse with the official "
+                   f"Gherkin parser; delta shape clean ({len(new)} new file(s))")
         return True
-    # The parser's verdict is persisted: the next loop iteration's prompt
-    # carries it, so the model repairs its own Gherkin against the exact
-    # complaint instead of regenerating blind.
+
     with open(verdict, "w", encoding="utf-8") as f:
-        f.write(r.stderr.strip() or "the official Gherkin parser rejected the file")
-    bad: list[str] = []
-    for line in r.stderr.splitlines():
-        if line.startswith("FAIL "):
-            bad.append(line[len("FAIL "):].split(":", 1)[0].strip())
-    bad = list(dict.fromkeys(bad)) or files
-    common.log(f"::error::stage 5: invalid Gherkin → reverted: {' '.join(bad)}")
-    subprocess.run(["git", "checkout", baseline, "--"] + [b for b in bad if os.path.exists(b)],
-                   cwd=common.repo(), check=False)
-    subprocess.run(["git", "clean", "-fdq"] + [os.path.dirname(b) or "." for b in bad],
-                   cwd=common.repo())
-    common.commit_all("requirements: invalid Gherkin reverted (re-extracting)")
+        f.write("\n".join(complaints))
+        if parser_verdict:
+            f.write("\n" + parser_verdict)
+    revert = list(dict.fromkeys(revert))
+    common.log(f"::error::stage 5: {'; '.join(complaints)} → reverted: "
+               f"{' '.join(revert) or '(none)'}")
+    for f in revert:
+        _revert(f, baseline)
+    common.commit_all("requirements: invalid extraction reverted (re-extracting)")
     return False
 
 
 def main() -> None:
     req = common.env_dir("REQUIREMENTS_DIR")
     body = common.state_file("issue-body.md")
+    # A missing body and an empty body are the same case: no change is
+    # described, so there are no delta requirements. The stage writes nothing
+    # and stops cleanly — handing pi a blank issue would invite it to invent
+    # requirements out of silence.
+    if not os.path.exists(body) or not open(body, encoding="utf-8").read().strip():
+        common.log("stage 4: issue body is empty — no delta requirements; the "
+                   "stage writes nothing and stops cleanly")
+        with open(common.state_file("stage-summary.txt"), "a", encoding="utf-8") as f:
+            f.write("stage 4-5 requirement extraction: no delta requirements "
+                    "(empty issue body)\n")
+        return
 
     def build_prompt():
         # The model names its output file after the issue — the number and

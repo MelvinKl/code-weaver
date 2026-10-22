@@ -24,9 +24,10 @@ Feature: Reuse by ref, never copy-paste
 
   @reuse
   Scenario: Composite actions are referenced by owner, repo and path
-    Given a composite action in the code-weaver repo
-    When a step references it
-    Then it uses MelvinKl/code-weaver/.github/actions/NAME at a version tag
+    Given the target consumes the factory as a reusable workflow
+    When the consumer writes its uses: line
+    Then it names the factory by owner, repo, path and ref
+    And the workflow's own steps reference the factory's actions by path — pinned to that same ref
 
   @reuse
   Scenario: An upgrade is a ref bump

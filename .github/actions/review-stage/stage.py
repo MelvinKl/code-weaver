@@ -29,7 +29,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(action_dir)), "s
 import common
 import stages
 
-VERDICT_RE = re.compile(r"^SCENARIO\s+(\S+)::(.+?):\s*(FULFILLED|UNFULFILLED)\s*(—|$)")
+# The prompt prescribes `SCENARIO <file>::<name>: <verdict>` — the models
+# have nonetheless been observed emitting `name — <verdict>` (an em dash
+# where the format wants a colon) and qualifying the verdict
+# (`FULFILLED (orchestration) —`). The parser accepts both separators and
+# an optional parenthetical qualifier; it verifies the verdict, it does
+# not re-litigate the format.
+VERDICT_RE = re.compile(
+    r"^SCENARIO\s+(\S+)::(.+?)\s*[:—]\s*(FULFILLED|UNFULFILLED)"
+    r"(?:\s*\([^)]*\))?\s*(—|$)")
+
+# common.pi_invoke writes each call's stdout under the state dir as
+# `pi-<template>.out` — this is the review call's output file. (The old
+# `last-pi.out` name pre-dated that contract: reading it was a
+# FileNotFoundError that killed the stage on a perfectly good pi run.)
+REVIEW_OUT = "pi-review.md.out"
 
 
 def test_driver() -> list[str]:
@@ -87,7 +101,7 @@ def review(i: int, test_out: str):
     context = ["@" + test_out, *stages.dir_files(req)] if req else ["@" + test_out]
     r = stages.pi_stage("review", prompt_file=prompt, context=context)
     if r.returncode != 0:
-        out = common.state_file("last-pi.out")
+        out = common.state_file(REVIEW_OUT)
         try:
             out_now = open(out, encoding="utf-8", errors="replace").read()
         except OSError:
@@ -99,8 +113,14 @@ def review(i: int, test_out: str):
             return None, 124
         # any other non-zero WITH output is a broken environment — the loop fails
         return None, r.returncode
-    out = common.state_file("last-pi.out")
-    text = open(out, encoding="utf-8", errors="replace").read()
+    out = common.state_file(REVIEW_OUT)
+    try:
+        text = open(out, encoding="utf-8", errors="replace").read()
+    except OSError:
+        common.log("::error::stage 10: the review call exited clean but its "
+                   f"output file is missing or unreadable ({out}) — the "
+                   "oracle cannot be assumed green")
+        return None, 1
     verdicts = parse_verdicts(text)
     if not verdicts:
         # the oracle must be marked explicitly — an unparseable review is a
@@ -119,6 +139,7 @@ def tail(path: str, n: int = 200) -> str:
 def main() -> None:
     i = 0
     prev_cut = False
+    pending_audit = False
     while True:
         common.caps_ok(i)
         rc, out = run_tests(i)
@@ -161,6 +182,17 @@ def main() -> None:
 
         # iteration log — state dir only (→ artifact); the repo tree is never
         # used as scratch space
+        if pending_audit:
+            # The previous fix call died mid-edit: whatever it touched is
+            # uncommitted working-tree state. The next prompt carries the
+            # audit directive (scenario: “a review or fix call cut off at its
+            # cap is retried, not fatal” — “the next prompt tells the model
+            # to audit the partial work before continuing”).
+            directive = ("The previous fix call was cut off mid-edit. First audit "
+                         "the working tree for its partial changes — finish what is "
+                         "sound, roll back what is not — then act on the findings:\n\n"
+                         + directive)
+            pending_audit = False
         with open(common.state_file(f"review-iteration-{i}.md"), "w") as f:
             f.write(f"# iteration {i}\n\n## test (exit {rc})\n```\n{tail(out)}\n```\n\n"
                     f"## fix directive\n```\n{directive}\n```\n")
@@ -189,8 +221,10 @@ def main() -> None:
             common.log(f"::warning::stage 11: fix run {i} died (exit 124) — "
                        f"no partial work is committed; the next prompt audits "
                        f"the tree and finishes it")
+            pending_audit = True
             i += 1
             continue
+        pending_audit = False
         if common.commit_all(f"stage 11: fix (iteration {i})"):
             common.push_branch(os.environ["AI_BRANCH"])
         i += 1

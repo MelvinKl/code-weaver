@@ -42,9 +42,10 @@ Feature: Configuration surface
 
   @config
   Scenario: The action ref is configurable
-    Given the default AI_REPO_REF is MelvinKl/code-weaver at the current release tag
-    When a target pins a different ref
+    Given the factory is consumed through the target repo's own workflow
+    When the target edits the ref in its uses: line
     Then the factory runs from that ref
+    And the target's own workflow file is the only file that changes
 
   @config
   Scenario: The loop caps are configurable

@@ -16,10 +16,12 @@ this repo's reusable workflow takes over:
    baseline;
 4. **requirement-extraction** — pi derives the **delta requirements** from the
    project itself (the arc42 markdown + the issue + the change-set diff) and
-   writes them as **Gherkin** into `requirements/` — validated with Cucumber's
-   official parser;
+   writes them as **Gherkin** into `requirements/` — one new file named after
+   the issue (existing files untouched), an empty body writes nothing, and the
+   result is validated with Cucumber's official parser;
 5. **requirement check** — the shared guard: only the requirements dir may
-   have changed;
+   have changed (and the delta's shape is pinned: at most one new file named
+   after the issue);
 6. **plan** — markdown plan(s) under `plans/`, covering **every** requirement
    change, grounded in the arc42 documentation;
 7. **plan check** — same guard idiom;
