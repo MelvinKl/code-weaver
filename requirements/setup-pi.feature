@@ -20,14 +20,14 @@ Feature: pi pre-installed and configured in the runner environment
   Scenario: The LLM backend configuration is a pre-requisite of the environment
     Given the pi configuration defining the LLM backend is a pre-requisite of the runner environment
     When the setup stage checks the backend configuration
-    Then pi's LLM backend (e.g. keyless llama-swap at "http://192.168.5.28:8080/v1") is already configured
+    Then pi's LLM backend (e.g. keyless llama-swap at "http://192.168.5.202:8080/v1") is already configured
     And the factory performs no configuration step
     And no target repo can change which backend the factory uses
 
   @setup
   Scenario: Which configured model is used is adjustable
     Given the runner environment has pi pre-configured with one or more models
-    When the factory runs with LLM_MODEL "Qwen3.8"
+    When the factory runs with LLM_MODEL "Ornith-1.5-35B-A3B"
     Then every pi invocation in the pipeline uses that configured model
     And the backend configuration itself is untouched
 
@@ -78,10 +78,11 @@ Feature: pi pre-installed and configured in the runner environment
     Then the declaration is a built-in shell or a format string naming the interpreter and the script placeholder
     And the step's program actually executes and the stage sees its result
 
-  Scenario: A repo-local model config shadows the runner's user config
-    Given the repo ships its own .pi agent model configuration
+  Scenario: pi resolves its model configuration from the user agent directory, not the repo
+    Given pi resolves models.json from the user agent directory ("~/.pi/agent/", or PI_CODING_AGENT_DIR)
+    And the repo ships a .pi agent model configuration as documentation of the factory's model configuration
     And the runner environment carries its own user-level configuration
     When a factory stage invokes pi inside the checked-out workspace
-    Then the repo-local configuration is what the invocation resolves
-    And the runner's user-level configuration is never modified
-    And a factory can pin its model backend without touching the runner
+    Then the runner's user-level configuration is what the invocation resolves
+    And the selected model must be listed there for the setup stage's smoke check to pass
+    And the repo-local file is the reference the setup stage's backend probe reads first, never a runtime override

@@ -54,7 +54,7 @@ on:
       llm-model:
         description: Which configured model pi uses (the backend is a fixed pre-requisite of the runner's pi configuration)
         type: string
-        default: Qwen3.8
+        default: Ornith-1.5-35B-A3B
       max-loops:
         description: Fix/guard loop cap per stage — 0 means no cap
         type: string

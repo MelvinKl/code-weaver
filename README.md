@@ -66,7 +66,7 @@ jobs:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
       target-branch: main
-      llm-model: Qwen3.8        # which configured model — the one adjustable LLM setting
+      llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
       runner: <label of a runner whose environment has pi pre-installed & configured>
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
@@ -93,7 +93,7 @@ GitHub release; targets pinned to an older ref keep working.
 | `requirements-dir` | `requirements` | where Gherkin requirements live |
 | `plan-dir` | `plans` | where plans live |
 | `doc-dir` | `docs` | where the arc42 markdown files live |
-| `llm-model` | `Qwen3.8` | which **configured** model pi uses |
+| `llm-model` | `Ornith-1.5-35B-A3B` | which **configured** model pi uses |
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
 | `max-tokens` | `500000` | token budget across the run — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label (its environment must carry the pi pre-configuration) |

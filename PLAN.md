@@ -137,7 +137,7 @@ comments on the issue. Iteration logs and the resolved configuration live in the
 | `requirements-dir` | `requirements/` | configuration: “artefact directories are configurable” (also drives the guard allow sets) |
 | `plan-dir` | `plans/` | — |
 | `doc-dir` | `docs/` | — |
-| `llm-model` | `Qwen3.8` | configuration: “which configured model is used is adjustable” — must already be configured in the environment's pi config; the backend itself is a fixed pre-requisite (“LLM backend is a pre-requisite of the environment”) |
+| `llm-model` | `Ornith-1.5-35B-A3B` | configuration: “which configured model is used is adjustable” — must already be configured in the environment's pi config; the backend itself is a fixed pre-requisite (“LLM backend is a pre-requisite of the environment”) |
 | `max-loops` | `5` | “loop caps are configurable” |
 | `max-tokens` | `500000` | “a loop cap of 0 means no cap” |
 | secret `GH_TOKEN` | — | safety: “GH_TOKEN is repo-scoped and never committed”; configuration: “secrets are never plain inputs” (passes via the reusable workflow's `secrets:` block only) |
@@ -164,7 +164,7 @@ jobs:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
       target-branch: main
-      llm-model: Qwen3.8            # which configured model to use
+      llm-model: Ornith-1.5-35B-A3B  # which configured model to use
     secrets: { GH_TOKEN: ${{ secrets.GH_TOKEN }} }
 ```
 

@@ -35,7 +35,7 @@ Feature: Configuration surface
   @config
   Scenario: Which configured model is used is adjustable
     Given the runner environment has pi pre-configured with several models
-    And the default LLM_MODEL is "Qwen3.8"
+    And the default LLM_MODEL is "Ornith-1.5-35B-A3B"
     When a target sets LLM_MODEL to another already-configured model
     Then every pi invocation in the pipeline uses that model
     And the backend configuration itself is unchanged

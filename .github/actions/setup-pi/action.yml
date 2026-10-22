@@ -10,7 +10,7 @@ inputs:
   llm-model:
     description: Which configured model the run uses (must be in the configured set)
     required: false
-    default: Qwen3.8
+    default: Ornith-1.5-35B-A3B
 runs:
   using: composite
   steps:
@@ -111,11 +111,16 @@ runs:
         if model not in ids:
             fail(f"model '{model}' is not in the configured model set: {ids}")
 
-        # 6. headless smoke check on the selected model
+        # 6. headless smoke check on the selected model. The window must absorb a
+        # COLD backend load: the host's llama-swap unloads the Ornith entry after
+        # an idle ttl, so a run started >1 h after the last use finds it unloaded
+        # and the swap loads it on the first request (2-3 min cold) before the
+        # first answer. 120 s (the old window) sat inside that load and failed
+        # the stage; 420 s leaves 2-4x margin while staying inside the job cap.
         import subprocess
         r = subprocess.run(["pi", "--print", "--model", model,
                             "Reply with exactly: OK"],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=420)
         if r.returncode != 0 or not r.stdout.strip():
             fail(f"pi smoke check failed for model '{model}' (exit {r.returncode}) — "
                  f"check the runner's pi configuration: {r.stderr.strip()[:200]}")

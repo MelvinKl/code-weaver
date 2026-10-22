@@ -1,9 +1,9 @@
 {
   "providers": {
     "llama-swap": {
-      "baseUrl": "http://192.168.5.202:5801/v1",
+      "baseUrl": "http://192.168.5.202:8080/v1",
       "api": "openai-completions",
-      "apiKey": "factory-direct-vllm",
+      "apiKey": "llama-swap",
       "compat": {
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false,
@@ -12,12 +12,44 @@
       "models": [
         {
           "id": "Qwen3.8",
-          "name": "Qwen3.8 27B (vLLM direct — the repo-local config shadows the runner's user-level config for factory runs: the swap proxy has been observed to complete a response upstream and never deliver it downstream; the runner's own config stays untouched)",
+          "name": "Qwen3.8 27B (vLLM XPU, 2x Arc Pro B60 TP=2, W4A16 INT4 AutoRound/INC, vision+tools)",
           "reasoning": true,
-          "input": ["text", "image"],
-          "contextWindow": 200000,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 262144,
           "maxTokens": 32768,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": "medium",
+            "high": null,
+            "xhigh": "xhigh",
+            "max": null
+          }
+        },
+        {
+          "id": "Ornith-1.5-35B-A3B",
+          "name": "Ornith-1.5 35B-A3B (llama.cpp Vulkan v0.7.0, 1x RX 5700 XT, Q4_K_M GGUF, 151k ctx, q8_0 KV, ~24 tok/s, tools via --jinja, text-only)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 32768,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
           "thinkingLevelMap": {
             "minimal": null,
             "low": null,
