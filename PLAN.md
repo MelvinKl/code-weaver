@@ -341,7 +341,12 @@ version is a stable ref”).
   crash. The first field use of the hook (run 39913220223) caught a
   broken `GIT_CONFIG_COUNT`/dangling `GIT_CONFIG_KEY_1` in the push env:
   every git child now runs with inherited `GIT_CONFIG_*` entries
-  stripped, and `push_branch` sets `COUNT` to exactly its own keys.
+  stripped, and `push_branch` sets `COUNT` to exactly its own keys. Its
+  second (run 39930513195: stages 1-11 all green, 107/107 scenarios
+  fulfilled) caught a `json` import scoped to the update-PR branch of
+  `pr-open` while the create-PR branch called `json.loads` — the factory
+  would have crashed at stage 12 on every fresh PR; the import now sits
+  at the script top.
 - **Closed in #27 (oracle/code drift):** `pr-and-gates.feature`'s Background
   pinned the oracle action's ref while the repo's own ref line is unversioned
   (it reads `@ref` literally) — extraction generated a scenario the repo can

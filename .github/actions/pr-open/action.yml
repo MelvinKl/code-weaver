@@ -44,7 +44,7 @@ runs:
       working-directory: ${{ github.workspace }}
       run: |
         try:
-            import os, sys
+            import os, sys, json
             action_dir = os.environ.get("GITHUB_ACTION_PATH") or os.path.join(os.environ.get("GITHUB_WORKSPACE", ""), ".github", "actions", "pr-open")
             scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
             if os.path.isdir(scripts):
@@ -143,7 +143,6 @@ runs:
             # a PR from this head already exists? update it, don't duplicate
             view = gh("pr", "view", head, "--json", "number,url")
             if view.returncode == 0 and view.stdout.strip():
-                import json
                 pr = json.loads(view.stdout)
                 gh("pr", "edit", str(pr["number"]), "--body-file", body_file)
                 number, url = str(pr["number"]), pr["url"]
