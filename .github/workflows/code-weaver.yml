@@ -20,7 +20,7 @@ jobs:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
       target-branch: main
-      llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
+      llm-model: Qwen3.8  # which configured model — the one adjustable LLM setting
       runner: self-hosted      # runner label whose environment has pi pre-installed & configured
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
