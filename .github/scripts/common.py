@@ -302,11 +302,23 @@ def push_branch(branch: str, force: bool = True) -> None:
     if force:
         args.append("--force")
     args += ["origin", branch]
-    r = subprocess.run(args, cwd=repo(), capture_output=True, text=True, env={
-        **os.environ, "GIT_CONFIG_COUNT": "3",
+    # GIT_CONFIG_COUNT must name exactly the keys we set, and the inherited
+    # environment must not carry the runner's own GIT_CONFIG_* entries: a
+    # stray GIT_CONFIG_KEY_1 without its value (observed on this runner
+    # build) makes git die with "missing config key GIT_CONFIG_KEY_1" the
+    # moment COUNT names an index the parent never filled — the fix loop's
+    # push crashed the review stage exactly this way (run 39913220223; the
+    # crash hook's artefact is how the diagnosis survived the ghost job
+    # log).
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_CONFIG_")}
+    env.update({
+        "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "http.https://github.com/.cookie",
         "GIT_CONFIG_VALUE_0": "",
     })
+    r = subprocess.run(args, cwd=repo(), capture_output=True, text=True,
+                       env=env)
     # rewrite any token in the URL back out of the log
     if r.returncode != 0:
         clean = (r.stderr or r.stdout).replace(token, "***") if token else (r.stderr or "")
@@ -314,7 +326,13 @@ def push_branch(branch: str, force: bool = True) -> None:
 
 
 def git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["git"] + args, cwd=repo(), capture_output=True, text=True, check=check)
+    # Same GIT_CONFIG_* sanitisation as push_branch: a runner that leaks a
+    # dangling GIT_CONFIG_KEY_i into the job env would poison every git
+    # child otherwise.
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_CONFIG_")}
+    return subprocess.run(["git"] + args, cwd=repo(), capture_output=True,
+                          text=True, check=check, env=env)
 
 
 def action_path() -> str:

@@ -332,6 +332,16 @@ version is a stable ref”).
   ghost (the safety/reporting scenarios); a controlled `sys.exit` (cap
   reached, broken environment) logs its own reason and is not treated as a
   crash.
+- **Stage crashes leave a persistent diagnosis** — every `stage.py` entry
+  point installs the shared crash hook (full traceback to the runner's
+  durable diag log + a one-line reason in the stage's artifact), so a
+  failed run's report names the crashed stage even when the job log is a
+  ghost (the safety/reporting scenarios); a controlled `sys.exit` (cap
+  reached, broken environment) logs its own reason and is not treated as a
+  crash. The first field use of the hook (run 39913220223) caught a
+  broken `GIT_CONFIG_COUNT`/dangling `GIT_CONFIG_KEY_1` in the push env:
+  every git child now runs with inherited `GIT_CONFIG_*` entries
+  stripped, and `push_branch` sets `COUNT` to exactly its own keys.
 - **Closed in #27 (oracle/code drift):** `pr-and-gates.feature`'s Background
   pinned the oracle action's ref while the repo's own ref line is unversioned
   (it reads `@ref` literally) — extraction generated a scenario the repo can
