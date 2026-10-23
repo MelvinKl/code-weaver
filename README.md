@@ -97,8 +97,8 @@ GitHub release; targets pinned to an older ref keep working.
 | `plan-dir` | `plans` | where plans live |
 | `doc-dir` | `docs` | where the arc42 markdown files live |
 | `llm-model` | `Ornith-1.5-35B-A3B` | which **configured** model pi uses |
-| `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
-| `max-tokens` | `500000` | token budget across the run — **`0` = no cap** |
+| `max-loops` | `25` | fix/guard loop cap per stage — **`0` = no cap** |
+| `max-tokens` | `5000000` | token budget across the run — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label (its environment must carry the pi pre-configuration) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
 

@@ -58,11 +58,11 @@ on:
       max-loops:
         description: Fix/guard loop cap per stage — 0 means no cap
         type: string
-        default: "5"
+        default: "25"
       max-tokens:
         description: Token budget across the run — 0 means no cap
         type: string
-        default: "500000"
+        default: "5000000"
       runner:
         description: Runner label whose environment has pi pre-installed & configured
         type: string
