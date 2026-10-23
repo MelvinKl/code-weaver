@@ -56,6 +56,53 @@ def log(msg: str) -> None:
         pass
 
 
+def install_crash_diagnostics(stage: str) -> None:
+    """Crash-parity for the stage scripts — the safety scenario *"a crashed
+    stage leaves a persistent diagnosis on the runner"*.
+
+    The inline-Python actions (baseline, pr-open, report) already wrap their
+    bodies so an uncaught exception persists the full traceback to the
+    runner's durable diag log and a one-line reason to the stage's artifact
+    (the job log of a failed run is a ghost on this runner build). The
+    stage.py entry points did not: a crashed LLM stage died without either
+    artefact, so the report stage's failure summary omitted exactly the
+    stages that crashed (the reporting scenario *"a failed run is reported
+    too"*). One hook for all five stage entry points — a controlled
+    sys.exit (cap reached, broken environment) is NOT a crash: those paths
+    already log their reason and the hook lets them pass through.
+    """
+    import sys as _sys
+    import traceback as _tb
+
+    def _hook(t, v, tb):
+        if t in (SystemExit, KeyboardInterrupt):
+            raise _sys.exit(
+                v.code if (t is SystemExit and v is not None and v.code is not None)
+                else (1 if t is SystemExit else 130))
+        try:
+            dump = ("".join(_tb.format_exception(t, v, tb)) if tb is not None
+                    else _tb.format_exc())
+            d = state_dir()
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                f.write(f"{stage} CRASHED — {v}\n")
+            with open(os.path.join(d, "stage-summary.txt"), "a", encoding="utf-8") as f:
+                f.write(f"{stage}: FAILED — crashed ({v}); full traceback in the "
+                        f"runner's diagnostic log\n")
+            try:
+                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                    f.write(f"=== {stage} CRASHED ===\n{dump}\n")
+            except OSError:
+                pass  # a runner without the diag dir: the artefact line survives
+            print(f"::error::{stage} crashed — full diagnosis: "
+                  f"/opt/actions-runner/_diag/cw-diag.log")
+        except Exception:
+            print(f"::error::{stage} crashed — {v}")
+        raise _sys.exit(1)
+
+    _sys.excepthook = _hook
+
+
 class CapReached(SystemExit):
     def __init__(self, which: str, detail: str):
         super().__init__(f"::error::loop cap reached: {which} — {detail}")

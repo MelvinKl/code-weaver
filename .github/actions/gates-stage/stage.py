@@ -88,6 +88,7 @@ def _cw_in(name: str) -> str:
 
 
 def main() -> None:
+    common.install_crash_diagnostics("stage 13-14 PR gates")
     head_sha = _cw_in("head-sha")
     polls = 0
     fix_iter = 0
@@ -124,9 +125,20 @@ def main() -> None:
             if r.returncode != 0:
                 common.log("::error::stage 14: pi gate-fix run failed")
                 sys.exit(1)
-            if common.commit_all(f"stage 14: gate fix (iteration {fix_iter})"):
+            # The model may commit its own work during the call — in which
+            # case the tree is clean at commit_all time and the branch tip
+            # has moved regardless. Push when our commit landed OR the tip
+            # moved under us (the review stage's fix loop has the same
+            # idiom), then re-resolve the sha: a re-pushed head means NEW
+            # workflow runs.
+            pre = common.git(["rev-parse", "HEAD"], check=False)
+            pre_tip = pre.stdout.strip() if pre.returncode == 0 else ""
+            pushed = common.commit_all(
+                f"stage 14: gate fix (iteration {fix_iter})")
+            tip = common.git(["rev-parse", "HEAD"], check=False)
+            tip_now = tip.stdout.strip() if tip.returncode == 0 else ""
+            if pushed or (pre_tip and tip_now and tip_now != pre_tip):
                 common.push_branch(os.environ["AI_BRANCH"])
-            # a re-pushed head means NEW workflow runs — re-resolve the sha
             data = json.loads(common.gh_api(
                 f"repos/{os.environ['GITHUB_REPOSITORY']}/branches/"
                 f"{os.environ['AI_BRANCH']}"))

@@ -124,6 +124,7 @@ def post_ok() -> bool:
 
 
 def main() -> None:
+    common.install_crash_diagnostics("stage 4 requirements-extraction")
     req = common.env_dir("REQUIREMENTS_DIR")
     body = common.state_file("issue-body.md")
     # A missing body and an empty body are the same case: no change is

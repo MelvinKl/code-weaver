@@ -88,6 +88,34 @@ def parse_verdicts(text: str) -> list[tuple[str, str, str]]:
     return v
 
 
+def _verdict_file() -> tuple[str | None, str | None]:
+    """Look for the verdict block in the repo tree. The models have been
+    observed writing the block to a file (e.g. `review-verdict.txt`) and
+    only summarising it in the response. The candidate must carry a real
+    SCENARIO verdict line — the marker alone is not a signal: the factory's
+    own machinery (`stage.py` sources, the `review.md` prompt) mentions the
+    marker in its code, and the first sorted match would otherwise be a
+    factory file, `git rm`-ing the pipeline's own code off the branch.
+    Factory-machinery paths are excluded outright."""
+    try:
+        changed = common.changed_files("HEAD")
+    except Exception:
+        return None, None
+    for f in changed:
+        if f.startswith((".github/", "pi-prompts/")):
+            continue
+        p = os.path.join(common.repo(), f)
+        if not os.path.isfile(p):
+            continue
+        try:
+            t = open(p, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        if "REVIEW-VERDICT" in t and parse_verdicts(t):
+            return f, t
+    return None, None
+
+
 def review(i: int, test_out: str):
     prompt = common.state_file(f"review-prompt-{i}.txt")
     with open(prompt, "w") as f:
@@ -123,6 +151,30 @@ def review(i: int, test_out: str):
         return None, 1
     verdicts = parse_verdicts(text)
     if not verdicts:
+        # The block is the oracle — accept it from a file the review call
+        # wrote instead of answering: mirror it to the state dir (the audit
+        # trail) and remove the repo copy (it must never ride a later fix
+        # commit), then parse from the mirror.
+        f, t = _verdict_file()
+        if f is not None:
+            common.log(f"::warning::stage 10: the review wrote its verdict block "
+                       f"to {f} instead of the response — parsed from the "
+                       f"file (mirrored to the state dir; the repo copy is "
+                       f"removed)")
+            with open(common.state_file(f"review-verdict-{i}.txt"), "w",
+                      encoding="utf-8") as fh:
+                fh.write(t)
+            if subprocess.run(["git", "ls-files", "--", f], cwd=common.repo(),
+                              capture_output=True).stdout.strip():
+                subprocess.run(["git", "rm", "-f", "--", f], cwd=common.repo(),
+                               check=False)
+            else:
+                p = os.path.join(common.repo(), f)
+                if os.path.exists(p):
+                    os.remove(p)
+            text = t
+            verdicts = parse_verdicts(text)
+    if not verdicts:
         # the oracle must be marked explicitly — an unparseable review is a
         # stage failure, never a silent pass
         common.log("::error::stage 10: the review emitted no parseable "
@@ -137,6 +189,7 @@ def tail(path: str, n: int = 200) -> str:
 
 
 def main() -> None:
+    common.install_crash_diagnostics("stage 10-11 test & review")
     i = 0
     prev_cut = False
     pending_audit = False
@@ -200,6 +253,13 @@ def main() -> None:
         with open(fix_prompt, "w") as f:
             f.write(directive)
         common.log(f"stage 11: fix loop — iteration {i} (log: review-iteration-{i}.md)")
+        # Capture the tip before the call: the model may commit its own work
+        # during the call, in which case the tree is clean at commit_all time
+        # and a plain `if commit_all(...): push` would silently leave the
+        # fix work on a dead runner (observed: the re-triggered issue-#3 run
+        # committed its fix locally and never pushed it).
+        pre = common.git(["rev-parse", "HEAD"], check=False)
+        pre_tip = pre.stdout.strip() if pre.returncode == 0 else ""
         r = stages.pi_stage("implement", prompt_file=fix_prompt,
                             context=stages.project_context())
         if r.returncode not in (0, 124):
@@ -225,7 +285,12 @@ def main() -> None:
             i += 1
             continue
         pending_audit = False
-        if common.commit_all(f"stage 11: fix (iteration {i})"):
+        pushed = common.commit_all(f"stage 11: fix (iteration {i})")
+        tip = common.git(["rev-parse", "HEAD"], check=False)
+        tip_now = tip.stdout.strip() if tip.returncode == 0 else ""
+        # push when OUR commit landed OR the tip moved under us (the model
+        # committed its own work during the call)
+        if pushed or (pre_tip and tip_now and tip_now != pre_tip):
             common.push_branch(os.environ["AI_BRANCH"])
         i += 1
 

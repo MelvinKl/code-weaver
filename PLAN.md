@@ -62,7 +62,7 @@ no state passing needed).
 | 7 plan-check | (in `plan`) | `guard-check --allow "<plan-dir>"`; leak → revert + re-run stage 6. | plan: “the plan stage may only touch plans/” |
 | 8 implement | `implement` | `pi-run` with `pi-prompts/implement.md`; context = plans + requirements. The prompt: implement the plans (code); generate tests; **update the arc42 markdown files under `doc-dir` so the set stays complete** (a repo without `doc-dir` keeps its top-level `PLAN.md` set complete); keep `README.md` current; **mark finished plan tasks done** (the plan is a live state tracker — the implement-check allows `plan-dir` and `PLAN.md` for it). | implement: “implemented as code”, “tests generated”, “arc42 updated and complete”, “README kept current”, “marks finished plan tasks as done” |
 | 9 implement-check | (in `implement`) | `guard-check --allow "<src> <tests> <doc-dir> <plan-dir> PLAN.md README.md"` — the allow set **excludes `requirements-dir`** (it includes `plan-dir` — the plan tracks task state — and, for a repo without a `doc-dir`, the top-level `PLAN.md` that plays the same role); violation → revert + **loop back to stage 6** (not stage 8). | implement: “must not edit requirements”, “may mark plan tasks as done”, “allow set covers the repo's real layout”; guard-rail: “a requirement edited during implementation loops back to planning” |
-| 10 test-and-review | `review` | Run the target's suite (`make test` — the target-repo contract wires `requirements/**.feature` into a Cucumber runner, so every Gherkin scenario is an executable acceptance test); then `pi-run` with `pi-prompts/review.md` → mark each scenario **fulfilled/unfulfilled** + produce the diff review. Each iteration's log → **workflow log / artifact only — never committed to the repo**. | test-and-review: “Gherkin runs as executable acceptance tests”, “each requirement checked for fulfilment”, “every iteration logged without touching the repo tree” |
+| 10 test-and-review | `review` | Run the target's suite (`make test` — the target-repo contract wires `requirements/**.feature` into a Cucumber runner, so every Gherkin scenario is an executable acceptance test); then `pi-run` with `pi-prompts/review.md` → mark each scenario **fulfilled/unfulfilled** + produce the diff review. The verdict is parsed from the review's response — a file the model writes instead is accepted from the tree (mirrored to the state dir, the repo copy removed), and format drift (em-dash separators, parenthetical qualifiers) parses leniently: the verdict is verified, the format is not re-litigated. Each iteration's log → **workflow log / artifact only — never committed to the repo**. | test-and-review: “Gherkin runs as executable acceptance tests”, “each requirement checked for fulfilment”, “every iteration logged without touching the repo tree”, “a review or fix call cut off at its cap is retried, not fatal” |
 | 11 fix loop | (in `review`) | While scenarios are unfulfilled: pi fix → commit → re-run stage 10. The loop respects `max-loops` (**0 = no cap**) and the token budget. | test-and-review: “failed scenario is fixed and re-reviewed”, “fix loop bounded by MAX_LOOPS”, “loop respects the token budget”; safety: “every loop respects its cap” |
 | 12 pr-open | `pr` | Push `ai/<issue_number>`; `gh pr create` (head → `target-branch`); **the PR description is the final status report** — run status, source issue, every stage outcome (rendered from the stage-result state accumulated in workflow storage). | pr-and-gates: “a PR is opened against the target branch”, “PR body links back to the work” |
 | 13 pr-gates | `gates` | Poll the GitHub API for **all** workflow runs triggered on the PR; succeed only when every one is green. | pr-and-gates: “all PR-triggered workflows must be green” |
@@ -261,6 +261,7 @@ version is a stable ref”).
 | | a broken stage cannot corrupt the target branch | guard + branch isolation | CW-5, CW-12 |
 | | the factory tolerates arc42 structure variance | extraction prompt (§3, stage 4) | CW-3 |
 | | an audit trail exists for human review | workflow-log/artifact logs + arc42 AI-activity | CW-12, CW-10 |
+| | a crashed stage leaves a persistent diagnosis on the runner | shared crash hook in `common.py` — every `stage.py` entry point persists the full traceback to the runner's diag log + a one-line reason to the stage's artifact (`stage-fail-reason.txt`); a controlled `sys.exit` is not a crash | CW-11, CW-12 |
 
 ## 8. Tickets (build order = dependency order)
 
@@ -316,8 +317,32 @@ version is a stable ref”).
   re-slice). If that was deliberate, the plan stands as written (CW-13 stays an
   optional stretch). If it was accidental, say so and I'll restore it — CW-13 then
   becomes mandatory and the npm mechanism joins §2.
-- *Fixed by the accompanying commit in this PR:* `pr-and-gates.feature`'s Background
-  still read `ai/code-weaver/<issue_number>` while `trigger.feature` and
-  `safety.feature` already read `ai/<issue_number>` (the explicit clarification);
-  left as-is, `main` would be self-contradictory and the factory's own stage 10 would
-  flag it.
+- **Model-as-judge format drift** — the review marks every scenario; the
+  parser accepts the prescribed colon form, observed em-dash/qualifier
+  drift, and a block the model writes to a file instead of answering
+  (accepted from the tree, removed before it can ride a fix commit). The
+  residual risk is a *verdict* drift (the judge calls a scenario fulfilled
+  that the code does not meet) — inherent to a model as judge; the bounded
+  fix loop is the containment, and a zero-verdict review is a stage
+  failure, never a silent green.
+- **Stage crashes leave a persistent diagnosis** — every `stage.py` entry
+  point installs the shared crash hook (full traceback to the runner's
+  durable diag log + a one-line reason in the stage's artifact), so a
+  failed run's report names the crashed stage even when the job log is a
+  ghost (the safety/reporting scenarios); a controlled `sys.exit` (cap
+  reached, broken environment) logs its own reason and is not treated as a
+  crash.
+- **Closed in #27 (oracle/code drift):** `pr-and-gates.feature`'s Background
+  pinned the oracle action's ref while the repo's own ref line is unversioned
+  (it reads `@ref` literally) — extraction generated a scenario the repo can
+  never fulfil (a run-1 failure, later caught in-house: the
+  `reuse-by-ref.feature` scenario *the ref is part of the reference — a ref
+  bump is the upgrade*, UNFULFILLED). The fix: `requirements/reuse-by-ref.feature`'s
+  Background now reads `uses: <owner>/code-weaver/.github/workflows/factory.yml@<ref>`
+  — the repo's own ref line is exactly the scenario's shape, so the repo's
+  own oracle is green again; `requirements/pr-and-gates.feature`'s two
+  gate-scenarios carry `And the action ref is configurable` (the gate-poll's
+  ref is consumed by that line); every branch-name read is normalised to
+  `ai/code-weaver/<issue_number>` (the repo's real `AI_BRANCH` convention —
+  the earlier `trigger.feature`/`safety.feature` drift is closed); PLAN §7's
+  traceability cells point at the scenarios that enforce each of them.

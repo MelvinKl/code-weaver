@@ -21,6 +21,7 @@ import stages
 
 
 def main() -> None:
+    common.install_crash_diagnostics("stage 6 planning")
     plan = common.env_dir("PLAN_DIR")
     stages.run_generation_stage(
         stage="stage 6 planning",

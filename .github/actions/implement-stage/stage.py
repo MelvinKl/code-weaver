@@ -74,6 +74,7 @@ def plan_loop_back(violations: list[str]) -> bool | None:
 
 
 def main() -> None:
+    common.install_crash_diagnostics("stage 8 implementation")
     plan = common.env_dir("PLAN_DIR")
     doc = common.env_dir("DOC_DIR")
     allow = source_dirs()

@@ -36,7 +36,12 @@ diff for anything the tests cannot see.
    passing test output, or (for scenarios the suite does not yet execute) the
    committed code demonstrably implements every step. When in doubt, the
    verdict is UNFULFILLED with the gap named: a silent pass is a false green.
-2. You do not write code here — you mark, and the fix loop acts on your
+2. **The verdict block belongs in your response.** The stage parses your
+   response text. Do not write the block to a file and refer to it
+   elsewhere (if you do write it to a file the stage accepts it from there,
+   but the response is the contract — the block must be parseable out of
+   what you answer).
+3. You do not write code here — you mark, and the fix loop acts on your
    UNFULFILLED lines.
-3. Do not modify any file: your output is the verdict block and the review
+4. Do not modify any file: your output is the verdict block and the review
    text only.
