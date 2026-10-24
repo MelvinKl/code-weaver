@@ -24,6 +24,7 @@ const JEV_ENV: Record<string, string> = {
   PI_JEV_COMPACT: "1",
   PI_JEV_THINKING: "1",
   PI_JEV_AGENTS: "1",
+  PI_JEV_AUTO: "1",
 };
 
 export default function () {
