@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .ci-venv/
 test-results/
+# pi project package installs (npm:pi-jev, see .pi/settings.json)
+.pi/npm/
