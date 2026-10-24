@@ -300,7 +300,12 @@ version is a stable ref”).
   review stage (pi reads the whole diff) is the second layer.
 - **Runner environment is a pre-requisite** — pi installed & configured, backend
   reachable from the runner. Stage 2 fails explicitly; a target whose runner can't
-  meet it simply doesn't run the factory.
+  meet it simply doesn't run the factory. Second pre-requisite: the `gh` CLI
+  (trigger/pr-open/gates shell out to it) — and the runner user must own
+  `~/.config`, or a root-owned one makes every token-bearing `gh` call die with
+  permission-denied (ct133 field case: the gates job's sha-resolve step failed
+  while jobs on healthy runners ran fine; `chown runner:runner ~/.config`
+  fixed it without touching the factory).
 - **Self-editing separation** — implement/gate allow sets exclude `requirements-dir`:
   intra-PR test fixes are fine, requirement edits are not (safety/guard-rail
   scenarios). The implement allow set **includes `plan-dir` and `PLAN.md`**:

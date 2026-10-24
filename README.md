@@ -107,6 +107,16 @@ pi configuration, fixed. Stage 2 verifies presence → configuration →
 reachability → configured-model set → a headless smoke check, and fails with
 an explicit message if any of that is missing.
 
+The `gh` CLI is the factory's second runner pre-requisite (the trigger,
+pr-open and gates stages shell out to it). One hygiene rule keeps it working:
+the runner **user** must own `~/.config` — a root-owned `~/.config` (left
+behind by an installer that ran as root) makes every token-bearing `gh`
+invocation die with `permission denied`, because gh initialises its config
+under that directory. Field case: on the ct133 runner this made the gates
+job's `Resolve the PR's head sha` step fail while every job scheduled to a
+healthy runner ran fine; `chown runner:runner ~/.config` on the runner fixed
+it without touching the factory.
+
 ## Repository layout
 
 ```
