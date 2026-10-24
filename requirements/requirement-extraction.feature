@@ -10,6 +10,7 @@ Feature: Requirement extraction
   Background:
     Given pi is pre-installed and pre-configured in the runner environment
     And the factory works on an AI branch cut from the issue's base branch
+    And a run for an issue whose AI branch already exists reuses that branch instead of re-cutting it
     And the issue body is available to the factory
 
   @baseline

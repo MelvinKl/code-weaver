@@ -1,6 +1,6 @@
 # Code Weaver — Implementation Plan
 
-**Oracle:** the Gherkin requirements in `requirements/` — 12 files, 102 scenarios.
+**Oracle:** the Gherkin requirements in `requirements/` — 12 files, 103 scenarios.
 **Rule of this plan:** the requirements win. Where this plan and a scenario disagree, one of them changes — they must never drift, because the factory's own stage 10 later checks the implementation against every scenario.
 
 ---
@@ -55,7 +55,7 @@ no state passing needed).
 |---|---|---|---|
 | 1 trigger | `trigger` | Fetch the issue (body + labels); gate on `ai-requirements-label` (default `ai-requirements`) **or** `workflow_dispatch` + `issue-number`. Idempotency: query in-progress `factory` runs with the same `issue-number` → comment “already running” on the issue, exit 0. | trigger: all 6 |
 | 2 setup-pi | `setup-pi` | `command -v pi` → read the **pre-configured** pi environment (backend + configured model set; the action never writes it) → verify the selected `llm-model` is in the configured set → headless smoke check `pi --print` against that model → explicit failures: `pi not installed or configured on this runner` / `backend unreachable`; **no installation step exists**. | setup-pi: all 8; configuration: “LLM backend is a pre-requisite”; safety: “backend needs no secret” |
-| 3 baseline | `baseline` | Branch **`ai/<issue_number>`** off the issue's base ref; record the baseline ref (base-branch head); snapshot the issue's changed-file diff as a **workflow artifact** (never into the repo tree). | requirement-extraction: “baseline captures the issue's change set”; safety: branch hygiene |
+| 3 baseline | `baseline` | Branch **`ai/<issue_number>`** off the issue's base ref; record the baseline ref (base-branch head); snapshot the issue's changed-file diff as a **workflow artifact** (never into the repo tree). A new run for an issue whose AI branch **already exists** (the owner's re-trigger after a failed run) reuses that branch — every stage runs again from its current state; only an absent branch is cut fresh. | requirement-extraction: “baseline captures the issue's change set”, Background reuse line; trigger: “a re-triggered run resumes the issue's existing AI branch”; safety: branch hygiene |
 | 4 requirement-extraction | `extract` | `pi-run` with `pi-prompts/requirements.md`; context = `@requirements/ @README.md @docs/` + baseline diff + issue body. The prompt encodes: derive the **delta** against the baseline; write **valid Gherkin** (canonical keywords) to `requirements-dir`; tolerate arc42-markdown structure variance; empty issue body → write **nothing**, report “no delta requirements”, stop; re-run on unchanged input is idempotent. | requirement-extraction: all 6; safety: “tolerates arc42 structure variance” |
 | 5 requirement-check | (in `extract`) | `guard-check <baseline-ref> --allow "<requirements-dir>"`; violation → revert off-limits files (`git checkout <ref> -- …` + `git clean`), **re-run stage 4**. | guard-rail: “clean stage passes”, “leaking stage is reverted and re-run”, “allowed set is per-stage” |
 | 6 plan | `plan` | `pi-run` with `pi-prompts/plan.md`; context = `@requirements/**` + the arc42 markdown files + `@docs/`. The prompt: markdown plans under `plan-dir` — **one or more files may be combined**, but the plans must **cover every requirement change**; grounded in the documented architecture. | plan: “plans cover every requirement change”, “describes how”, “grounded in the current architecture” |
@@ -188,6 +188,7 @@ version is a stable ref”).
 | | the trigger label is configurable | `ai-requirements-label` input → env | CW-1 |
 | | a manual dispatch processes a named issue | `workflow_dispatch` + `issue-number` | CW-1 |
 | | re-entrant runs on the same issue do not duplicate work | in-progress-run lock (§4.4) | CW-1 |
+| | a re-triggered run resumes the issue's existing AI branch | baseline action: an existing AI branch is reused (fetched, checked out, never deleted); a fresh cut happens only when the branch is absent | CW-1, CW-4 |
 | **setup-pi** | pi is already on the runner | presence check, no install step | CW-2 |
 | | the LLM backend configuration is a pre-requisite of the environment | action reads (never writes) the env's pi config | CW-2 |
 | | which configured model is used is adjustable | `llm-model` validated against the configured set | CW-2 |
@@ -305,7 +306,13 @@ version is a stable ref”).
   `~/.config`, or a root-owned one makes every token-bearing `gh` call die with
   permission-denied (ct133 field case: the gates job's sha-resolve step failed
   while jobs on healthy runners ran fine; `chown runner:runner ~/.config`
-  fixed it without touching the factory).
+  fixed it without touching the factory). A third ghost binding surfaced on the
+  same machine: the gates job's *Resolve the PR's head sha* step read
+  `CW_PR_NUMBER` from the previous step's GITHUB_ENV write, which this runner
+  build does not propagate — the step is now self-contained (it reads the PR
+  number from the state file first, the env only as fallback), because a
+  re-run is pinned to the run's commit and cannot pick up a later workflow
+  fix: only the next triggered run carries a workflow change.
 - **Self-editing separation** — implement/gate allow sets exclude `requirements-dir`:
   intra-PR test fixes are fine, requirement edits are not (safety/guard-rail
   scenarios). The implement allow set **includes `plan-dir` and `PLAN.md`**:

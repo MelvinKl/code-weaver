@@ -62,3 +62,12 @@ Feature: Factory trigger
     When a second trigger fires for issue 7
     Then the second run does not duplicate the work of the first
     And both runs operate on the same branch "ai/code-weaver/7"
+
+  @trigger @safety
+  Scenario: A re-triggered run resumes the issue's existing AI branch
+    Given a previous factory run for issue 7 left committed work on the branch "ai/code-weaver/7"
+    And that previous run ended without completing
+    When a new factory run is triggered for issue 7
+    Then the run reuses the branch "ai/code-weaver/7" without re-cutting or deleting it
+    And every stage of the run executes from the branch's current state
+    And a fresh cut from the base branch happens only when the issue's AI branch does not exist

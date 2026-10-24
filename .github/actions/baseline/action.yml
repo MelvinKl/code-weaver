@@ -128,11 +128,25 @@ runs:
             g("fetch", "--no-recurse-submodules", "origin", base_ref)
             base_sha = g("rev-parse", f"origin/{base_ref}").stdout.strip()
 
-            # re-runs start clean: delete an existing AI branch (local + remote)
-            g("branch", "-D", ai_branch, check=False)
-            g("push", "origin", f"--delete", ai_branch, check=False)
-
-            g("checkout", "-B", ai_branch, base_sha)
+            # A NEW run for an issue whose AI branch already exists (the
+            # owner's re-trigger after a failed/aborted run) REUSES that
+            # branch: every stage runs again, in place, from the branch's
+            # current state (the idempotent re-run contract — generated
+            # files are updated in place; the guard measures against the
+            # baseline ref below, so the accumulated work is what it sees).
+            # Only an absent branch is cut fresh from the target — re-cutting
+            # would discard the previous run's committed work.
+            g("fetch", "--no-recurse-submodules", "origin", ai_branch, check=False)
+            if g("rev-parse", f"origin/{ai_branch}", check=False).returncode == 0:
+                resume_sha = g("rev-parse", f"origin/{ai_branch}").stdout.strip()
+                g("checkout", "-B", ai_branch, f"origin/{ai_branch}")
+                log(f"baseline: reusing existing {ai_branch} at {resume_sha} "
+                    f"(previous run's work); baseline ref = head of "
+                    f"{base_ref} {base_sha}")
+            else:
+                g("checkout", "-B", ai_branch, base_sha)
+                log(f"baseline: {ai_branch} cut at {base_sha} (head of "
+                    f"{base_ref}); fresh cut")
             g("config", "user.name", "Code Weaver")
             g("config", "user.email", "code-weaver@users.noreply.github.com")
 

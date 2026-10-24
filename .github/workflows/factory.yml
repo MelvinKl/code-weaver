@@ -950,7 +950,17 @@ jobs:
           echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
       - id: head
         name: Resolve the PR's head sha
-        run: echo "head-sha=$(gh api repos/$GITHUB_REPOSITORY/pulls/${CW_PR_NUMBER}/head.sha)" >> "$GITHUB_OUTPUT"
+        run: |
+          # Self-contained on purpose: on this runner build the GITHUB_ENV
+          # write from the previous step (Read PR state) has been observed
+          # NOT to reach the next step's env — an empty CW_PR_NUMBER here
+          # means `pulls//head.sha` → 404 → step failure (deterministic in
+          # the re-run of run 40081410050's gates job). The state file is
+          # the authoritative relay (the job-outputs binding has the same
+          # ghost family); the env stays as fallback for healthy runners.
+          PR=$(cat "$RUNNER_TEMP/cw/state/pr/pr-number.txt" 2>/dev/null) || true
+          [ -n "$PR" ] || PR="${CW_PR_NUMBER}"
+          echo "head-sha=$(gh api repos/$GITHUB_REPOSITORY/pulls/${PR}/head.sha)" >> "$GITHUB_OUTPUT"
       - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/gates-stage/
