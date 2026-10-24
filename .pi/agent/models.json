@@ -21,9 +21,9 @@
           "contextWindow": 262144,
           "maxTokens": 32768,
           "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
+            "input": 0.1021,
+            "output": 2.08,
+            "cacheRead": 0.05,
             "cacheWrite": 0
           },
           "thinkingLevelMap": {
@@ -45,9 +45,9 @@
           "contextWindow": 262144,
           "maxTokens": 32768,
           "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
+            "input": 0.1083,
+            "output": 1.004,
+            "cacheRead": 0.05,
             "cacheWrite": 0
           },
           "thinkingLevelMap": {

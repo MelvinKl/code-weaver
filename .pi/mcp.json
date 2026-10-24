@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "laya": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "laya[mcp]",
+        "laya-mcp-server"
+      ],
+      "env": {
+        "LAYA_BASE_URL": "http://192.168.5.2:8011",
+        "LAYA_PRELOAD": "0"
+      },
+      "description": "TypeSafe Jev / laya System-1 decision tools (choice/noul/score) served remotely from laya-serve on hydrogenium (192.168.5.2:8011) — the same endpoint pi-jev points at. Launched on demand via uv (installs the laya[mcp] PyPI package into an ephemeral env), so no pre-existing install is required."
+    }
+  }
+}
