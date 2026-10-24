@@ -28,11 +28,11 @@
           },
           "thinkingLevelMap": {
             "minimal": null,
-            "low": null,
+            "low": "low",
             "medium": "medium",
-            "high": null,
+            "high": "medium",
             "xhigh": "xhigh",
-            "max": null
+            "max": "xhigh"
           }
         },
         {
