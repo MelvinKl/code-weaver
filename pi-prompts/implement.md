@@ -19,7 +19,7 @@ directory holds the Gherkin oracle they fulfil. Execute the plans.
    (layout, stage map, traceability, tickets) and mark finished work done in
    it. Whatever you changed, reflected: the set must stay accurate and
    complete afterwards — update the affected files, add a section where the
-   change is genuinely new.
+   change is genuinely new. If the arc42 does not exist create it.
 4. **Keep the README current** — the overview, how-to-run and configuration
    sections must describe the code as it now is.
 5. **Keep the plans current as a state tracker** — the plan files are
