@@ -58,42 +58,54 @@ runs:
             fail("pi not installed or configured on this runner — pre-requisite of the "
                  "runner environment; the factory never installs or re-configures pi")
 
-        # 2. locate the pi configuration (repo-local .pi/ first, then user;
-        #    recent pi versions keep the user config in the .pi/agent/ subdir
-        #    — probe both layouts)
+        # 2+3. locate the pi configuration and extract the OpenAI-compatible
+        # backend URL. The repo ships BOTH .pi/mcp.json (an MCP server
+        # registry — no LLM backend) and .pi/agent/models.json, so a
+        # first-existing-file-wins probe locks onto the registry and finds no
+        # URL (field case: after the repo gained .pi/mcp.json, run
+        # 40131155394's stage 2 died "no OpenAI-compatible URL in .pi/" while
+        # the correct file sat two candidates later). Scan every candidate —
+        # repo-local first (the probe's reference, never a runtime override),
+        # then the runner's user config, both layouts — and take the first
+        # file that actually yields a backend URL; files that don't are
+        # skipped, not treated as the configuration.
         candidates = []
         for base in (os.environ["GITHUB_WORKSPACE"], os.path.expanduser("~")):
             for sub in ("", "agent"):
                 candidates += [os.path.join(base, ".pi", sub, "mcp.json"),
                                os.path.join(base, ".pi", sub, "models.json")]
-        cfg_src = next((p for p in candidates if os.path.exists(p)), None)
-
-        # 3. extract the OpenAI-compatible backend URL from the configuration
-        backend = None
-        if cfg_src:
+        def walk(o):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k.lower() in ("url", "baseurl", "base_url") and isinstance(v, str) and v.startswith("http"):
+                        yield v.rstrip("/")
+                    else:
+                        yield from walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    yield from walk(v)
+        import re
+        cfg_src, backend = None, None
+        for p in candidates:
+            if not os.path.exists(p):
+                continue
             try:
-                raw = open(cfg_src, encoding="utf-8").read()
+                raw = open(p, encoding="utf-8").read()
                 data = json.loads(raw)
             except Exception:
                 data, raw = {}, ""
-            def walk(o):
-                if isinstance(o, dict):
-                    for k, v in o.items():
-                        if k.lower() in ("url", "baseurl", "base_url") and isinstance(v, str) and v.startswith("http"):
-                            yield v.rstrip("/")
-                        else:
-                            yield from walk(v)
-                elif isinstance(o, list):
-                    for v in o:
-                        yield from walk(v)
             backend = next(iter(walk(data)), None)
             if backend is None:
-                import re
                 m = re.search(r"https?://[^\s\"'<>]+/v1", raw)
                 backend = m.group(0).rstrip("/") if m else None
+            if backend:
+                cfg_src = p
+                break
         if backend is None:
+            found = [p for p in candidates if os.path.exists(p)]
             fail("LLM backend not found in the runner's pi configuration "
-                 "(pre-requisite of the environment) — no OpenAI-compatible URL in .pi/")
+                 "(pre-requisite of the environment) — no OpenAI-compatible URL in "
+                 f".pi/ (scanned: {found or 'no .pi config files at all'})")
         backend = backend if backend.endswith("/v1") else backend + "/v1"
 
         # 4. backend reachability

@@ -78,6 +78,15 @@ Feature: pi pre-installed and configured in the runner environment
     Then the declaration is a built-in shell or a format string naming the interpreter and the script placeholder
     And the step's program actually executes and the stage sees its result
 
+  @setup
+  Scenario: A shipped registry file without a backend is not mistaken for the configuration
+    Given the repo's .pi/ directory ships an MCP server registry (mcp.json) carrying no LLM backend URL
+    And the correct backend configuration sits in another .pi/ candidate file
+    When the setup stage locates the pi configuration
+    Then the stage scans every .pi candidate file (repo-local first, then the runner's user config, both layouts)
+    And it uses the first candidate that contains an OpenAI-compatible backend URL
+    And a registry file without one is skipped, never treated as the configuration
+
   Scenario: pi resolves its model configuration from the user agent directory, not the repo
     Given pi resolves models.json from the user agent directory ("~/.pi/agent/", or PI_CODING_AGENT_DIR)
     And the repo ships a .pi agent model configuration as documentation of the factory's model configuration
