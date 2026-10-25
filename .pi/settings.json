@@ -1,7 +1,6 @@
 {
   "packages": [
     "npm:pi-jev",
-    "npm:pi-mcp-adapter",
     "npm:pi-subagents"
   ]
 }

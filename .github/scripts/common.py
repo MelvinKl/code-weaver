@@ -179,7 +179,7 @@ def pi_invoke(
     is never touched."""
     with open(system_prompt_file, encoding="utf-8") as f:
         system_prompt = f.read()
-    cmd = ["pi", "--print", "--model", model]
+    cmd = ["pi", "--approve", "--print", "--model", model]
     if thinking:
         cmd += ["--thinking", thinking]
     cmd += ["--system-prompt", system_prompt]
