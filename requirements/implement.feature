@@ -1,21 +1,38 @@
 # requirements/implement.feature
-# Factory stages 8 + 9 — implement the plan: code, tests, arc42 docs,
-# README; the plan doubles as a state tracker (finished tasks marked done).
+# Factory stages 8 + 9 — implement the plan one task at a time: code,
+# tests, arc42 docs, README; the plan is a live Jira task-state tracker
+# (the next open task is worked and marked done each invocation); only the
+# current issue's plan is editable.
 
 Feature: Implementation
   As the factory
-  I want the accepted plan implemented as code, tests, arc42 docs and README
+  I want the plan implemented as code, tests, arc42 docs and README, one task at a time
   so that the program reflects the requirements in every artefact of the project
+  and a re-run resumes exactly where the last run left off
 
   Background:
     Given the plan-check stage passed
-    And plans exist under plans/ covering every requirement change
+    And a single plan exists under plans/ for the issue, named plans/<issue_number>.md, in Jira-ticket style with an ordered task checklist
 
   @implement
   Scenario: The plan is implemented as code
     Given an accepted plan under plans/
     When the implement stage runs pi with the implement prompt template
     Then the code changes named in the plan are made on the AI branch
+
+  @implement
+  Scenario: The implementation works the next open task and marks it done
+    Given the plan file has one or more open (`- [ ]`) tasks
+    When the implement stage runs pi with the implement prompt template
+    Then the implementation works exactly one open task — the first open task reading from the top of the Tasks checklist
+    And it marks that task done (`- [x]`) in the plan file when finished
+
+  @implement
+  Scenario: The implementation loops until every task is done or a cap is reached
+    Given the plan file still has open tasks after a task is marked done
+    When the implement stage is called again
+    Then it works the next open task and marks it done
+    And it keeps doing this until every task is done or the time/token limit (a loop cap) is reached
 
   @implement
   Scenario: Tests are generated for the new behaviour
@@ -43,20 +60,20 @@ Feature: Implementation
     And any such edit is reverted and the pipeline loops back to the plan stage
 
   @implement
-  Scenario: The implement stage marks finished plan tasks as done
-    Given the plan files under the plan dir track which tasks are done
-    And the implementation has finished a task named in a plan
+  Scenario: Implementation may only edit the current issue's plan
+    Given more than one plan exists under the plan dir (plans for different issues)
+    And the implementation for issue N has finished a task named in plans/N.md
     When the implement stage commits its work
-    Then the plan file marks that task as done
+    Then plans/N.md marks that task as done
+    And no other plan file (e.g. plans/M.md) is changed
     And the implement-check passes with the plan change intact
 
   @implement
   Scenario: An empty implementation on an already-implemented branch is a no-op, not an error
     Given a re-triggered run whose branch already carries the implemented work
-    And the implement stage's model response is empty with no file changes
-    When the stage measures the branch against the run's baseline (the target's head)
-    Then the diff is non-empty — the implementation is already in place
-    And the stage succeeds as a satisfied no-op
+    And every task in the plan is already marked done
+    When the implement stage reads the plan and finds no open task
+    Then the stage succeeds as a satisfied no-op
     And the empty response is not treated as a failure of the model or the environment
 
   @implement @safety
@@ -68,9 +85,9 @@ Feature: Implementation
     And no later stage runs on the empty work
 
   Scenario: The plan is handed to pi as its files
-    Given the planning stage wrote plan files under the plan directory
+    Given the planning stage wrote a plan file under the plan directory
     When the implementation stage builds pi's context
-    Then the plan directory is expanded to the files it contains
+    Then the current issue's plan file is expanded to that file as an @-argument
     And no directory is ever passed as an @-argument
 
   Scenario: The allow set covers the repo's real layout
@@ -78,6 +95,7 @@ Feature: Implementation
     And the repo also has a tests/ directory
     When the implementation guard computes its allow set
     Then the set includes the conventional dirs and the other top-level code dirs
-    And the set also includes the plans dir — the plan is a live tracker of task state
+    And the set also includes the current issue's plan file — the plan is a live tracker of task state
     And the top-level documentation (README.md, PLAN.md) is allowed
+    And no other plan file is allowed
     And the requirements dir stays off-limits

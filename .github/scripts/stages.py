@@ -93,13 +93,58 @@ def dir_files(d: str) -> list[str]:
 
 
 def project_context() -> list[str]:
-    """The project files pi reads as context — the arc42 markdown under the
-    doc dir, the existing Gherkin oracle, and the README."""
+    """The project files pi reads as context — the full Gherkin oracle, the
+    arc42 markdown under the doc dir, and the README (the implement, review
+    and extract stages read the whole oracle). The PLANNER stage uses the
+    narrower `changed_requirements_context` instead — it is injected with
+    only the changed requirements."""
     req, doc = common.env_dir("REQUIREMENTS_DIR"), common.env_dir("DOC_DIR")
     ctx: list[str] = dir_files(req) + dir_files(doc)
     if os.path.isfile("README.md"):
         ctx.append("@README.md")
     return ctx
+
+
+def changed_requirement_files() -> list[str]:
+    """The requirement files that changed since the trigger baseline — the
+    delta requirements. The planner is injected with only these, not the
+    whole existing oracle (which only bounds what must NOT change)."""
+    req = common.env_dir("REQUIREMENTS_DIR")
+    if not req:
+        return []
+    baseline = baseline_sha()
+    return sorted({f for f in common.changed_files(baseline) if under(f, req)})
+
+
+def changed_requirements_context() -> list[str]:
+    """The project files the PLANNER reads as context: only the changed
+    requirements, plus the arc42 documentation (doc dir) and the README."""
+    ctx = ["@" + f for f in changed_requirement_files()]
+    doc = common.env_dir("DOC_DIR")
+    if doc:
+        ctx.extend(dir_files(doc))
+    if os.path.isfile("README.md"):
+        ctx.append("@README.md")
+    return ctx
+
+
+def plan_path(issue: str, plan_dir: str) -> str:
+    """The one and only plan file for an issue: `PLAN_DIR/<issue_number>.md`.
+    Empty string when the issue or plan dir is unresolved (idle run)."""
+    if not (issue and plan_dir):
+        return ""
+    return os.path.join(plan_dir, f"{issue}.md")
+
+
+def plan_stage_allow(issue: str, plan_dir: str) -> list[str]:
+    """The plan-stage allow set: ONLY this issue's plan file — the planner
+    writes one file per issue and must never touch another issue's plan or
+    create an overall plan. Falls back to the whole plan dir when the issue
+    or plan dir is unresolved."""
+    p = plan_path(issue, plan_dir)
+    if p:
+        return [p]
+    return [plan_dir] if plan_dir else []
 
 
 def under(path: str, prefix: str) -> bool:
@@ -109,14 +154,20 @@ def under(path: str, prefix: str) -> bool:
 
 def run_generation_stage(stage: str, template: str, allow: list[str],
                          context: list[str], prompt_file: str | None = None,
-                         post_ok=None, on_violation=None) -> None:
+                         post_ok=None, on_violation=None, allow_noop: bool = True) -> None:
     """generate → commit → guard → (clean: post_ok check / break;
     leak: revert + re-run) — bounded by the loop caps.
 
     A model response that is empty AND changes nothing does not consume
     the loop budget (it would otherwise burn an iteration the guard can
     only trivially pass); it is retried in place, itself bounded, so a
-    silently-wedged model cannot loop the stage forever."""
+    silently-wedged model cannot loop the stage forever.
+
+    `allow_noop` (default: True) selects the empty-response behaviour: when
+    False the stage never treats an empty response as "the work is already
+    in place" (it only ever retries, then fails clean). The per-task
+    implementation loop needs False — an empty response while a task is open
+    means a wedged model, never an already-complete branch."""
     baseline = stage_baseline()
     i = 0
     empty = 0
@@ -180,6 +231,20 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                        f"{len(produced)} chars) tail:\n"
                        f"{'—' * 40}\n{produced[-1500:]}")
         if not produced.strip() and not common.changed_files(baseline):
+            if not allow_noop:
+                # A per-task loop: an empty response means a wedged model
+                # (there is still an open task to do), never an already
+                # complete branch — retry, then fail clean.
+                empty += 1
+                if empty > 3:
+                    common.log(f"::error::{stage}: model kept returning empty "
+                               f"output — the retry tolerance is bounded, the "
+                               f"stage fails clean")
+                    sys.exit(1)
+                common.log(f"{stage}: empty model response, no file changes — "
+                           f"retrying without consuming the loop budget "
+                           f"(extra {empty}/3)")
+                continue
             # Re-run semantics (a new run for the same issue reuses the
             # previous run's branch — the owner's rule): an implementation
             # whose work is already on the branch has nothing to write — the
