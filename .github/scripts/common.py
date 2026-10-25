@@ -11,6 +11,7 @@ Contract every stage script keeps:
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import re
 import subprocess
@@ -157,6 +158,77 @@ def gh_api(path: str, accept: str = "application/vnd.github+json", data: str | N
 
 
 USAGE_RE = re.compile(r"(\d+) in, (\d+) out, \d+ cache read, (\d+) total tok")
+# An older pi build predates `--mode` and rejects it at startup (before any
+# model call runs); its argument parser names the flag in the error. A
+# startup flag rejection is the one failure a one-shot text-mode retry can
+# repair — anything else stays a broken-environment failure.
+MODE_REJECTED_RE = re.compile(r"unknown option.*--mode|Invalid mode")
+
+
+def pi_stream_capture(raw: str) -> tuple[bool, list[str], int, bool]:
+    """Reconstruct the model's words from a `pi --mode json` event stream.
+
+    Returns (is_jsonl, texts, usage, settled):
+
+      is_jsonl — at least one line parsed as a JSON event carrying a
+                 `type` field. False = the stdout is not a JSONL stream
+                 (an older pi build in plain-text mode): the raw capture
+                 is kept as the model output.
+      texts    — the text of EVERY completed assistant message, in stream
+                 order. This is the capture contract the stages rely on:
+                 a model may deliver its substantive output (e.g. the
+                 review's verdict block) in a non-final turn and close
+                 with a bare summary — text mode captured only the LAST
+                 message, losing the block (run 40200905062: stage 10
+                 failed on a fully reviewed run).
+      usage    — the totalTokens of the LAST completed assistant message
+                 (the budget counter keeps its "last summary line wins"
+                 semantics); 0 when no assistant message completed.
+      settled  — the stream reached its `agent_settled` event. A
+                 non-settled stream is a provider stream that died
+                 mid-flight; stages retry that call, they don't fail on
+                 it (a dropped stream can still leave completed turns).
+
+    Records are split on LF only: pi's JSONL framing treats Unicode line
+    separators (U+2028/U+2029) inside JSON strings as payload, not record
+    boundaries — splitlines() would shred such a record. A trailing partial
+    line (a stream cut off mid-record) simply fails to parse and is skipped;
+    every complete record before it survives."""
+    is_jsonl = False
+    texts: list[str] = []
+    usage = 0
+    settled = False
+    for line in raw.split("\n"):
+        line = line.rstrip("\r")
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(d, dict) or "type" not in d:
+            continue
+        is_jsonl = True
+        if d.get("type") == "agent_settled":
+            settled = True
+        elif d.get("type") == "message_end":
+            m = d.get("message")
+            if not isinstance(m, dict) or m.get("role") != "assistant":
+                continue
+            c = m.get("content")
+            if isinstance(c, str):
+                texts.append(c)
+            elif isinstance(c, list):
+                texts.append("".join(b.get("text", "")
+                                     for b in c
+                                     if isinstance(b, dict)
+                                     and b.get("type") == "text"))
+            u = m.get("usage")
+            if isinstance(u, dict):
+                tot = u.get("totalTokens")
+                if isinstance(tot, int):
+                    usage = tot  # last completed assistant message wins
+    return is_jsonl, texts, usage, settled
 
 
 def pi_invoke(
@@ -191,10 +263,27 @@ def pi_invoke(
 
     Every other file is only referenced by path: pi reads what the task
     needs on demand with its read tool instead of having the whole project
-    pre-loaded."""
+    pre-loaded.
+
+    The invocation is `pi --print --mode json`: one-shot, stdout is a
+    JSONL event stream. The stream is captured in full and EVERY completed
+    assistant message is reconstructed into the `.out` file — not just the
+    last one. Text mode captures only the last message, and a model observed
+    delivering its REVIEW-VERDICT block in a non-final turn and closing with
+    a bare summary made stage 10 parse a summary with no verdict lines and
+    fail a fully reviewed run (run 40200905062, stage 10-11).
+    A `pi-<template>.md.settled` marker records whether the stream reached
+    `agent_settled`: a stage that finds output but a non-settled stream
+    retries the call (the provider stream died mid-flight), while a settled
+    non-zero exit stays a broken-environment failure."""
     with open(system_prompt_file, encoding="utf-8") as f:
         instructions = f.read()
-    cmd = ["pi", "--approve", "--print", "--model", model]
+    # --print keeps the one-shot contract the oracle pins ("a stage
+    # invokes pi with --print"); --mode json makes stdout a JSONL event
+    # stream so the capture below sees EVERY assistant message, not only
+    # the last (text mode loses a verdict block the model sends in an
+    # earlier turn and then summarises — see the docstring)
+    cmd = ["pi", "--approve", "--print", "--mode", "json", "--model", model]
     # Give the stage instructions as normal USER text — never --system-prompt:
     # pi's default system prompt is shorter than a bespoke prompt, so folding
     # the instructions into the user prompt keeps pi's default system prompt
@@ -219,7 +308,14 @@ def pi_invoke(
         cmd.append("@" + p)
     out_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.out")
     err_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.err")
-    label = (f"$ pi --print --model {model}   # instructions from "
+    # yes/no — did the stream reach `agent_settled`? Stages use it to tell
+    # "the provider stream died mid-flight" (retry) from "the environment
+    # is broken" (fail): in JSON mode a dropped stream can still leave
+    # completed turns behind, so a non-empty capture no longer proves the
+    # call ran to completion.
+    settled_f = state_file(f"pi-{os.path.basename(system_prompt_file)}"
+                           ".md.settled")
+    label = (f"$ pi --print --mode json --model {model}   # instructions from "
              f"{os.path.basename(system_prompt_file)} (as user text, no --system-prompt)")
     hints = []
     if context:
@@ -229,29 +325,72 @@ def pi_invoke(
     if hints:
         label += " (" + "; ".join(hints) + ")"
     log(label)
-    with open(out_f, "w") as out, open(err_f, "w") as err:
+
+    def run_once(c: list[str]) -> subprocess.CompletedProcess:
+        with open(out_f, "w") as out, open(err_f, "w") as err:
+            try:
+                return subprocess.run(c, stdout=out, stderr=err,
+                                       cwd=repo(), timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # A slow model is not a broken environment: the call is cut
+                # off cleanly (exit 124) and the stage's bounded loop decides
+                # what to do with the partial work — it is not a hard failure.
+                log(f"::warning::pi call exceeded its {timeout}s cap and was "
+                    f"cut off (exit 124) — treated as a slow model, not a "
+                    f"broken environment")
+                return subprocess.CompletedProcess(args=c, returncode=124,
+                                                  stdout=None, stderr=None)
+
+    def err_text() -> str:
         try:
-            r = subprocess.run(cmd, stdout=out, stderr=err, cwd=repo(),
-                               timeout=timeout)
-        except subprocess.TimeoutExpired:
-            # A slow model is not a broken environment: the call is cut off
-            # cleanly (exit 124) and the stage's bounded loop decides what to
-            # do with the partial work — it is not a hard failure.
-            log(f"::warning::pi call exceeded its {timeout}s cap and was cut "
-                f"off (exit 124) — treated as a slow model, not a broken "
-                f"environment")
-            r = subprocess.CompletedProcess(args=cmd, returncode=124,
-                                            stdout=None, stderr=None)
-    usage = 0
-    try:
-        err_text = open(err_f, encoding="utf-8", errors="replace").read()
-        for m in USAGE_RE.finditer(err_text):
-            usage = int(m.group(3))  # last summary line wins
-        if usage:
-            tokens_add(usage)
-            log(f"token usage: {usage} total ({tokens_used()} accumulated; cap {_int_cap('MAX_TOKENS') or 'none'})")
-    except (OSError, ValueError):
-        pass
+            return open(err_f, encoding="utf-8", errors="replace").read()
+        except OSError:
+            return ""
+
+    def capture(c: list[str]) -> tuple[subprocess.CompletedProcess,
+                                       bool, int, bool]:
+        r = run_once(c)
+        raw = ""
+        try:
+            raw = open(out_f, encoding="utf-8", errors="replace").read()
+        except OSError:
+            raw = ""
+        is_jsonl, texts, usage, settled = pi_stream_capture(raw)
+        if is_jsonl:
+            # Reconstruct the captured output from the event stream. The
+            # raw stdout is JSONL, so .out becomes the concatenated text of
+            # every completed assistant message — the stages' parser then
+            # sees the verdict block whichever turn the model sent it in.
+            with open(out_f, "w", encoding="utf-8") as f:
+                f.write("\n\n".join(t for t in texts if t.strip()))
+            with open(settled_f, "w", encoding="utf-8") as f:
+                f.write("yes" if settled else "no")
+        else:
+            # A non-JSON stream (an older pi build answering in plain text,
+            # or the text-mode retry below) keeps the raw capture; the old
+            # stderr-usage parsing applies to it.
+            usage = 0
+            for m in USAGE_RE.finditer(err_text()):
+                usage = int(m.group(3))  # last summary line wins
+        return r, is_jsonl, usage, settled
+
+    r, is_jsonl, usage, settled = capture(cmd)
+    # One-shot fallback: this pi build predates --mode json and rejected
+    # the flag at startup — no model call ever ran. Retry in plain text
+    # mode; the stages keep working on the legacy last-message capture.
+    if MODE_REJECTED_RE.search(err_text()) and r.returncode not in (0, 124):
+        log("::warning::this pi build rejects '--mode json' — retrying the "
+            "call in text mode (last-message capture, not the full transcript)")
+        cmd_text = list(cmd)
+        try:
+            i = cmd_text.index("--mode")
+            del cmd_text[i:i + 2]
+        except ValueError:
+            pass
+        r, is_jsonl, usage, settled = capture(cmd_text)
+    if usage:
+        tokens_add(usage)
+        log(f"token usage: {usage} total ({tokens_used()} accumulated; cap {_int_cap('MAX_TOKENS') or 'none'})")
     if r.returncode != 0:
         log(f"::error::pi run '{system_prompt_file}' failed (exit {r.returncode}) — stderr: {err_f}")
     return r

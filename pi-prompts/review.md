@@ -26,6 +26,17 @@ Produce two things:
    (security, error paths, the documented architecture per the arc42 docs, the
    "only X changed" invariants) and anything the fix must change.
 
+Output discipline — the stage parses your output mechanically:
+- Keep the ENTIRE REVIEW-VERDICT block in ONE message — every scenario,
+  no line split across a message boundary, no scenario skipped or moved.
+- If the full block plus the diff review will not fit in one response,
+  write the block to a file (e.g. `review-verdict.txt`) and say so in your
+  response — the stage parses a file the review call wrote and removes the
+  repo copy before the fix loop acts.
+- Your LAST message must carry the block (or the file pointer). Never end
+  with only a summary of a verdict you sent in an earlier message — a bare
+  "the full result is above" is not parseable.
+
 Hard rules
 1. **FULFILLED means proven** — the scenario's steps are exercised by passing
    test output, or (for scenarios the suite doesn't yet run) the committed code

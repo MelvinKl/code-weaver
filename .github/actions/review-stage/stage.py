@@ -11,6 +11,19 @@ Bounded by MAX_LOOPS / MAX_TOKENS (0 = no cap). Each iteration — test output,
 verdict, fix directive — is logged into the state dir and travels as a
 workflow artifact: the audit trail lives in the workflow log/artifacts, and
 nothing under test-results/ is ever committed to the repo.
+
+The review call's captured output is the model's FULL transcript: the pi
+invocation runs `--print --mode json` and the harness reconstructs EVERY
+completed assistant message into the `.out` file (pi_stream_capture in
+common.py). A model observed delivering the REVIEW-VERDICT block in a
+non-final turn and closing with a bare summary ("the full result is above")
+made the text-mode capture — last message only — parse zero verdicts and fail
+the stage on a fully reviewed run (run 40200905062, stage 10-11); with all
+messages captured the verdict reaches the parser whichever turn it rode in.
+A `pi-<template>.md.settled` marker records whether the stream reached
+`agent_settled`: non-zero exit WITHOUT settlement is a provider stream that
+died mid-flight (retried, never fatal — a dropped stream can still leave
+completed turns behind), a settled non-zero exit is a broken environment.
 """
 from __future__ import annotations
 
@@ -39,11 +52,24 @@ VERDICT_RE = re.compile(
     r"^SCENARIO\s+(\S+)::(.+?)\s*[:—]\s*(FULFILLED|UNFULFILLED)"
     r"(?:\s*\([^)]*\))?\s*(—|$)")
 
-# common.pi_invoke writes each call's stdout under the state dir as
-# `pi-<template>.out` — this is the review call's output file. (The old
-# `last-pi.out` name pre-dated that contract: reading it was a
-# FileNotFoundError that killed the stage on a perfectly good pi run.)
+# common.pi_invoke writes each call's output under the state dir as
+# `pi-<template>.out` — this is the review call's output file: the
+# reconstructed text of EVERY completed assistant message (the JSON-mode
+# capture — see the module docstring). (The old `last-pi.out` name
+# pre-dated that contract: reading it was a FileNotFoundError that killed
+# the stage on a perfectly good pi run.)
 REVIEW_OUT = "pi-review.md.out"
+
+
+def _stream_settled(template: str) -> bool | None:
+    """Did the call's stream reach `agent_settled` (True/False), or is the
+    marker absent (None — an older pi build in text mode: the stage falls
+    back to the legacy "no output" retry heuristic)?"""
+    try:
+        return open(common.state_file(f"pi-{template}.md.settled"),
+                    encoding="utf-8").read().strip() == "yes"
+    except OSError:
+        return None
 
 
 def test_driver() -> list[str]:
@@ -80,12 +106,19 @@ def run_tests(i: int) -> tuple[int, str]:
 
 
 def parse_verdicts(text: str) -> list[tuple[str, str, str]]:
-    v = []
+    # The captured transcript holds every assistant message: a model that
+    # repeats the verdict block across turns (or corrects a line in a later
+    # one) yields duplicate `<file>::<name>` entries. Dedupe on the scenario
+    # identity with the LATER verdict winning — a model correcting itself
+    # between turns is trusted over its earlier draft; first-seen order is
+    # kept for a stable report.
+    seen: dict[tuple[str, str], tuple[str, str, str]] = {}
     for line in text.splitlines():
         m = VERDICT_RE.match(line.strip())
         if m:
-            v.append((m.group(1), m.group(2).strip(), m.group(3)))
-    return v
+            key = (m.group(1), m.group(2).strip())
+            seen[key] = (key[0], key[1], m.group(3))
+    return list(seen.values())
 
 
 def _verdict_file() -> tuple[str | None, str | None]:
@@ -143,6 +176,17 @@ def review(i: int, test_out: str):
             # no output and non-zero exit = the provider stream died under
             # us (backend recreated / connection dropped) — ride the 124
             # path: a dropped stream is retried, not fatal
+            return None, 124
+        # JSON-mode capture: a non-empty output does NOT prove the call ran
+        # to completion — completed turns survive a stream that later died.
+        # The marker decides: non-settled = a dropped provider stream, ride
+        # the 124 path (retried, not fatal); settled (or marker absent on a
+        # text-mode build) = a broken environment — the loop fails.
+        if _stream_settled("review.md") is False:
+            common.log("::warning::stage 10: the review call exited "
+                       f"{r.returncode} without its stream settling — the "
+                       "provider stream died mid-flight (completed turns "
+                       "captured); a dropped stream is retried, not fatal")
             return None, 124
         # any other non-zero WITH output is a broken environment — the loop fails
         return None, r.returncode
@@ -273,11 +317,12 @@ def main() -> None:
                 out_now = open(out, encoding="utf-8", errors="replace").read()
             except OSError:
                 out_now = ""
-            if out_now.strip():
+            if out_now.strip() and _stream_settled("implement.md") is not False:
                 common.log("::error::stage 11: pi fix run failed — stage fails")
                 sys.exit(1)
-            # died with no output = the provider stream dropped under it —
-            # ride the 124 path
+            # died with no output — or with completed turns but a stream
+            # that never settled — = the provider stream dropped under it,
+            # ride the 124 path (the next prompt audits the partial work)
             r.returncode = 124
         if r.returncode == 124:
             # cut off (or the stream died) mid-flight: whatever it touched was

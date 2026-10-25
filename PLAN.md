@@ -31,7 +31,7 @@ stable”*.
     house-ci.yml       # this repo's own lint/test (house-CI parity)
   actions/
     setup-pi/          # stage 2 — verify (never install) pi + backend + model
-    pi-run/            # headless `pi --print` runner used by stages 4/6/8/10
+    pi-run/            # headless `pi --print --mode json` runner used by stages 4/6/8/10
     baseline/          # stage 3 — branch ai/<issue_number>, baseline ref + diff artifact
     guard-check/       # stages 5/7/9 — the one shared “only X changed” idiom
     pr-open/           # stage 12 — open the PR (body = final status report)
@@ -97,8 +97,15 @@ exit 1                                                 # the workflow re-runs th
 ```
 
 ### 4.2 Headless pi runner (`pi-run` action)
-`pi --print --model "$LLM_MODEL" --system-prompt @pi-prompts/<stage>.md [--session-dir <scratch>]`,
-with project context via `@<file>|<dir>` arguments. The LLM backend comes **only** from
+`pi --approve --print --mode json --model "$LLM_MODEL" <stage instructions as user text> [prompt file] [@plan files]`,
+with project context referenced by path (pi reads each file on demand — nothing
+is injected). `--print` keeps the one-shot contract; `--mode json` makes
+stdout a JSONL event stream that the harness reconstructs into the captured
+output as the text of **every** completed assistant message — a model that
+delivers its verdict block in a non-final turn and closes with a summary must
+not make the stage parse an empty oracle (run 40200905062, stage 10 failed on
+a fully reviewed run under last-message-only capture). The LLM backend comes
+**only** from
 the pi configuration that is a pre-requisite of the runner environment — the action
 never passes or overrides it (*setup-pi: “backend configuration is a pre-requisite of
 the environment”*). Model selection (`llm-model`) is the single adjustable LLM setting
@@ -193,7 +200,7 @@ version is a stable ref”).
 | | the LLM backend configuration is a pre-requisite of the environment | action reads (never writes) the env's pi config | CW-2 |
 | | which configured model is used is adjustable | `llm-model` validated against the configured set | CW-2 |
 | | the setup stage verifies pi actually works | headless smoke check against the selected model | CW-2 |
-| | pi runs headless | `pi-run` action (`--print`, no TUI) | CW-3 |
+| | pi runs headless | `pi-run` action (`--print --mode json`, no TUI) | CW-3 |
 | | pi reads the project files as context | `@file`/`@dir` context in `pi-run` | CW-3 |
 | | a missing or misconfigured pi fails the stage clearly | explicit error, non-zero exit, no install attempt | CW-2 |
 | | an unreachable backend fails the stage clearly | backend reachability probe | CW-2 |
