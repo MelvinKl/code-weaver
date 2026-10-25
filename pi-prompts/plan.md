@@ -4,13 +4,13 @@ the path your output target names — `plans/<issue_number>.md` (overwrite any
 previous version). Do not create any other plan or an aggregate plan.
 
 Write it in **Jira-ticket style**: one issue with `Summary`, `Description`,
-`Acceptance Criteria` (each mapped to the Gherkin scenario it fulfils), and a
+`Acceptance Criteria` (each mapped to the Gherkin scenario it fulfills), and a
 **Tasks** section — an ordered, atomic checkbox checklist (`- [ ] <task>`).
 Each task states, in order:
-1. the requirement(s) it fulfils (feature file + scenario name);
+1. the requirement(s) it fulfills (feature file + scenario name);
 2. **how** — the concrete file-level changes (which files created/modified,
    what each change is, in order). **Include the test changes:** name every
-   test the task adds or must edit to prove the requirement(s) it fulfils,
+   test the task adds or must edit to prove the requirement(s) it fulfills,
    placed where this project's tests live — so the implement stage just makes
    the named changes and never has to derive test coverage on its own.
 3. the **architecture** — how it fits the arc42 docs (which documented
