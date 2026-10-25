@@ -180,6 +180,26 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                        f"{len(produced)} chars) tail:\n"
                        f"{'—' * 40}\n{produced[-1500:]}")
         if not produced.strip() and not common.changed_files(baseline):
+            # Re-run semantics (a new run for the same issue reuses the
+            # previous run's branch — the owner's rule): an implementation
+            # whose work is already on the branch has nothing to write — the
+            # model's empty answer is the truth, not a dropped stream. The
+            # stage-start snapshot (`baseline` above) cannot see the previous
+            # run's work, but the RUN's baseline can (the target's head,
+            # recorded at stage 3): a non-empty diff against it means the
+            # implementation is already in place, and this run's stage is
+            # satisfied as a no-op — green, not an error (field case: run
+            # 40134426478's stage 8 burned four ~20-min phantom retries on
+            # exactly this and failed clean). A genuinely empty tree still
+            # takes the bounded-retry path below.
+            run_diff = common.changed_files(baseline_sha())
+            if run_diff:
+                common.log(f"{stage}: empty model response, and the work is "
+                           f"already in place on the branch ({len(run_diff)} "
+                           f"file(s) vs the run baseline) — a re-run of "
+                           f"implemented work is a satisfied no-op")
+                common.log(f"{stage}: clean — stage complete (no-op)")
+                return
             empty += 1
             if empty > 3:
                 common.log(f"::error::{stage}: model kept returning empty output — "

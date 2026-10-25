@@ -50,6 +50,23 @@ Feature: Implementation
     Then the plan file marks that task as done
     And the implement-check passes with the plan change intact
 
+  @implement
+  Scenario: An empty implementation on an already-implemented branch is a no-op, not an error
+    Given a re-triggered run whose branch already carries the implemented work
+    And the implement stage's model response is empty with no file changes
+    When the stage measures the branch against the run's baseline (the target's head)
+    Then the diff is non-empty — the implementation is already in place
+    And the stage succeeds as a satisfied no-op
+    And the empty response is not treated as a failure of the model or the environment
+
+  @implement @safety
+  Scenario: An empty implementation on an empty tree still fails cleanly
+    Given the implement stage's model response is empty with no file changes
+    And the branch carries no diff against the run's baseline
+    When the stage's bounded retry tolerance is exhausted
+    Then the stage fails with an explicit "model kept returning empty output" error
+    And no later stage runs on the empty work
+
   Scenario: The plan is handed to pi as its files
     Given the planning stage wrote plan files under the plan directory
     When the implementation stage builds pi's context
