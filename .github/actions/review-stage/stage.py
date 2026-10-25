@@ -124,9 +124,14 @@ def review(i: int, test_out: str):
             f"Review it together with the Gherkin requirements and the current diff.\n"
         )
     req = common.env_dir("REQUIREMENTS_DIR")
-    # every @-argument is read as a file — the requirements dir expands to
-    # its feature files (a directory argument would crash pi with EISDIR)
-    context = ["@" + test_out, *stages.dir_files(req)] if req else ["@" + test_out]
+    # referenced by path, NOT injected — embedding the test output and every
+    # requirement file in full would cost far too many tokens; pi reads what
+    # the review needs on demand. test_out is an absolute state-dir path and
+    # is already named in the prompt ("read it"); the requirements dir
+    # expands to its feature files (a directory argument would crash pi with
+    # EISDIR).
+    context = ([test_out, *stages.dir_files(req, at_prefix=False)] if req
+               else [test_out])
     r = stages.pi_stage("review", prompt_file=prompt, context=context)
     if r.returncode != 0:
         out = common.state_file(REVIEW_OUT)

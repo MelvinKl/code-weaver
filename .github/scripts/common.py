@@ -164,34 +164,66 @@ def pi_invoke(
     system_prompt_file: str,
     prompt_file: str | None = None,
     context: list[str] | tuple[str, ...] = (),
+    inject: list[str] | tuple[str, ...] = (),
     timeout: int = 21600,
-    thinking: str | None = "medium",
 ) -> subprocess.CompletedProcess:
     """One headless pi run. The backend comes from the pi configuration that
     is a pre-requisite of the runner environment — this never passes or
     overrides it (setup-pi requirement). Only the model is selected here.
 
-    Reasoning models run UNBOUNDED thinking when pi is invoked without an
-    explicit --thinking level (the model's config maps the default level to
-    'no directive', and the chat template then lets the model think as long
-    as it pleases) — a single call can outlive the loop's time cap. The
-    stage passes a bounded level per call; the runner's configuration itself
-    is never touched."""
+    The thinking level is deliberately NOT passed: pi-jev is configured
+    (PI_JEV_THINKING / --jev-thinking) and classifies *each* prompt and picks
+    the reasoning level itself — escalating for planning/debugging, and
+    de-escalating for short mechanical tasks. Pinning --thinking here would
+    strip
+    that per-prompt control, so this never sets it.
+
+    Files are NOT injected into the prompt. Passing every context file in as
+    an @path argument embeds it in full — far too much token overhead. Only
+    two things are handed to pi directly:
+
+      - the system prompt (via --system-prompt), and
+      - the files named in `inject` (only the implement stage's plan files,
+        the one file set pi must be given in full — it is the live state
+        tracker the stage both reads and updates).
+
+    Every other file is only referenced by path: pi reads what the task
+    needs on demand with its read tool instead of having the whole project
+    pre-loaded."""
     with open(system_prompt_file, encoding="utf-8") as f:
         system_prompt = f.read()
-    cmd = ["pi", "--approve", "--print", "--model", model]
-    if thinking:
-        cmd += ["--thinking", thinking]
-    cmd += ["--system-prompt", system_prompt]
+    cmd = ["pi", "--approve", "--print", "--model", model,
+           "--system-prompt", system_prompt]
+    prompt_text = ""
     if prompt_file:
         with open(prompt_file, encoding="utf-8") as f:
-            cmd.append(f.read())
-    cmd += list(context)
+            prompt_text = f.read()
+    # context files are NOT injected — only referenced by path so pi can
+    # open them on demand; embedding them all would waste far too many
+    # tokens
+    if context:
+        ref = ("\n\n[The following files are available to read on demand via "
+               "the read tool — do not recreate them, only open what the task "
+               "needs:]\n"
+               + "\n".join(f"  - {c}" for c in context))
+        prompt_text = f"{prompt_text}\n{ref}".strip()
+    if prompt_text:
+        cmd.append(prompt_text)
+    # the one injected file set: the implement stage's plan files
+    for p in inject:
+        cmd.append("@" + p)
     out_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.out")
     err_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.err")
-    log(f"$ pi --print --model {model} --thinking {thinking or '(unset)'} "
-        f"--system-prompt @{os.path.basename(system_prompt_file)} "
-        f"{' '.join(context)}")
+    label = f"$ pi --print --model {model} --system-prompt "
+    label += f"@{os.path.basename(system_prompt_file)}"
+    hints = []
+    if context:
+        hints.append(f"context: {' '.join(context)}")
+    if inject:
+        hints.append(f"inject: {' '.join(inject)}")
+    if hints:
+        label += " (" + "; ".join(hints) + ")"
+    log(label)
     with open(out_f, "w") as out, open(err_f, "w") as err:
         try:
             r = subprocess.run(cmd, stdout=out, stderr=err, cwd=repo(),

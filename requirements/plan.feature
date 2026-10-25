@@ -1,7 +1,8 @@
 # requirements/plan.feature
 # Factory stages 6 + 7 — one Jira-ticket-style plan per issue, at
-# plans/<issue_number>.md; the planner is injected with only the changed
-# requirements; the guard verifies only that one plan file changed.
+# plans/<issue_number>.md; the planner is told where only the changed
+# requirements are (not handed them in full); the guard verifies only that
+# one plan file changed.
 
 Feature: Planning
   As the factory
@@ -29,10 +30,11 @@ Feature: Planning
     And no overall/aggregate plan file is created
 
   @plan
-  Scenario: The planner is injected with only the changed requirements
+  Scenario: The planner is told where the changed requirements are, not handed them in full
     Given the full Gherkin requirements include scenarios that already exist (which bound what must NOT change)
     When the plan stage builds pi's context
-    Then only the requirement file(s) that changed since the baseline are passed as context
+    Then only the requirement file(s) that changed since the baseline are referenced by path
+    And pi reads them on demand rather than having them embedded in the prompt
     And the whole existing oracle is not injected into the planner
 
   @plan

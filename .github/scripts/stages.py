@@ -54,16 +54,19 @@ def stage_baseline() -> str:
     return baseline_sha()
 def pi_stage(template: str, prompt_file: str | None = None,
              context: list[str] | tuple[str, ...] = (),
-             timeout: int = 21600, thinking: str | None = "medium"):
+             inject: list[str] | tuple[str, ...] = (),
+             timeout: int = 21600):
     # 360-minute cap: the user's model is slow (a thinking phase at ~13
     # tok/s over a large context legitimately runs for hours); the stage jobs
     # give 8 hours around each call, and a cut-off call is retried inside
     # the bounded loop. Overridable per call via CW_PI_TIMEOUT.
     """One pi invocation against a pi-prompts/ template — the same
-    common.pi_invoke the declarative pi-run action wraps."""
+    common.pi_invoke the declarative pi-run action wraps. The thinking level
+    is never pinned here (pi-jev chooses it per prompt). `context` files are
+    only referenced by path; only `inject` files are handed to pi in full."""
     sp = os.path.join(repo_root(), "pi-prompts", template + ".md")
     return common.pi_invoke(os.environ["LLM_MODEL"], sp, prompt_file,
-                            list(context), timeout, thinking)
+                            list(context), list(inject), timeout)
 
 
 def run_guard(baseline: str, allow: list[str]):
@@ -77,38 +80,44 @@ def run_guard(baseline: str, allow: list[str]):
     return common.guard(baseline, allow)
 
 
-def dir_files(d: str) -> list[str]:
-    """A directory's files as pi @-arguments, sorted for a deterministic
-    prompt.
+def dir_files(d: str, at_prefix: bool = True) -> list[str]:
+    """A directory's files, sorted for a deterministic prompt.
 
     pi's @-argument handling reads every argument as a file (it even sniffs
     image mime types), so a directory there crashes pi with EISDIR — context
     entries are always concrete files; directories are expanded to the files
-    they contain. A missing dir yields an empty list (skipped, not fatal)."""
+    they contain. A missing dir yields an empty list (skipped, not fatal).
+
+    With `at_prefix` (the default) the paths come back pi @-arguments; with
+    `at_prefix=False` they come back plain paths for callers that only need to
+    tell pi where a file lives (pi now references files by path rather than
+    injecting them)."""
     if not d or not os.path.isdir(d):
         return []
-    return ["@" + os.path.join(d, f)
-            for f in sorted(os.listdir(d))
-            if os.path.isfile(os.path.join(d, f))]
+    out = [os.path.join(d, f) for f in sorted(os.listdir(d))
+           if os.path.isfile(os.path.join(d, f))]
+    return ["@" + p for p in out] if at_prefix else out
 
 
 def project_context() -> list[str]:
-    """The project files pi reads as context — the full Gherkin oracle, the
-    arc42 markdown under the doc dir, and the README (the implement, review
-    and extract stages read the whole oracle). The PLANNER stage uses the
-    narrower `changed_requirements_context` instead — it is injected with
-    only the changed requirements."""
+    """The project files pi is told where to find — the arc42 markdown under
+    the doc dir, the existing Gherkin oracle, and the README.
+
+    These are plain paths (not pi @-arguments): pi references them by path and
+    reads what it needs on demand rather than having them all injected into
+    the prompt (embedding every project file costs far too many tokens)."""
     req, doc = common.env_dir("REQUIREMENTS_DIR"), common.env_dir("DOC_DIR")
-    ctx: list[str] = dir_files(req) + dir_files(doc)
+    ctx: list[str] = dir_files(req, at_prefix=False) + dir_files(
+        doc, at_prefix=False)
     if os.path.isfile("README.md"):
-        ctx.append("@README.md")
+        ctx.append("README.md")
     return ctx
 
 
 def changed_requirement_files() -> list[str]:
     """The requirement files that changed since the trigger baseline — the
-    delta requirements. The planner is injected with only these, not the
-    whole existing oracle (which only bounds what must NOT change)."""
+    delta requirements. The planner is only told where these are (not handed
+    them in full) — see the no-injection rule below."""
     req = common.env_dir("REQUIREMENTS_DIR")
     if not req:
         return []
@@ -117,14 +126,20 @@ def changed_requirement_files() -> list[str]:
 
 
 def changed_requirements_context() -> list[str]:
-    """The project files the PLANNER reads as context: only the changed
-    requirements, plus the arc42 documentation (doc dir) and the README."""
-    ctx = ["@" + f for f in changed_requirement_files()]
+    """The project files the PLANNER is told where to find: only the changed
+    requirements, plus the arc42 documentation (doc dir) and the README.
+
+    These are plain paths (not pi @-arguments), consistent with the
+    no-injection rule — pi is told where the files are and reads what the
+    planning task needs on demand rather than having them all embedded in the
+    prompt (embedding every project file costs far too many tokens). Only the
+    system prompt and the implement stage's plan file are ever injected."""
+    ctx = list(changed_requirement_files())
     doc = common.env_dir("DOC_DIR")
     if doc:
-        ctx.extend(dir_files(doc))
+        ctx.extend(dir_files(doc, at_prefix=False))
     if os.path.isfile("README.md"):
-        ctx.append("@README.md")
+        ctx.append("README.md")
     return ctx
 
 
@@ -154,7 +169,9 @@ def under(path: str, prefix: str) -> bool:
 
 def run_generation_stage(stage: str, template: str, allow: list[str],
                          context: list[str], prompt_file: str | None = None,
-                         post_ok=None, on_violation=None, allow_noop: bool = True) -> None:
+                         inject: list[str] | tuple[str, ...] = (),
+                         post_ok=None, on_violation=None,
+                         allow_noop: bool = True) -> None:
     """generate → commit → guard → (clean: post_ok check / break;
     leak: revert + re-run) — bounded by the loop caps.
 
@@ -178,7 +195,7 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
         # next prompt
         pf = prompt_file() if callable(prompt_file) else prompt_file
         try:
-            r = pi_stage(template, pf, context)
+            r = pi_stage(template, pf, context, inject=inject)
         except Exception:
             import traceback
             common.log(f"::error::{stage}: pi run crashed (the environment is "

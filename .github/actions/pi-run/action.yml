@@ -1,10 +1,15 @@
 name: pi-run
 description: >-
   One headless pi run (stage 4/6/8/10 primitive): pi --print --model <model>
-  --system-prompt @pi-prompts/<template>.md <prompt> <@context refs>. The LLM
-  backend comes from the pi configuration that is a pre-requisite of the
-  runner environment — this action selects the model and supplies the prompt
-  only, and records pi's token usage into the run's budget counter.
+  --system-prompt @pi-prompts/<template>.md <prompt>. The LLM backend comes
+  from the pi configuration that is a pre-requisite of the runner environment
+  — this action selects the model and supplies the prompt only, and records
+  pi's token usage into the run's budget counter.
+
+  pi's thinking level is never pinned (pi-jev chooses it per prompt). Files
+  are NOT injected into the prompt — the `context` paths are only referenced
+  so pi reads them on demand; the only files pi is handed in full are the
+  system prompt and (for the implement template) the plan files.
 inputs:
   model:
     description: Which configured model to run (validated by setup-pi)
@@ -17,7 +22,12 @@ inputs:
     required: false
     default: ""
   context:
-    description: Space-separated @file/@dir context refs pi reads from the project
+    description: >-
+      Space-separated project-file paths pi is TOLD where to find — pi reads
+      each on demand with its read tool. Files are NOT injected (their whole
+      contents are not embedded in the prompt; too costly in tokens). The only
+      files pi is handed in full are the system prompt and, for the implement
+      template, the plan files (see the inject handling in common.pi_invoke).
     required: false
     default: ""
   timeout:

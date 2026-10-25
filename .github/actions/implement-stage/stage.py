@@ -124,13 +124,15 @@ def main() -> None:
     # keeps complete, like README.md, so it joins the allow set.
     if os.path.isfile("PLAN.md") and "PLAN.md" not in allow:
         allow.append("PLAN.md")
-
-    # The current issue's plan file is context too (pi reads its task state
-    # to pick up where tracking left off); it is a single file, never a
-    # directory, as an @-argument.
-    context = stages.project_context()
-    if current:
-        context.append("@" + current)
+    context = stages.project_context()  # referenced by path, not injected
+    # ONLY this issue's current plan file is handed to pi in full: it is the
+    # live state tracker this stage both reads and updates, and the plan is
+    # the one documented exception to the no-injection rule. Inject it as a
+    # plain path (pi_invoke turns it into a single @-argument) — it is never
+    # appended to context, which is only referenced by path. Every other
+    # context file is therefore only referenced by path (embedding the whole
+    # project costs far too many tokens); pi reads what it needs on demand.
+    inject = [current] if current else []
 
     # One task per invocation, looped until the plan is fully tracked out or
     # a cap is reached. `allow_noop=False` so an empty model response is a

@@ -75,12 +75,29 @@ Feature: Configuration surface
     Then it passes it via the reusable workflow's secrets block
     And no secret value appears in with inputs or committed files
 
-  Scenario: A stage's pi calls bound the model's thinking
-    Given a reasoning model whose chat template runs thinking unbounded by default
-    When a stage builds a headless pi invocation
-    Then the command passes an explicit bounded --thinking level
+  Scenario: A stage's pi call lets pi-jev choose the thinking level
+    Given pi-jev is configured to classify each prompt (PI_JEV_THINKING / --jev-thinking)
+    When a stage builds a headless pi invocation of a reasoning model
+    Then the command does NOT pass an explicit --thinking level
+    And pi-jev chooses the reasoning level for that prompt
     And the runner's pre-installed pi configuration is never modified
-    And a single call cannot reason past the loop's time cap
+    And a single call stays within the pi call's own time cap
+
+  @config
+  Scenario: Project files are referenced by path, not injected into the pi call
+    Given a stage builds a headless pi invocation with project files available (the arc42 docs, the Gherkin oracle, the README, the test output)
+    When the stage passes those files to pi
+    Then they are only referenced by path in the invocation
+    And their contents are NOT embedded in the prompt in full
+    And pi reads the ones the task needs on demand with its read tool
+    And the invocation's token overhead stays small
+
+  @config
+  Scenario: The plan files are the only implementation files handed to pi in full
+    Given the implement stage builds a headless pi invocation
+    Then the system prompt is handed to pi in full
+    And the plan files the stage reads and updates are handed to pi in full
+    And every other project file is only referenced by path
 
   Scenario: A pi call that dies with no output is a dropped stream, not a broken environment
     Given the model backend process is recreated while a stage's pi call is in flight

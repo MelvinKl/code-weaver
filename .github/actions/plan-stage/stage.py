@@ -3,9 +3,10 @@
 
 pi writes the plan for THIS issue as a single Jira-ticket-style markdown file
 at `PLAN_DIR/<issue_number>.md`: one plan per issue, no overall plan. The
-planner is injected with only the CHANGED requirement files (the delta), not
-the whole Gherkin oracle — the guard verifies only that one plan file
-changed; any other change reverts and re-runs.
+planner is told where only the CHANGED requirement files (the delta) are —
+not handed the whole Gherkin oracle in full (the no-injection rule); it reads
+them on demand. The guard verifies only that one plan file changed; any
+other change reverts and re-runs.
 """
 from __future__ import annotations
 
