@@ -67,6 +67,23 @@ def current_plan_path(issue: str, plan_dir: str) -> str:
     return os.path.join(plan_dir, f"{issue}.md")
 
 
+def build_target(issue: str, plan_dir: str) -> str:
+    """A one-line instruction naming the exact plan path for THIS issue —
+    passed to pi as the prompt alongside the implement template. The template
+    refers to `plans/<issue_number>.md` as a placeholder; the concrete issue
+    number and path come from here (rebuilt every run so a resume targets the
+    same file). Empty (a blank prompt) when the issue/plan dir is unresolved."""
+    pf = common.state_file("implement-target.md")
+    if not (issue and plan_dir):
+        open(pf, "w", encoding="utf-8").write("")
+        return pf
+    with open(pf, "w", encoding="utf-8") as f:
+        f.write(f"The plan for issue number {issue}. Open and update exactly "
+                f"this plan file (and only this issue's plan):")
+        f.write(f"\n\n    ```\n    {stages.plan_path(issue, plan_dir)}\n    ```\n")
+    return pf
+
+
 def has_open_task(path: str) -> bool:
     """True if the plan still has an open (`- [ ]`) task to work on."""
     if not (path and os.path.isfile(path)):
@@ -151,6 +168,7 @@ def main() -> None:
             template="implement",
             allow=allow,
             context=context,
+            prompt_file=build_target(issue, plan_dir),
             on_violation=plan_loop_back,
             allow_noop=False,
         )

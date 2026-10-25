@@ -182,7 +182,9 @@ def pi_invoke(
     an @path argument embeds it in full — far too much token overhead. Only
     two things are handed to pi directly:
 
-      - the system prompt (via --system-prompt), and
+      - the stage instructions, folded into the USER text (pi's own default
+        system prompt is left in place — a bespoke --system-prompt would both
+        overwrite it and cost more tokens), and
       - the files named in `inject` (only the implement stage's plan files,
         the one file set pi must be given in full — it is the live state
         tracker the stage both reads and updates).
@@ -191,13 +193,16 @@ def pi_invoke(
     needs on demand with its read tool instead of having the whole project
     pre-loaded."""
     with open(system_prompt_file, encoding="utf-8") as f:
-        system_prompt = f.read()
-    cmd = ["pi", "--approve", "--print", "--model", model,
-           "--system-prompt", system_prompt]
-    prompt_text = ""
+        instructions = f.read()
+    cmd = ["pi", "--approve", "--print", "--model", model]
+    # Give the stage instructions as normal USER text — never --system-prompt:
+    # pi's default system prompt is shorter than a bespoke prompt, so folding
+    # the instructions into the user prompt keeps pi's default system prompt
+    # in place AND costs fewer tokens.
+    prompt_text = instructions
     if prompt_file:
         with open(prompt_file, encoding="utf-8") as f:
-            prompt_text = f.read()
+            prompt_text = f"{instructions}\n\n{f.read()}".strip()
     # context files are NOT injected — only referenced by path so pi can
     # open them on demand; embedding them all would waste far too many
     # tokens
@@ -214,8 +219,8 @@ def pi_invoke(
         cmd.append("@" + p)
     out_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.out")
     err_f = state_file(f"pi-{os.path.basename(system_prompt_file)}.err")
-    label = f"$ pi --print --model {model} --system-prompt "
-    label += f"@{os.path.basename(system_prompt_file)}"
+    label = (f"$ pi --print --model {model}   # instructions from "
+             f"{os.path.basename(system_prompt_file)} (as user text, no --system-prompt)")
     hints = []
     if context:
         hints.append(f"context: {' '.join(context)}")

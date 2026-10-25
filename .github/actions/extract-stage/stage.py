@@ -48,10 +48,12 @@ def post_ok() -> bool:
     """The Gherkin-oracle half of stage 5: every generated .feature must
     parse with the official parser, and the delta's shape is pinned — at most
     ONE new file, named after the issue; existing requirement files stay
-    byte-identical (scenario: \"Extraction writes one new file named after
-    the issue\"). A violation is reverted and its verdict persisted, so the
-    next iteration's prompt carries it and the model repairs against the
-    exact complaint instead of regenerating blind."""
+    consistent: one new file named after the issue, and existing requirement
+    files adjusted where a changed requirement forces it so the oracle stays
+    internally consistent (scenario: \"Extraction writes one new file named
+    after the issue\" and keeps the oracle consistent). A violation is reverted
+    and its verdict persisted, so the next iteration's prompt carries it and
+    the model repairs against the exact complaint instead of regenerating blind."""
     baseline = stages.baseline_sha()
     req = common.env_dir("REQUIREMENTS_DIR").rstrip("/")
     validator = os.path.join(stages.repo_root(), ".github", "scripts", "gherkin-validate.py")
@@ -68,12 +70,12 @@ def post_ok() -> bool:
     for f in changed:
         if not stages.under(f, req):
             continue  # the guard's territory
-        existed = subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
-                                 cwd=common.repo(), capture_output=True).returncode == 0
-        if existed:
-            complaints.append(f"an existing requirement file must not change: {f}")
-            revert.append(f)
-        else:
+        # A genuinely new file is the one named after the issue (checked below).
+        # An existing requirement file that changed is a deliberate oracle edit
+        # (a changed requirement contradicts it) — allowed, not reverted.
+        is_new = not subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
+                                    cwd=common.repo(), capture_output=True).returncode == 0
+        if is_new:
             new.append(f)
     if len(new) > 1:
         complaints.append(f"at most one new file is allowed — found {len(new)}: "

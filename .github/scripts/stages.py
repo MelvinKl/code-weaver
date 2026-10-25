@@ -132,8 +132,10 @@ def changed_requirements_context() -> list[str]:
     These are plain paths (not pi @-arguments), consistent with the
     no-injection rule — pi is told where the files are and reads what the
     planning task needs on demand rather than having them all embedded in the
-    prompt (embedding every project file costs far too many tokens). Only the
-    system prompt and the implement stage's plan file are ever injected."""
+    prompt (embedding every project file costs far too many tokens). The only
+    file pi is handed to it in full is the implement stage's plan file (the
+    stage instructions ride as normal user text, pi's default system prompt
+    is left in place)."""
     ctx = list(changed_requirement_files())
     doc = common.env_dir("DOC_DIR")
     if doc:
