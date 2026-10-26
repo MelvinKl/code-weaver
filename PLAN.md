@@ -319,7 +319,15 @@ version is a stable ref”).
   build does not propagate — the step is now self-contained (it reads the PR
   number from the state file first, the env only as fallback), because a
   re-run is pinned to the run's commit and cannot pick up a later workflow
-  fix: only the next triggered run carries a workflow change.
+  fix: only the next triggered run carries a workflow change. A second ghost
+  of the same family hit once the factory reached the gates with a healthy
+  PR: the step resolved the sha via the endpoint's field-suffix form
+  (`pulls/<n>/head.sha`), which 404s on this API surface — the 404 body
+  leaked into `GITHUB_OUTPUT` as an invalid file command and the gates job
+  died 4 s in, before the gate loop ever started (run 40219192721, job
+  13-14, PR #48: the full PR object carried `head.sha` all along). The step
+  now takes `.head.sha` from the full object via `jq` and fails explicitly
+  when the PR cannot be resolved at all.
 - **Self-editing separation** — implement/gate allow sets exclude `requirements-dir`:
   intra-PR test fixes are fine, requirement edits are not (safety/guard-rail
   scenarios). The implement allow set **includes `plan-dir` and `PLAN.md`**:

@@ -960,7 +960,19 @@ jobs:
           # ghost family); the env stays as fallback for healthy runners.
           PR=$(cat "$RUNNER_TEMP/cw/state/pr/pr-number.txt" 2>/dev/null) || true
           [ -n "$PR" ] || PR="${CW_PR_NUMBER}"
-          echo "head-sha=$(gh api repos/$GITHUB_REPOSITORY/pulls/${PR}/head.sha)" >> "$GITHUB_OUTPUT"
+          # The sha comes from the FULL PR object via jq: the field-suffix
+          # form of the endpoint (`pulls/<n>/head.sha`) 404s on this API
+          # surface — and its 404 body echoed into GITHUB_OUTPUT is an
+          # invalid file command, so the step died before the gate loop ever
+          # started (run 40219192721's gates job: 4 s from start to death,
+          # against a perfectly healthy PR #48 whose full object carried
+          # head.sha all along).
+          HEAD_SHA=$(gh api repos/$GITHUB_REPOSITORY/pulls/"$PR" --jq .head.sha 2>/dev/null) || true
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::could not resolve the head sha of PR #${PR} — the gates have nothing to poll; check the PR and the token's access to the repo"
+            exit 1
+          fi
+          echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
       - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
         if: ${{ env.CW_STARTED == 'true' }}
         uses: ./.github/actions/gates-stage/
