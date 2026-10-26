@@ -26,7 +26,16 @@ import stages
 
 
 def existing_context() -> list[str]:
-    return stages.project_context()
+    """The project files the extraction's pi call reads — handed to pi as
+    @-file arguments (pi reads the named files as context before answering):
+    the Gherkin oracle, the arc42 markdown (the docs/ files — the top-level
+    PLAN.md where a target has no doc dir), README.md, and the baseline diff
+    (the issue's change set recorded by the baseline stage)."""
+    ctx = stages.project_context()
+    diff = common.state_file("baseline.diff")
+    if os.path.exists(diff):
+        ctx.append(diff)
+    return ctx
 
 
 def _revert(f: str, baseline: str) -> None:
@@ -46,14 +55,15 @@ def _revert(f: str, baseline: str) -> None:
 
 def post_ok() -> bool:
     """The Gherkin-oracle half of stage 5: every generated .feature must
-    parse with the official parser, and the delta's shape is pinned — at most
-    ONE new file, named after the issue; existing requirement files stay
-    consistent: one new file named after the issue, and existing requirement
-    files adjusted where a changed requirement forces it so the oracle stays
-    internally consistent (scenario: \"Extraction writes one new file named
-    after the issue\" and keeps the oracle consistent). A violation is reverted
-    and its verdict persisted, so the next iteration's prompt carries it and
-    the model repairs against the exact complaint instead of regenerating blind."""
+    parse with the official parser, and the delta's shape is pinned — exactly
+    ONE new file, named after the issue, and NO existing feature file differs
+    from the baseline: a changed existing requirement file is reverted to its
+    baseline content and the extraction re-runs (the prompt forbids editing
+    existing files — scenario: "Extraction writes one new file named after
+    the issue" — "no existing feature file differs from the baseline"). A
+    violation is reverted and its verdict persisted, so the next iteration's
+    prompt carries it and the model repairs against the exact complaint
+    instead of regenerating blind."""
     baseline = stages.baseline_sha()
     req = common.env_dir("REQUIREMENTS_DIR").rstrip("/")
     validator = os.path.join(stages.repo_root(), ".github", "scripts", "gherkin-validate.py")
@@ -67,24 +77,33 @@ def post_ok() -> bool:
     # stage pins what is allowed inside it.
     num = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
     new: list[str] = []
+    edited: list[str] = []
     for f in changed:
         if not stages.under(f, req):
             continue  # the guard's territory
-        # A genuinely new file is the one named after the issue (checked below).
-        # An existing requirement file that changed is a deliberate oracle edit
-        # (a changed requirement contradicts it) — allowed, not reverted.
-        is_new = not subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
-                                    cwd=common.repo(), capture_output=True).returncode == 0
-        if is_new:
+        existed = subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
+                                 cwd=common.repo(), capture_output=True).returncode == 0
+        if existed:
+            # No existing feature file may differ from the baseline — the
+            # prompt forbids editing existing files, so any change to one is
+            # a violation: reverted to its baseline content, re-run.
+            edited.append(f)
+        else:
+            # A genuinely new file is the one named after the issue
+            # (checked below).
             new.append(f)
     if len(new) > 1:
-        complaints.append(f"at most one new file is allowed — found {len(new)}: "
+        complaints.append(f"exactly one new file is allowed — found {len(new)}: "
                           + ", ".join(new))
         revert += new
     elif len(new) == 1 and num and str(num) not in os.path.basename(new[0]):
         complaints.append(f"the one new file must be named after the issue — expected "
                           f"a name containing #{num}, got '{os.path.basename(new[0])}'")
         revert.append(new[0])
+    if edited:
+        complaints.append("no existing feature file may differ from the baseline — "
+                          f"reverted: {', '.join(edited)}")
+        revert += edited
 
     # Parse oracle: every generated .feature must parse with the official
     # Cucumber Gherkin parser (a requirement must be executable).
@@ -178,6 +197,11 @@ def main() -> None:
         context=existing_context(),
         prompt_file=build_prompt,
         post_ok=post_ok,
+        # the extraction stage is the @-file slice of the context contract:
+        # the project files ride the pi call as @-arguments and pi reads the
+        # named files as context before answering (the other stages reference
+        # their context by path — one invocation never mixes the slices)
+        context_as_args=True,
     )
 
 

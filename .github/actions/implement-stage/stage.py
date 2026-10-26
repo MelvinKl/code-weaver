@@ -9,11 +9,16 @@ done (or a cap is hit). The guard's allow set therefore includes only THIS
 issue's plan file, never another issue's plan: the implementation must never
 edit a plan that does not belong to the current issue.
 
-The guard deliberately EXCLUDES only the requirements dir: if implementation
-edits a requirement, the guard reverts the file and the stage loops back to
-the plan stage (regenerating the plan against the unchanged requirement)
-before implementing again — "a requirement edited during implementation loops
-back to planning".
+The guard deliberately EXCLUDES the requirements dir (and the plans dir):
+if implementation edits a requirement, the guard reverts the file and the
+stage loops back to the plan stage (regenerating the plan against the
+unchanged requirement) before implementing again — "a requirement edited
+during implementation loops back to planning". The plans dir is excluded
+because the plan is a live state tracker of THIS issue's tasks: only the
+current issue's plan file is editable — main() re-allows exactly that one
+file (mirroring plan_stage_allow), and any other plan file is a violation
+the guard reverts (implement: "implementation may only edit the current
+issue's plan", "the allow set covers the repo's real layout").
 """
 from __future__ import annotations
 
@@ -37,8 +42,8 @@ OPEN_TASK_RE = re.compile(r"^\s*-\s*\[\s*\]\s*")
 def source_dirs() -> list[str]:
     """The code dirs the implementation may touch.
 
-    Every top-level directory except the protected one (requirements) and
-    the VCS/dependency noise. The conventional source dirs
+    Every top-level directory except the protected ones (requirements and
+    plans) and the VCS/dependency noise. The conventional source dirs
     (src, tests, lib, app, packages, services, internal) are included
     wherever they exist — and so are the repo's other code locations:
     a factory repo keeps its own source under .github/, and having a
@@ -50,7 +55,7 @@ def source_dirs() -> list[str]:
     is not a source dir here — main() adds the current issue's plan file to
     the allow set explicitly (and ONLY that one file — never another
     issue's plan)."""
-    protected = {common.env_dir("REQUIREMENTS_DIR")}
+    protected = {common.env_dir("REQUIREMENTS_DIR"), common.env_dir("PLAN_DIR")}
     noise = {".git", "node_modules", "__pycache__", ".venv", ".tox", ".mypy_cache"}
     return [e for e in sorted(os.listdir("."))
             if os.path.isdir(e)
@@ -127,7 +132,8 @@ def main() -> None:
     current = current_plan_path(issue, plan_dir)
 
     allow = source_dirs()
-    # ONLY this issue's plan file is editable — never another issue's plan.
+    # source_dirs() excludes the plans dir: the ONLY plan file editable is
+    # this issue's — never another issue's plan — so re-allow exactly it.
     if current and current not in allow:
         allow.append(current)
     elif plan_dir:

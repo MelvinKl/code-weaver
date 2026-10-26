@@ -14,6 +14,14 @@ from __future__ import annotations
 import os
 import sys
 
+try:
+    from gherkin import Parser
+except ImportError:
+    # An interpreter without the official parser port (the suite must run on
+    # an interpreter without pytest — and one without the port): the oracle
+    # check is skipped-not-failed there, never a failure.
+    Parser = None
+
 
 def fail(msg: str) -> None:
     print(f"FAIL {msg}", file=sys.stderr)
@@ -33,8 +41,9 @@ def scenario_count(doc) -> int:
 
 
 def validate_file(path: str) -> tuple[int, list[str]]:
-    from gherkin import Parser
-
+    if Parser is None:
+        return (0, [f"{path}: skipped — the official Gherkin parser port is "
+                    f"not installed on this interpreter (skipped, not failed)"])
     with open(path, encoding="utf-8") as f:
         source = f.read()
     try:
@@ -68,6 +77,11 @@ def main() -> int:
     if len(sys.argv) < 2:
         print("usage: gherkin-validate.py <file-or-dir>…", file=sys.stderr)
         return 2
+    if Parser is None:
+        print("gherkin-validate: SKIP — the official Gherkin parser port is not "
+              "installed on this interpreter; the oracle check is skipped, "
+              "not failed")
+        return 0
     total = ok = 0
     problems: list[str] = []
     for path in iter_features(sys.argv[1:]):

@@ -55,7 +55,8 @@ def stage_baseline() -> str:
 def pi_stage(template: str, prompt_file: str | None = None,
              context: list[str] | tuple[str, ...] = (),
              inject: list[str] | tuple[str, ...] = (),
-             timeout: int = 21600):
+             timeout: int = 21600,
+             context_as_args: bool = False):
     # 360-minute cap: the user's model is slow (a thinking phase at ~13
     # tok/s over a large context legitimately runs for hours); the stage jobs
     # give 8 hours around each call, and a cut-off call is retried inside
@@ -66,7 +67,8 @@ def pi_stage(template: str, prompt_file: str | None = None,
     only referenced by path; only `inject` files are handed to pi in full."""
     sp = os.path.join(repo_root(), "pi-prompts", template + ".md")
     return common.pi_invoke(os.environ["LLM_MODEL"], sp, prompt_file,
-                            list(context), list(inject), timeout)
+                            list(context), list(inject), timeout,
+                            context_as_args=context_as_args)
 
 
 def run_guard(baseline: str, allow: list[str]):
@@ -111,6 +113,11 @@ def project_context() -> list[str]:
         doc, at_prefix=False)
     if os.path.isfile("README.md"):
         ctx.append("README.md")
+    # A repo without a doc dir documents itself in its top-level planning
+    # markdown — when the doc dir yields no arc42 files, reference PLAN.md so
+    # the context still carries the arc42 set.
+    if not dir_files(doc, at_prefix=False) and os.path.isfile("PLAN.md"):
+        ctx.append("PLAN.md")
     return ctx
 
 
@@ -142,6 +149,11 @@ def changed_requirements_context() -> list[str]:
         ctx.extend(dir_files(doc, at_prefix=False))
     if os.path.isfile("README.md"):
         ctx.append("README.md")
+    # Same top-level-arc42 fallback as project_context(): a repo whose doc
+    # dir yields no arc42 files keeps its arc42 set in PLAN.md — the planner
+    # is grounded in it.
+    if not dir_files(doc, at_prefix=False) and os.path.isfile("PLAN.md"):
+        ctx.append("PLAN.md")
     return ctx
 
 
@@ -173,7 +185,8 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                          context: list[str], prompt_file: str | None = None,
                          inject: list[str] | tuple[str, ...] = (),
                          post_ok=None, on_violation=None,
-                         allow_noop: bool = True) -> None:
+                         allow_noop: bool = True,
+                         context_as_args: bool = False) -> None:
     """generate → commit → guard → (clean: post_ok check / break;
     leak: revert + re-run) — bounded by the loop caps.
 
@@ -197,7 +210,8 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
         # next prompt
         pf = prompt_file() if callable(prompt_file) else prompt_file
         try:
-            r = pi_stage(template, pf, context, inject=inject)
+            r = pi_stage(template, pf, context, inject=inject,
+                         context_as_args=context_as_args)
         except Exception:
             import traceback
             common.log(f"::error::{stage}: pi run crashed (the environment is "

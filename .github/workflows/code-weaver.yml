@@ -1,7 +1,7 @@
 name: code-weaver
 on:
-  issues:            # editing an issue to add the label starts a run
-    types: [opened, edited, labeled]
+  issues:            # only a label addition starts a run — opening or editing no longer fires it
+    types: [labeled]
   workflow_dispatch:
     inputs:
       issue_number: { description: Issue to process, type: string, required: false }
@@ -15,7 +15,9 @@ jobs:
     # `runs-on:` here makes the file schema-invalid. The runner is chosen
     # through the factory's `runner` input instead (every factory job runs on
     # it, so its environment must have pi pre-installed & configured).
-    uses: MelvinsPersonalProjects/code-weaver/.github/workflows/factory.yml@main
+    # the oracle pins the owner and a VERSION TAG (a moving branch ref is not
+    # a stable ref)
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@main
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements

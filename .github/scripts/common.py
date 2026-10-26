@@ -238,6 +238,7 @@ def pi_invoke(
     context: list[str] | tuple[str, ...] = (),
     inject: list[str] | tuple[str, ...] = (),
     timeout: int = 21600,
+    context_as_args: bool = False,
 ) -> subprocess.CompletedProcess:
     """One headless pi run. The backend comes from the pi configuration that
     is a pre-requisite of the runner environment — this never passes or
@@ -261,9 +262,22 @@ def pi_invoke(
         the one file set pi must be given in full — it is the live state
         tracker the stage both reads and updates).
 
-    Every other file is only referenced by path: pi reads what the task
-    needs on demand with its read tool instead of having the whole project
-    pre-loaded.
+    The context contract has two slices, and one invocation uses exactly one
+    (the requirements decide which stage sits in which slice):
+
+      - `context_as_args=False` — the default (plan / implement / review /
+        pr-body calls): every other file is only referenced by path; its
+        contents are NOT embedded in the prompt, pi reads the ones the task
+        needs on demand with its read tool, and the invocation's token
+        overhead stays small (configuration: "project files are referenced
+        by path, not injected into the pi call");
+      - `context_as_args=True` — the extraction stage: the project files
+        (the Gherkin oracle, the arc42 markdown, the README, the baseline
+        diff) are handed to pi as @-file arguments — pi reads the named
+        files as context before answering (setup-pi: "pi reads the project
+        files as context"). The extraction needs the whole oracle, the
+        arc42 and the baseline diff up front to keep the delta consistent
+        with the existing scenarios.
 
     The invocation is `pi --print --mode json`: one-shot, stdout is a
     JSONL event stream. The stream is captured in full and EVERY completed
@@ -292,15 +306,29 @@ def pi_invoke(
     if prompt_file:
         with open(prompt_file, encoding="utf-8") as f:
             prompt_text = f"{instructions}\n\n{f.read()}".strip()
-    # context files are NOT injected — only referenced by path so pi can
-    # open them on demand; embedding them all would waste far too many
-    # tokens
-    if context:
-        ref = ("\n\n[The following files are available to read on demand via "
-               "the read tool — do not recreate them, only open what the task "
-               "needs:]\n"
-               + "\n".join(f"  - {c}" for c in context))
-        prompt_text = f"{prompt_text}\n{ref}".strip()
+    # the context slice (see the docstring): path-referenced by default;
+    # @-file arguments only when the stage opts in (the extraction stage)
+    # — a context entry that does not exist is dropped, never passed (a
+    # missing @-file would make pi's reader fail the call)
+    ctx = [c for c in context if os.path.isfile(c)]
+    if ctx:
+        if context_as_args:
+            prompt_text = (
+                prompt_text
+                + "\n\n[The following project files are handed to pi as "
+                "@-file arguments — pi reads the named files as context "
+                "before answering:]\n"
+                + "\n".join(f"  - {c}" for c in ctx)
+            ).strip()
+            cmd += ["@" + c for c in ctx]
+        else:
+            prompt_text = (
+                prompt_text
+                + "\n\n[The following files are available to read on demand "
+                "via the read tool — do not recreate them, only open what "
+                "the task needs:]\n"
+                + "\n".join(f"  - {c}" for c in ctx)
+            ).strip()
     if prompt_text:
         cmd.append(prompt_text)
     # the one injected file set: the implement stage's plan files
@@ -319,7 +347,8 @@ def pi_invoke(
              f"{os.path.basename(system_prompt_file)} (as user text, no --system-prompt)")
     hints = []
     if context:
-        hints.append(f"context: {' '.join(context)}")
+        hints.append(f"context: {' '.join(context)}"
+                     + (" (as @-file arguments)" if context_as_args else ""))
     if inject:
         hints.append(f"inject: {' '.join(inject)}")
     if hints:

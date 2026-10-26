@@ -192,8 +192,18 @@ runs:
                 on_ai_branch = subprocess.run(["git", "branch", "--show-current"], cwd=repo,
                                               capture_output=True, text=True).stdout.strip() \
                     == os.environ.get("AI_BRANCH", "")
-                if on_ai_branch and doc_dir and os.path.isdir(doc_dir):
-                    for md in sorted(glob.glob(os.path.join(doc_dir, "**", "*.md"), recursive=True)):
+                if on_ai_branch:
+                    if doc_dir and os.path.isdir(doc_dir):
+                        arc42_files = sorted(glob.glob(
+                            os.path.join(doc_dir, "**", "*.md"), recursive=True))
+                    elif os.path.isfile("PLAN.md"):
+                        # a repo without a doc dir documents itself in its
+                        # top-level arc42 markdown — fall back to it so the
+                        # AI-activity section still lands on the arc42 set
+                        arc42_files = [os.path.join(repo, "PLAN.md")]
+                    else:
+                        arc42_files = []
+                    for md in arc42_files:
                         text = open(md).read()
                         marker = "## AI activity (code-weaver)"
                         if marker in text:
