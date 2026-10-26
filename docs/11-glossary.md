@@ -15,9 +15,18 @@
 - **Delta requirements** — the requirement change an issue implies,
   relative to the baseline; extracted as Gherkin into exactly one new
   file named after the issue.
+- **Delta-scoped review** — the test-and-review stage's review judges only the
+  scenarios of the feature files a run changed (the suite still executes the
+  whole oracle). The standing oracle is the accumulated set, so re-judging
+  every scenario on every run grows with the repo's issue history and was
+  the review step's unbounded runtime; the runs that added scenarios own
+  their review. A run that changed no requirements passes vacuously (the
+  suite's full result stands, the empty verdict block is the answer); a run
+  that DID change scenarios with zero parseable verdicts still fails the
+  stage — the oracle cannot be assumed green.
 - **Oracle** — the Gherkin requirements under `requirements/` (13 files,
-  121 scenarios); the acceptance tests stage 10 runs and the review
-  stage judges.
+  121 scenarios); the acceptance tests stage 10 runs, and the set the
+  review stage judges — scoped to the feature files each run changed
 - **Guard** — the shared "only X changed" check (one implementation,
   three call sites): collects working-tree changes against the stage
   baseline, allows the per-stage set, reverts exactly the off-limits

@@ -15,15 +15,16 @@ Feature: Test and review loop
   @review
   Scenario: Gherkin scenarios run as executable acceptance tests
     When the test-and-review stage runs the target's suite and pi reviews the results
-    Then every Scenario under requirements/ is checked against the suite output and the committed code
-    And each is marked fulfilled or unfulfilled as its acceptance verdict
+    Then every Scenario under requirements/ is executed by the suite and reported as pass or fail
+    And pi marks each scenario of the feature files changed in this run fulfilled or unfulfilled as its acceptance verdict
+    And pi does not re-judge scenarios of feature files the run left unchanged
 
   @review
   Scenario: Each requirement is checked for fulfilment
     Given the test suite has run
-    When pi reviews the results against every Scenario in requirements/
-    Then each scenario is marked fulfilled or unfulfilled
-    And a PR review of the full diff is produced
+    When pi reviews the results against the Scenarios of the feature files changed in this run
+    Then each of those scenarios is marked fulfilled or unfulfilled
+    And a short note of anything the tests don't cover that affects those scenarios is produced
 
   @review
   Scenario: A failed scenario is fixed and re-reviewed
@@ -51,10 +52,10 @@ Feature: Test and review loop
     Then each iteration's log is written to the workflow log or an artifact
     And no file under test-results/ is committed to the repo
 
-  Scenario: The requirements reach the review's pi as feature files
+  Scenario: The requirements reach the review's pi as changed feature files
     Given the review stage builds pi's context
-    When the requirements directory is included
-    Then it is expanded to its feature files
+    When the requirements that changed in this run are included
+    Then they are expanded to their feature files and only those are referenced
     And no directory is ever passed as an @-argument
 
   Scenario: A review or fix call cut off at its cap is retried, not fatal

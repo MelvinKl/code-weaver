@@ -19,6 +19,11 @@ The pins (one per scenario the fix loop had to fulfil):
   version tag (reuse-by-ref "the factory is invoked as a reusable
   workflow");
 - the pr job generates the PR body with pi from the requirements, the
+  review-stage's verdict oracle is delta-scoped (test-and-review: pi judges
+  only the scenarios of the feature files this run changed — the accumulated
+  oracle is not re-judged every run — and a run that changed no requirements
+  passes vacuously instead of failing as unparseable);
+- the pr job generates the PR body with pi from the requirements, the
   plan and the review (pr-and-gates "a pull request is opened against
   the target branch");
 - the report stage's AI-activity section falls back to the top-level
@@ -129,6 +134,30 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     readme = _read("README.md")
     rm = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", readme)
     assert rm and rm.groups()[:2] == (owner, path), "README example drifted from the deployed workflow"
+
+
+def test_review_stage_judges_only_changed_feature_files():
+    """(test-and-review "Gherkin scenarios run as executable acceptance
+    tests" / "each requirement is checked for fulfilment" — delta scope) the
+    review's pi context lists the feature files changed against the run's
+    baseline, never the whole requirements dir (re-judging the accumulated
+    oracle on every run is the unbounded work the review must not do), and a
+    run that changed no requirements passes vacuously (the empty verdict
+    block is the answer, not an unparseable failure)."""
+    review = _read(".github/actions/review-stage/stage.py")
+    # the context is delta-scoped through the shared changed-requirements
+    # builder — and the old whole-dir slice is gone
+    assert "changed_requirement_files()" in review
+    assert "stages.dir_files(req, at_prefix=False)" not in review
+    # the prompt names the changed files when there are any
+    assert "feature files this run changed" in review
+    # a delta-free run is a vacuous pass, not a zero-verdict failure
+    assert "not delta_feature_files()" in review
+    assert "no changed requirements" in review
+    # and the oracle's prompt agrees on the scope
+    prompt = _read("pi-prompts/review.md")
+    assert "of the changed\n   feature files only" in prompt
+    assert "Do NOT re-judge scenarios from other feature files" in prompt
 
 
 def test_pr_body_generated_by_pi():

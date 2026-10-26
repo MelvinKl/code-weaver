@@ -32,7 +32,12 @@
   consumer's owner/ref surface, the pi-generated PR body, the report
   fallback, the validator skip, the loop-cap defaults, the implement
   guard's plan-file precision).
-- **Verdict discipline.** The review marks *every* scenario (none skipped,
-  none invented); the parser tolerates observed format drift (em-dash
-  separators, parenthetical qualifiers) but a zero-verdict review fails
-  the stage — the oracle cannot be assumed green.
+- **Verdict discipline.** The review marks *every scenario of the feature
+  files this run changed* (none of those skipped, none invented) — the
+  delta scope: the standing oracle stays as the runs that added it judged
+  it, and re-judging it on every run is the unbounded work the review must
+  not do; the suite still executes the whole oracle (each scenario an
+  acceptance test) and a run that changed no requirements passes vacuously.
+  The parser tolerates observed format drift (em-dash separators,
+  parenthetical qualifiers) but a review with changed scenarios and zero
+  parseable verdicts fails the stage — the oracle cannot be assumed green.

@@ -1,7 +1,8 @@
 # 10. Risks & Open Items
 
 - **Gherkin as oracle** — green scenarios ≠ right behaviour (inherent to
-  BDD); the review stage (pi reads the whole diff) is the second layer.
+  BDD); the review stage (pi judges the changed scenarios) is the second
+  layer.
   The residual risk is a *verdict* drift (the judge calls a scenario
   fulfilled that the code does not meet) — inherent to a model as judge;
   the bounded fix loop is the containment.

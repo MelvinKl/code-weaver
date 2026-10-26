@@ -27,14 +27,20 @@ absent branch is cut fresh. For implementation work that is already on the
 branch, an empty model response with no file changes is a *satisfied
 no-op* (measured against the run's baseline), not a phantom retry.
 
-**The review loop.** Stage 10 runs the target's suite (`make test`), then
-pi reviews the output against every scenario and emits the
-`REVIEW-VERDICT` block (one `SCENARIO <file>::<name>: <verdict>` line per
-scenario — parsed from the response, or from a file the model wrote
-(mirrored to the state dir, the repo copy removed)); zero parseable
-verdicts fail the stage — a silent pass is impossible. Unfulfilled
-scenarios build the fix directive; stage 11 commits the fix and re-runs
-stage 10, bounded by the loop caps; each iteration's log lands in the
+**The review loop.** Stage 10 runs the target's suite (`make test`) — the
+suite executes **every** scenario — then pi reviews the output against the
+changed scenarios: the feature files this run modified are the review's
+judgement scope, because a target's requirements dir accumulates one file
+per issue and re-judging the whole oracle on every run would make the review
+unboundedly slow (the standing oracle was judged in the runs that added it).
+pi emits the `REVIEW-VERDICT` block (one `SCENARIO <file>::<name>: <verdict>`
+line per changed scenario — parsed from the response, or from a file the
+model wrote (mirrored to the state dir, the repo copy removed)); a run that
+changed no requirements passes vacuously (the suite's full result stands and
+the empty block is the answer), while a run that DID change scenarios with
+zero parseable verdicts fails the stage — a silent pass is impossible.
+Unfulfilled scenarios build the fix directive; stage 11 commits the fix and
+re-runs stage 10, bounded by the loop caps; each iteration's log lands in the
 state dir (→ artifact), never the repo tree.
 
 **Failure paths.** A crashed stage persists its full traceback to the

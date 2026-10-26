@@ -3,8 +3,11 @@
 
   run the target's test suite (contract: `make test`) → the Gherkin oracle
   executes: every scenario is an acceptance test
-  → pi (review prompt) marks every scenario FULFILLED/UNFULFILLED against the
-    results and reviews the whole diff
+  → pi (review prompt) marks every scenario of the run's changed feature
+    files FULFILLED/UNFULFILLED against the results (the suite executes
+    every scenario; only the re-judgement is delta-scoped — the accumulated
+    oracle is not re-reviewed on every run) and notes anything the tests
+    don't cover that affects those scenarios
   → green & all fulfilled → stage 10 done
   → otherwise a fix directive is built, pi fixes, the suite + review re-run.
 Bounded by MAX_LOOPS / MAX_TOKENS (0 = no cap). Each iteration — test output,
@@ -59,6 +62,19 @@ VERDICT_RE = re.compile(
 # pre-dated that contract: reading it was a FileNotFoundError that killed
 # the stage on a perfectly good pi run.)
 REVIEW_OUT = "pi-review.md.out"
+
+
+# The review judges the RUN's delta, not the whole accumulated oracle: a
+# target's requirements dir grows one file per issue, so re-judging every
+# scenario on every run makes the review unboundedly slow (the standing
+# oracle was judged in the runs that added it — those runs own it). The
+# suite still EXECUTES every scenario; only pi's re-judgement is scoped to
+# the feature files that changed against the run's baseline.
+def delta_feature_files() -> list[str]:
+    req = common.env_dir("REQUIREMENTS_DIR")
+    if not req:
+        return []
+    return stages.changed_requirement_files()
 
 
 def _stream_settled(template: str) -> bool | None:
@@ -151,20 +167,34 @@ def _verdict_file() -> tuple[str | None, str | None]:
 
 def review(i: int, test_out: str):
     prompt = common.state_file(f"review-prompt-{i}.txt")
+    changed = delta_feature_files()
     with open(prompt, "w") as f:
         f.write(
             f"The test output of this iteration is in {test_out} (read it).\n"
-            f"Review it together with the Gherkin requirements and the current diff.\n"
+            f"Review it against the Gherkin scenarios this run must judge and the current diff.\n"
         )
-    req = common.env_dir("REQUIREMENTS_DIR")
-    # referenced by path, NOT injected — embedding the test output and every
-    # requirement file in full would cost far too many tokens; pi reads what
-    # the review needs on demand. test_out is an absolute state-dir path and
-    # is already named in the prompt ("read it"); the requirements dir
-    # expands to its feature files (a directory argument would crash pi with
-    # EISDIR).
-    context = ([test_out, *stages.dir_files(req, at_prefix=False)] if req
-               else [test_out])
+        if changed:
+            f.write(
+                "The feature files this run changed — their scenarios are the "
+                "only ones your REVIEW-VERDICT block covers:\n"
+                + "\n".join(f"- {f}" for f in changed)
+                + "\n"
+            )
+        else:
+            f.write(
+                "This run changed no requirements. The verdict block stays "
+                "empty — no scenario lines — between its markers, and the "
+                "note names any problem the suite output itself shows.\n"
+            )
+    # Referenced by path, NOT injected — embedding the test output and the
+    # changed feature files in full would cost far too many tokens; pi reads
+    # what the review needs on demand. test_out is an absolute state-dir path
+    # and is already named in the prompt ("read it"). The context lists the
+    # changed feature files only — never the whole requirements dir: a
+    # directory argument would crash pi with EISDIR, and referencing the
+    # standing oracle would invite the unbounded re-review the delta scope
+    # exists to avoid.
+    context = [test_out, *changed]
     r = stages.pi_stage("review", prompt_file=prompt, context=context)
     if r.returncode != 0:
         out = common.state_file(REVIEW_OUT)
@@ -199,6 +229,15 @@ def review(i: int, test_out: str):
                    "oracle cannot be assumed green")
         return None, 1
     verdicts = parse_verdicts(text)
+    if not verdicts and not delta_feature_files():
+        # The run's delta is empty: the prompt asked for an empty block, and
+        # a model that honoured it (or one that simply summarised) is a
+        # vacuous pass — zero scenarios changed, zero scenarios to judge.
+        # (An empty delta with a real model answer is still returned: the
+        # stage treats it as "nothing to review".)
+        common.log("stage 10: no changed requirements in this run — the "
+                   "review's empty verdict block is the vacuous pass")
+        return ([], text), 0
     if not verdicts:
         # The block is the oracle — accept it from a file the review call
         # wrote instead of answering: mirror it to the state dir (the audit
@@ -247,6 +286,18 @@ def main() -> None:
         rc, out = run_tests(i)
         res, rrc = review(i, out) if rc == 0 else (None, 0)
         verdicts = res[0] if res else None
+
+        if rc == 0 and verdicts is None and not delta_feature_files():
+            # No requirement change in this run = nothing for the review to
+            # judge: an empty block is the vacuous pass, not a parse failure.
+            # The guard (a silent pass is a false green) still applies where
+            # scenarios DO need judging.
+            common.log("stage 10: suite green — the run changed no "
+                       "requirements; nothing to review")
+            open(common.state_file("stage-summary.txt"), "a").write(
+                "stage 10 test-and-review: green — no changed requirements "
+                "to judge\n")
+            return
 
         if rc == 0 and res is None:
             if rrc == 124:
