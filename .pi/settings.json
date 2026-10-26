@@ -1,5 +1,6 @@
 {
   "packages": [
-    "npm:pi-jev"
+    "npm:pi-jev",
+    "npm:pi-subagents"
   ]
 }
