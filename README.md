@@ -112,7 +112,6 @@ GitHub release; targets pinned to an older ref keep working.
 | `doc-dir` | `docs` | where the arc42 markdown files live |
 | `llm-model` | `Ornith-1.5-35B-A3B` | which **configured** model pi uses |
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
-| `max-tokens` | `500000` | token budget across the run — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label (its environment must carry the pi pre-configuration) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
 
@@ -156,7 +155,7 @@ it without touching the factory.
     stages.py          the shared generation/review loop machinery
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (121 scenarios)
+requirements/          the Gherkin oracle for THIS repo (14 files, 130 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -164,7 +163,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **121 Gherkin scenarios** — the oracle this
+`requirements/` holds **130 Gherkin scenarios** — the oracle this
 implementation satisfies. House CI validates them with Cucumber's official
 parser on every push/PR; in a target repo the test-and-review stage runs them
 as executable acceptance tests.

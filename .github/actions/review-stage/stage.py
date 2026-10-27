@@ -10,7 +10,7 @@
     don't cover that affects those scenarios
   → green & all fulfilled → stage 10 done
   → otherwise a fix directive is built, pi fixes, the suite + review re-run.
-Bounded by MAX_LOOPS / MAX_TOKENS (0 = no cap). Each iteration — test output,
+Bounded by MAX_LOOPS (0 = no cap). Each iteration — test output,
 verdict, fix directive — is logged into the state dir and travels as a
 workflow artifact: the audit trail lives in the workflow log/artifacts, and
 nothing under test-results/ is ever committed to the repo.

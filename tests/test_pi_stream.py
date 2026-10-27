@@ -83,7 +83,9 @@ def test_stream_capture_reconstructs_every_assistant_message():
     assert "SCENARIO a.feature::S1: FULFILLED — ok" in joined, \
         "the verdict block in the non-final turn must survive the capture"
     assert "the full result" in joined, "the final turn must survive too"
-    assert usage == 300, "budget usage = the LAST completed assistant message"
+    assert usage == (30, 15), \
+        "the per-call record aggregates EVERY completed assistant " \
+        "message's input/output usage"
 
 
 def test_stream_capture_splits_records_on_lf_only():
@@ -100,7 +102,7 @@ def test_stream_capture_splits_records_on_lf_only():
     is_jsonl, texts, usage, settled = common.pi_stream_capture(raw)
     assert is_jsonl and not settled
     assert texts == [text], f"U+2028/U+2029 inside a string must stay in the record: {texts!r}"
-    assert usage == 7
+    assert usage == (10, 5)
 
 
 def test_stream_capture_survives_a_truncated_trailing_record():
@@ -113,7 +115,7 @@ def test_stream_capture_survives_a_truncated_trailing_record():
     assert is_jsonl
     assert settled is False, "no agent_settled: the stream died mid-flight"
     assert texts == ["done work"], "complete turns survive the torn trailing line"
-    assert usage == 42
+    assert usage == (10, 5)
 
 
 def test_stream_capture_non_json_stream_is_passthrough():
@@ -122,7 +124,7 @@ def test_stream_capture_non_json_stream_is_passthrough():
     raw = "plain final answer text"
     is_jsonl, texts, usage, settled = common.pi_stream_capture(raw)
     assert is_jsonl is False
-    assert texts == [] and usage == 0 and settled is False
+    assert texts == [] and usage is None and settled is False
 
 
 def test_stream_capture_ignores_non_assistant_message_ends():
@@ -135,7 +137,7 @@ def test_stream_capture_ignores_non_assistant_message_ends():
     ])
     _, texts, usage, _ = common.pi_stream_capture(raw)
     assert texts == ["the answer"], "only assistant messages are model output"
-    assert usage == 3
+    assert usage == (10, 5)
 
 
 def test_parse_verdicts_dedupes_repeated_scenarios_last_wins():
@@ -207,8 +209,132 @@ def test_text_mode_fallback_when_pi_rejects_mode_flag():
             "a text-mode build writes no settled marker (stages fall back " \
             "to the legacy no-output retry heuristic)"
         toks = open(os.path.join(state, "cw", "tokens.txt")).read().split()
-        assert toks == ["49"], \
-            "the legacy stderr usage summary still counts toward the budget"
+        assert toks == ["42", "7"], \
+            "the legacy stderr usage summary is still recorded, but it now " \
+            "feeds the report's usage totals — the budget it used to feed " \
+            "is removed by Task 3"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(fake, ignore_errors=True)
+        shutil.rmtree(state, ignore_errors=True)
+
+
+def test_captured_call_records_input_and_output_in_state():
+    # AC-1: the shared pi-call plumbing records each call's (input, output)
+    # token counts in the run's state as the run proceeds — the record is
+    # appended to the state ledger as the call finishes and travels with the
+    # run's state artifacts like every other stage value. The record
+    # aggregates the usage of the call's completed assistant messages.
+    import shutil
+    import tempfile
+    fake = tempfile.mkdtemp()
+    state = tempfile.mkdtemp()
+    saved = {k: os.environ.get(k) for k in
+             ("PATH", "RUNNER_TEMP", "GITHUB_WORKSPACE", "MAX_TOKENS")}
+    os.makedirs(os.path.join(fake, "bin"), exist_ok=True)
+    pi_path = os.path.join(fake, "bin", "pi")
+    with open(pi_path, "w") as f:
+        f.write(
+            "#!%s\n" % sys.executable +
+            "import json, sys\n"
+            "events = [\n"
+            "    {'type': 'session', 'version': 3, 'id': 'x',\n"
+            "           'timestamp': 't', 'cwd': '/w'},\n"
+            "    {'type': 'agent_start'},\n"
+            "    {'type': 'turn_start'},\n"
+            "    {'type': 'message_end',\n"
+            "     'message': {'role': 'user', 'content': 'do it'}},\n"
+            "    {'type': 'message_end', 'message': {'role': 'assistant',\n"
+            "     'content': [{'type': 'toolCall', 'id': 'c1',\n"
+            "                  'toolName': 'read'}],\n"
+            "     'usage': {'input': 10, 'output': 5, 'cacheRead': 0,\n"
+            "               'cacheWrite': 0, 'reasoning': 0,\n"
+            "               'totalTokens': 15},\n"
+            "     'stopReason': 'toolUse'}},\n"
+            "    {'type': 'message_end',\n"
+            "     'message': {'role': 'toolResult', 'content': 'file body'}},\n"
+            "    {'type': 'message_end', 'message': {'role': 'assistant',\n"
+            "     'content': [{'type': 'text', 'text': 'the answer'}],\n"
+            "     'usage': {'input': 20, 'output': 15, 'cacheRead': 0,\n"
+            "               'cacheWrite': 0, 'reasoning': 0,\n"
+            "               'totalTokens': 35}}},\n"
+            "    {'type': 'agent_end', 'messages': [], 'willRetry': False},\n"
+            "    {'type': 'agent_settled', 'aborted': False},\n"
+            "]\n"
+            "for e in events:\n"
+            "    sys.stdout.write(json.dumps(e) + '\\n')\n")
+    os.chmod(pi_path, 0o755)
+    os.environ["PATH"] = os.path.join(fake, "bin") + os.pathsep + (saved["PATH"] or "")
+    os.environ["RUNNER_TEMP"] = state
+    os.environ["GITHUB_WORKSPACE"] = state
+    os.environ["MAX_TOKENS"] = "1000"
+    sp = os.path.join(state, "review.md")
+    with open(sp, "w") as f:
+        f.write("instructions")
+    try:
+        r = common.pi_invoke("Model", sp, timeout=60)
+        assert r.returncode == 0, \
+            "the JSONL call must run to completion, got exit %s" % r.returncode
+        toks = open(os.path.join(state, "cw", "tokens.txt")).read().split()
+        assert toks == ["30", "20"], \
+            "a captured call records its input and output token counts in " \
+            "the usage-record state file — its completed assistant " \
+            f"messages' usage summed: {toks!r}"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(fake, ignore_errors=True)
+        shutil.rmtree(state, ignore_errors=True)
+
+
+def test_call_that_left_no_usage_record_records_nothing():
+    # AC-1: a pi call that left no parseable usage record (no completed
+    # assistant message carrying a usage field) contributes nothing — it
+    # appends no record to the state ledger.
+    import shutil
+    import tempfile
+    fake = tempfile.mkdtemp()
+    state = tempfile.mkdtemp()
+    saved = {k: os.environ.get(k) for k in
+             ("PATH", "RUNNER_TEMP", "GITHUB_WORKSPACE", "MAX_TOKENS")}
+    os.makedirs(os.path.join(fake, "bin"), exist_ok=True)
+    pi_path = os.path.join(fake, "bin", "pi")
+    with open(pi_path, "w") as f:
+        f.write(
+            "#!%s\n" % sys.executable +
+            "import json, sys\n"
+            "events = [\n"
+            "    {'type': 'session', 'version': 3, 'id': 'x',\n"
+            "           'timestamp': 't', 'cwd': '/w'},\n"
+            "    {'type': 'agent_start'},\n"
+            "    {'type': 'message_end',\n"
+            "     'message': {'role': 'user', 'content': 'do it'}},\n"
+            "    {'type': 'agent_end', 'messages': [], 'willRetry': False},\n"
+            "    {'type': 'agent_settled', 'aborted': False},\n"
+            "]\n"
+            "for e in events:\n"
+            "    sys.stdout.write(json.dumps(e) + '\\n')\n")
+    os.chmod(pi_path, 0o755)
+    os.environ["PATH"] = os.path.join(fake, "bin") + os.pathsep + (saved["PATH"] or "")
+    os.environ["RUNNER_TEMP"] = state
+    os.environ["GITHUB_WORKSPACE"] = state
+    os.environ["MAX_TOKENS"] = "1000"
+    sp = os.path.join(state, "review.md")
+    with open(sp, "w") as f:
+        f.write("instructions")
+    try:
+        r = common.pi_invoke("Model", sp, timeout=60)
+        assert r.returncode == 0, \
+            "the JSONL call must run to completion, got exit %s" % r.returncode
+        assert not os.path.exists(os.path.join(state, "cw", "tokens.txt")), \
+            "a call that left no usage record appends no ledger line"
     finally:
         for k, v in saved.items():
             if v is None:

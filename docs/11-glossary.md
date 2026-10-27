@@ -24,8 +24,8 @@
   suite's full result stands, the empty verdict block is the answer); a run
   that DID change scenarios with zero parseable verdicts still fails the
   stage — the oracle cannot be assumed green.
-- **Oracle** — the Gherkin requirements under `requirements/` (13 files,
-  121 scenarios); the acceptance tests stage 10 runs, and the set the
+- **Oracle** — the Gherkin requirements under `requirements/` (14 files,
+  130 scenarios); the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
 - **Guard** — the shared "only X changed" check (one implementation,
   three call sites): collects working-tree changes against the stage

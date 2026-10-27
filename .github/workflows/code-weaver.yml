@@ -19,7 +19,6 @@ jobs:
     # a stable ref)
     uses: MelvinKl/code-weaver/.github/workflows/factory.yml@v0.1.1
     with:
-      max-tokens: 0
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements

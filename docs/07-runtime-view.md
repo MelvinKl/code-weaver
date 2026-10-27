@@ -50,4 +50,9 @@ unreachable from the API). The report job runs on success **and** failure
 (`if: always()`): a run that died before the PR exists is still reported
 — as a comment on the source issue, with the stage outcomes and a pointer
 to the workflow run's artifacts; no report file is ever written into the
-repo tree.
+repo tree. The final status report lists the run's total input tokens,
+total output tokens and total cost in every case — derived from the
+per-call usage records in the state dir (each stage's artifact carries the
+cumulative ledger), so a run that stopped early in a failed stage is
+reported with the usage and cost of the pi calls made before the stop, and
+a stage that never ran contributes nothing.

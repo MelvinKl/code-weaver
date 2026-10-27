@@ -24,11 +24,12 @@ Key mechanisms:
   sites (requirement-check, plan-check, implement-check), each with its
   own allowed path set. A leaking stage is reverted to its baseline and
   re-run, bounded by the loop caps.
-- **Bounded loops.** Guard re-run, review-fix and gate-fix loops respect
-  `MAX_LOOPS` (0 = no cap) and the `MAX_TOTAL_TOKENS` budget; every
-  stage's pi call carries its own time cap, and a call cut off at the cap
-  (exit 124) is retried inside the budget — a slow model is not a broken
-  environment.
+- **Bounded loops.** Guard re-run, review-fix and gate-fix loops stop when
+  their problems are resolved or when they reach the `MAX_LOOPS` iteration
+  cap (0 = no cap) — no token budget is one of the loops' stopping
+  conditions; every stage's pi call carries its own time cap, and a call cut
+  off at the cap (exit 124) is retried inside the loop — a slow model is not
+  a broken environment.
 - **The context contract — two disjoint slices** (the oracle's two
   pinning scenarios are re-sliced onto disjoint stage boundaries): the
   *extraction* stage is the **`@`-file slice** — its context (the Gherkin

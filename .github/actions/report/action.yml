@@ -159,6 +159,67 @@ runs:
                     if line.strip() and line.strip() not in stage_lines:
                         stage_lines.append(line.strip())
             stage_table = "\n".join(f"- {l}" for l in stage_lines) or "- (no stage summaries captured)"
+            # run usage & cost for the final status report — assembled from
+            # the per-call usage records in the state dir: one tokens.txt
+            # line per pi call carrying the call's input and output token
+            # counts (the shared pi-call plumbing appends a record as each
+            # call finishes, and the record travels with the run's state
+            # artifacts like every other stage value). Each stage's artifact
+            # carries the cumulative ledger, and the report job downloads the
+            # stages' artifacts in pipeline order — the ledger surviving the
+            # downloads is the complete one: it covers every pi call the run
+            # made, and a stage that never ran (its artifact never uploaded)
+            # contributes nothing
+            tot_in = tot_out = 0
+            have_usage = False
+            led = state_file("tokens.txt")
+            if os.path.isfile(led):
+                for line in open(led, encoding="utf-8", errors="replace"):
+                    p = line.split()
+                    if len(p) != 2:
+                        continue
+                    try:
+                        i, o = int(p[0]), int(p[1])
+                    except ValueError:
+                        continue
+                    tot_in += i
+                    tot_out += o
+                    have_usage = True
+            # the total cost is derived from the recorded usage, keyed on the
+            # run's resolved model — the llm-model setting, the only
+            # documented adjustable LLM setting; its resolved value rides the
+            # trigger's resolved-config state, which the report job downloads
+            # first — via a small per-model rate table, with the rate listed
+            # in the report so the listed cost is auditable and consistent
+            # with the recorded usage; a model with no rate entry is listed
+            # as unpriced
+            model = ""
+            cfg = state_file("resolved-config.txt")
+            if os.path.isfile(cfg):
+                for line in open(cfg, encoding="utf-8", errors="replace"):
+                    if line.startswith("- LLM model"):
+                        p = line.split("`")
+                        if len(p) >= 2:
+                            model = p[1].strip()
+                        break
+            # USD per 1M tokens: (input, output) — the table covers only
+            # known models; the owner extends it for the runner's others
+            COST_RATES = {"Ornith-1.5-35B-A3B": (0.10, 0.20)}
+            if not have_usage:
+                usage_lines = ("- **Total input tokens:** 0\n"
+                               "- **Total output tokens:** 0\n"
+                               "- **Total cost:** $0.00 (no pi call recorded usage)")
+            elif model not in COST_RATES:
+                usage_lines = (f"- **Total input tokens:** {tot_in}\n"
+                               f"- **Total output tokens:** {tot_out}\n"
+                               f"- **Total cost:** unpriced (model `{model}` "
+                               "has no rate entry — the owner extends the report's rate table)")
+            else:
+                r_in, r_out = COST_RATES[model]
+                usage_lines = (f"- **Total input tokens:** {tot_in}\n"
+                               f"- **Total output tokens:** {tot_out}\n"
+                               f"- **Total cost:** ${(tot_in * r_in + tot_out * r_out) / 1e6:.4f} "
+                               f"(model `{model}` @ ${r_in:.2f}/M input, ${r_out:.2f}/M output)")
 
             if pr:
                 view = json.loads(gh_api(
@@ -169,7 +230,8 @@ runs:
                          + "\n## Final status\n"
                          + f"- **Run result:** {result}\n- **Completed:** {now}\n"
                          + f"- **AI branch:** `{view['head']['ref']}` @ `{head[:12]}`\n"
-                         + f"- **Source issue:** #{issue}\n\n"
+                         + f"- **Source issue:** #{issue}\n"
+                         + usage_lines + "\n"
                          + "### Stage outcomes\n" + stage_table + "\n"
                          + "\n_Merging this PR is a human decision — the factory never merges._\n")
                 import subprocess
@@ -183,7 +245,9 @@ runs:
                 # report stage's own, made after the guards have run)
                 doc_dir = (os.environ.get("DOC_DIR") or "").strip().rstrip("/")
                 entry = (f"\n### {now} — code-weaver run for issue #{issue}\n"
-                         f"- result: {result}\n- PR: {pr}\n- stages:\n"
+                         f"- result: {result}\n- PR: {pr}\n"
+                         + usage_lines + "\n"
+                         + "- stages:\n"
                          + "\n".join(f"  - {l}" for l in stage_lines) + "\n")
                 touched = False
                 # arc42 activity commits only land on the AI branch — if the run
@@ -229,10 +293,12 @@ runs:
                        data=("✅ **code-weaver run finished** — final status is in the PR body.\n"
                              f"- result: **{result}**\n- completed: {now}\n"
                              f"- pull request: {url}\n- source: #{issue}\n"
+                             f"{usage_lines}\n"
                              if ok else
                              f"❌ **code-weaver run failed** — the pull request is incomplete.\n"
                              f"- result: **{result}**\n- completed: {now}\n"
-                             f"- pull request: {url}\n- stage outcomes:\n{stage_table}\n"))
+                             f"- pull request: {url}\n- stage outcomes:\n{stage_table}\n"
+                             f"{usage_lines}\n"))
                 log(f"stage 15: PR #{pr} body = final status report ({result}); "
                     f"issue #{issue} commented; arc42 activity {'recorded' if touched else 'n/a'}")
             else:
@@ -241,6 +307,7 @@ runs:
                              "be opened.\n"
                              f"- result: **{result}**\n- completed: {now}\n"
                              f"- stage outcomes:\n{stage_table}\n"
+                             f"{usage_lines}\n"
                              "- full logs: the workflow run's artifacts (the repo tree "
                              "is never used for report files).\n"))
                 log(f"stage 15: no PR — failure reported on issue #{issue} "

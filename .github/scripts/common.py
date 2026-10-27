@@ -3,7 +3,7 @@
 Contract every stage script keeps:
   - working state lives in $RUNNER_TEMP/cw — NEVER in the repo tree
     (the reporting requirement: nothing under test-results/ is ever committed)
-  - every loop respects MAX_LOOPS and MAX_TOKENS; 0 means no cap
+  - every loop respects MAX_LOOPS; 0 means no cap
     (the safety requirement: every loop respects its cap)
   - pi is pre-installed & pre-configured in the runner environment —
     stages invoke it, they never install or reconfigure it
@@ -116,33 +116,37 @@ def _int_cap(name: str) -> int:
         return 0
 
 
-def caps_ok(iteration: int, extra_tokens: int = 0) -> None:
+def caps_ok(iteration: int) -> None:
     """Raise if a cap would be violated. 0 = no cap (configuration
     requirement: a loop cap of 0 means no cap)."""
     loops = _int_cap("MAX_LOOPS")
     if loops > 0 and iteration >= loops:
         raise CapReached("MAX_LOOPS", f"iteration {iteration} >= cap {loops}")
-    tokens = _int_cap("MAX_TOKENS")
-    if tokens > 0 and tokens_used() + extra_tokens >= tokens:
-        raise CapReached("MAX_TOKENS", f"budget {tokens_used() + extra_tokens} >= {tokens}")
 
 
 def tokens_used() -> int:
+    # One ledger line per pi call: the call's (input, output) token counts.
+    # A record's fields summed is the call's total token count — the report
+    # stage's usage totals sum what every call spent, one record per call.
     f = state_file("tokens.txt")
     if not os.path.exists(f):
         return 0
     total = 0
     for line in open(f):
         try:
-            total += int(line.strip() or 0)
+            total += sum(int(p) for p in line.split())
         except ValueError:
             pass
     return total
 
 
-def tokens_add(n: int) -> None:
+def tokens_add(record: tuple[int, int]) -> None:
+    """Append one per-call usage record to the run's token ledger — the
+    call's input and output token counts, one line. The ledger lives in the
+    state dir and travels with the run's state artifacts, like every other
+    stage value."""
     with open(state_file("tokens.txt"), "a") as f:
-        f.write(f"{n}\n")
+        f.write(f"{record[0]} {record[1]}\n")
 
 
 def gh_api(path: str, accept: str = "application/vnd.github+json", data: str | None = None) -> str:
@@ -165,7 +169,7 @@ USAGE_RE = re.compile(r"(\d+) in, (\d+) out, \d+ cache read, (\d+) total tok")
 MODE_REJECTED_RE = re.compile(r"unknown option.*--mode|Invalid mode")
 
 
-def pi_stream_capture(raw: str) -> tuple[bool, list[str], int, bool]:
+def pi_stream_capture(raw: str) -> tuple[bool, list[str], tuple[int, int] | None, bool]:
     """Reconstruct the model's words from a `pi --mode json` event stream.
 
     Returns (is_jsonl, texts, usage, settled):
@@ -181,9 +185,11 @@ def pi_stream_capture(raw: str) -> tuple[bool, list[str], int, bool]:
                  with a bare summary — text mode captured only the LAST
                  message, losing the block (run 40200905062: stage 10
                  failed on a fully reviewed run).
-      usage    — the totalTokens of the LAST completed assistant message
-                 (the budget counter keeps its "last summary line wins"
-                 semantics); 0 when no assistant message completed.
+      usage    — the call's (input, output) token counts: the sums of the
+                 `usage.input` / `usage.output` fields across the call's
+                 completed assistant messages; None when no completed
+                 assistant message carried a parseable usage record (such a
+                 call appends no ledger line).
       settled  — the stream reached its `agent_settled` event. A
                  non-settled stream is a provider stream that died
                  mid-flight; stages retry that call, they don't fail on
@@ -196,7 +202,7 @@ def pi_stream_capture(raw: str) -> tuple[bool, list[str], int, bool]:
     every complete record before it survives."""
     is_jsonl = False
     texts: list[str] = []
-    usage = 0
+    usage: tuple[int, int] | None = None
     settled = False
     for line in raw.split("\n"):
         line = line.rstrip("\r")
@@ -225,9 +231,12 @@ def pi_stream_capture(raw: str) -> tuple[bool, list[str], int, bool]:
                                      and b.get("type") == "text"))
             u = m.get("usage")
             if isinstance(u, dict):
-                tot = u.get("totalTokens")
-                if isinstance(tot, int):
-                    usage = tot  # last completed assistant message wins
+                i_tok = u.get("input")
+                o_tok = u.get("output")
+                if isinstance(i_tok, int) and isinstance(o_tok, int):
+                    if usage is None:
+                        usage = (0, 0)
+                    usage = (usage[0] + i_tok, usage[1] + o_tok)
     return is_jsonl, texts, usage, settled
 
 
@@ -289,7 +298,15 @@ def pi_invoke(
     A `pi-<template>.md.settled` marker records whether the stream reached
     `agent_settled`: a stage that finds output but a non-settled stream
     retries the call (the provider stream died mid-flight), while a settled
-    non-zero exit stays a broken-environment failure."""
+    non-zero exit stays a broken-environment failure.
+
+    As the call finishes, its usage record is appended to the run's token
+    ledger in the state dir — one `tokens.txt` line per call carrying the
+    call's input and output token counts (the sums over the call's
+    completed assistant messages, or the stderr usage summary line on the
+    text-mode fallback of an older pi build). A call that left no parseable
+    usage record appends no line. The record travels with the run's state
+    artifacts like every other stage value."""
     with open(system_prompt_file, encoding="utf-8") as f:
         instructions = f.read()
     # --print keeps the one-shot contract the oracle pins ("a stage
@@ -377,7 +394,7 @@ def pi_invoke(
             return ""
 
     def capture(c: list[str]) -> tuple[subprocess.CompletedProcess,
-                                       bool, int, bool]:
+                                       bool, tuple[int, int] | None, bool]:
         r = run_once(c)
         raw = ""
         try:
@@ -397,10 +414,11 @@ def pi_invoke(
         else:
             # A non-JSON stream (an older pi build answering in plain text,
             # or the text-mode retry below) keeps the raw capture; the old
-            # stderr-usage parsing applies to it.
-            usage = 0
+            # stderr usage summary still records the call — now as its
+            # (input, output) counts.
+            usage = None
             for m in USAGE_RE.finditer(err_text()):
-                usage = int(m.group(3))  # last summary line wins
+                usage = (int(m.group(1)), int(m.group(2)))  # last summary line wins
         return r, is_jsonl, usage, settled
 
     r, is_jsonl, usage, settled = capture(cmd)
@@ -417,9 +435,10 @@ def pi_invoke(
         except ValueError:
             pass
         r, is_jsonl, usage, settled = capture(cmd_text)
-    if usage:
+    if usage is not None:
         tokens_add(usage)
-        log(f"token usage: {usage} total ({tokens_used()} accumulated; cap {_int_cap('MAX_TOKENS') or 'none'})")
+        log(f"token usage: {usage[0]} in, {usage[1]} out "
+            f"({tokens_used()} accumulated in the run's usage ledger)")
     if r.returncode != 0:
         log(f"::error::pi run '{system_prompt_file}' failed (exit {r.returncode}) — stderr: {err_f}")
     return r

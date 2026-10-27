@@ -19,7 +19,7 @@ runs:
       # shell: (v2.338: "Required property is missing: shell").
       shell: bash
       run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
-    - name: Implementation loop (bounded by MAX_LOOPS / MAX_TOKENS; 0 = no cap)
+    - name: Implementation loop (bounded by MAX_LOOPS; 0 = no cap)
       shell: bash
       working-directory: ${{ github.workspace }}
       # GITHUB_ACTION_PATH is unreliable inside composite inner

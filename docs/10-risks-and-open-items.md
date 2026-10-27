@@ -67,6 +67,50 @@
   scenario name (the one-file-behind state the review stage is the
   designated resolver of). The owner's follow-up is the rename + When
   edit in `requirements/trigger.feature` (a follow-up issue).
+- **Open item for the owner (four standing scenarios superseded by
+  #43)** — the issue-43 delta's header
+  (`issue-43-cost-and-token-usage.feature`) declares four standing
+  scenarios superseded, “reported in the stage reply, not edited here —
+  requirements/ is read-only to the extraction stage”:
+  `configuration.feature`’s “The loop caps are configurable” and “A loop
+  cap of 0 means no cap” (both Givens pin “the defaults are MAX_LOOPS 5
+  and MAX_TOTAL_TOKENS 500000”); `test-and-review.feature`’s “The loop
+  respects the token budget” (the cumulative-spend, budget-exhaustion
+  stop); `safety.feature`’s “Every loop in the pipeline respects its cap”
+  (wording). The consistent rewording, specified in `plans/43.md`
+  (Task 4 — the plan is the carrying text, which the PR body and the
+  final status report carry to the owner): `configuration.feature`
+  “The loop caps are configurable” — Given becomes “the default is
+  MAX_LOOPS 5”, When becomes “a target lowers or raises it”, the Then is
+  unchanged; “A loop cap of 0 means no cap” — the Given drops the “and
+  MAX_TOTAL_TOKENS 500000” conjunct, the Then drops the “setting
+  MAX_TOTAL_TOKENS to 0 removes the token budget” step, and “the resolved
+  configuration records the removed caps” stays (about max-loops);
+  `test-and-review.feature` “The loop respects the token budget” — the
+  scenario is deleted outright (its requirement is superseded by the
+  delta’s “The bounded loops stop on success or their iteration cap, not
+  on token spend”); `safety.feature` “Every loop in the pipeline respects
+  its cap” — the Then lines reword to the delta’s form, “every bounded
+  loop is bounded by its iteration cap alone” / “the factory is
+  guaranteed to terminate while all remaining loop caps are non-zero”,
+  with the “a cap of 0 means that loop is uncapped” line staying. The
+  factory does not make that edit: `requirements/` is read-only to every
+  stage, so per the rule above the contradiction is reported, not edited,
+  and the oracle stays the single source of truth. `PLAN.md` — where the
+  arc42 set lives in a target without a `docs/` dir — is not in this
+  repo’s tree, so this entry stands alone. The owner’s follow-up is the
+  rewording above in `requirements/configuration.feature`,
+  `requirements/test-and-review.feature` and
+  `requirements/safety.feature` (a follow-up issue).
+- **Cost rate table covers only known models** — the report stage derives
+  the run's total cost from the recorded usage, keyed on the run's
+  resolved `llm-model` setting (the only documented adjustable LLM
+  setting; its resolved value rides the trigger's resolved-config state
+  the report job downloads), via a small per-model rate table in
+  `.github/actions/report/action.yml`; the table covers only known models,
+  and a target's model with no rate entry is listed as *unpriced* in the
+  report (the usage totals are listed regardless) — the owner extends the
+  table when a new model joins the runner's configured set.
 - **arc42 structure varies per target** — the extraction prompt
   tolerates the structural difference: extraction proceeds on the
   readable parts; a missing, renamed or reordered chapter is never a

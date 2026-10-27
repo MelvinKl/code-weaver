@@ -1,11 +1,12 @@
 # 9. Quality Requirements
 
 - **Loop caps.** Every bounded loop (guard re-run, review-fix, gate-fix)
-  respects `MAX_LOOPS` (default 5; **0 = no cap**) and the run's
-  `MAX_TOTAL_TOKENS` budget (default 500,000; 0 = no budget); with all
-  caps non-zero the pipeline is guaranteed to terminate. The resolved
-  configuration is recorded in the workflow log for audit — never
-  committed.
+  stops when its problems are resolved or when it reaches the `MAX_LOOPS`
+  iteration cap (default 5; **0 = no cap**) — no token budget is one of the
+  loops' stopping conditions; with all remaining loop caps non-zero the
+  pipeline is guaranteed to terminate, every bounded loop bounded by its
+  iteration cap alone. The resolved configuration is recorded in the
+  workflow log for audit — never committed.
 - **The pi call cap.** Each pi invocation runs under a 360-minute cap
   (overridable per call via `CW_PI_TIMEOUT`); a call cut off at the cap
   exits 124 — the stage treats it as a slow model (the iteration is

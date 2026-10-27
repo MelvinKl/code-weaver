@@ -106,7 +106,7 @@ def main() -> None:
                     f"stage 13 pr-gates: all {len(runs)} green\n")
                 return
             # stage 14 — bounded fix loop
-            common.caps_ok(fix_iter, 0)
+            common.caps_ok(fix_iter)
             logs = failing_logs(runs)
             log_f = common.state_file(f"gate-failures-{fix_iter}.log")
             with open(log_f, "w") as f:

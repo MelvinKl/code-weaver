@@ -2,7 +2,7 @@
 
 Every stage script (extract-stage, plan-stage, implement-stage,
 review-stage) imports this and keeps the same contract:
-  - loops are bounded by MAX_LOOPS / MAX_TOKENS — 0 means no cap
+  - loops are bounded by MAX_LOOPS — 0 means no cap
   - the guard is the one shared idiom (common.guard / guard-check.py)
   - iteration state & logs live in the state dir, never the repo tree
 """

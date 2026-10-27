@@ -59,10 +59,6 @@ on:
         description: Fix/guard loop cap per stage — 0 means no cap
         type: string
         default: "5"
-      max-tokens:
-        description: Token budget across the run — 0 means no cap
-        type: string
-        default: "500000"
       runner:
         description: Runner label whose environment has pi pre-installed & configured
         type: string
@@ -200,7 +196,7 @@ jobs:
             echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
             echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
             echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
-            echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap), max-tokens=\`${{ inputs.max-tokens }}\` (0 = no cap)"
+            echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap)"
           } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
           echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
             | tee "$RUNNER_TEMP/cw/stage-summary.txt"
@@ -372,7 +368,6 @@ jobs:
       DOC_DIR: ${{ inputs.doc-dir }}
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
-      MAX_TOKENS: ${{ inputs.max-tokens }}
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
@@ -463,7 +458,6 @@ jobs:
       DOC_DIR: ${{ inputs.doc-dir }}
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
-      MAX_TOKENS: ${{ inputs.max-tokens }}
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
@@ -554,7 +548,6 @@ jobs:
       DOC_DIR: ${{ inputs.doc-dir }}
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
-      MAX_TOKENS: ${{ inputs.max-tokens }}
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
@@ -645,7 +638,6 @@ jobs:
       DOC_DIR: ${{ inputs.doc-dir }}
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
-      MAX_TOKENS: ${{ inputs.max-tokens }}
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
@@ -961,7 +953,6 @@ jobs:
       PLAN_DIR: ${{ inputs.plan-dir }}
       DOC_DIR: ${{ inputs.doc-dir }}
       MAX_LOOPS: ${{ inputs.max-loops }}
-      MAX_TOKENS: ${{ inputs.max-tokens }}
       # ISSUE_NUMBER / AI_BRANCH / CW_PR_NUMBER arrive via GITHUB_ENV from
       # the stage artifacts (Read trigger / Read PR state steps)
     steps:
