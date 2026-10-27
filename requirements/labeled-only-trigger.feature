@@ -1,4 +1,4 @@
-# requirements/issue-20-labeled-only-trigger.feature
+# requirements/labeled-only-trigger.feature
 # Issue 20 — the code-weaver trigger (on.issues.types) should be set to
 # "labeled" only, both in the README's consumption example and in the
 # version this repo deploys on itself (.github/workflows/code-weaver.yml).

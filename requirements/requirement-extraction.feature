@@ -52,7 +52,7 @@ Feature: Requirement extraction
   Scenario: Re-running extraction on unchanged input is idempotent
     Given the extraction stage already wrote the requirements for an issue
     When the extraction stage runs again for the same issue
-    Then it updates the same requirement file in place (named after the issue)
+    Then it updates the same requirement file in place (named after the topic the delta covers)
     And no duplicate requirement files fork
 
   Scenario: The context handed to pi is concrete files, never directories
@@ -63,10 +63,11 @@ Feature: Requirement extraction
     Then every context argument is a file that exists
     And directories are expanded to the files they contain
 
-  Scenario: Extraction writes one new file named after the issue
+  Scenario: Extraction writes one new file named after the topic
     Given an issue with a number and a title
     When the extraction stage writes its delta requirements
-    Then it creates exactly one new feature file named after the issue number
+    Then it creates exactly one new feature file named after the topic the delta covers
+    And the file name carries no issue number — the oracle is structured by topic, so a search for a topic targets that topic's files, not every Gherkin file
     And no existing feature file differs from the baseline
 
   Scenario: An empty model response does not consume the loop budget

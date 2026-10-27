@@ -4,7 +4,11 @@
 Usage: gherkin-validate.py <file-or-dir>…
 Exit 0 only if every .feature file parses AND each feature has at least one
 Scenario (the oracle must be executable: the test-and-review stage runs every
-scenario as an acceptance test).
+scenario as an acceptance test) AND no file is named after an issue (the
+oracle is structured by topic, not by issue — an issue-named file would
+scatter a topic across the issue history and force a search to sweep every
+Gherkin file instead of directing it at the topic's file). The naming check
+needs no parser, so it holds even where the official parser port is absent.
 
 The `gherkin` import is Cucumber's official Python port — the same parser the
 requirements must satisfy, so a file that validates here validates everywhere
@@ -12,15 +16,25 @@ Cucumber runs."""
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 try:
     from gherkin import Parser
 except ImportError:
     # An interpreter without the official parser port (the suite must run on
-    # an interpreter without pytest — and one without the port): the oracle
-    # check is skipped-not-failed there, never a failure.
+    # an interpreter without pytest — and one without the port): the parse
+    # check is skipped-not-failed there, never a failure. The naming check
+    # below needs no parser and still applies.
     Parser = None
+
+
+# A feature file named after the issue that produced it breaks the
+# topic-structured oracle. The pattern is the per-issue naming convention
+# itself (issue-<N>, issue_<N>, issue <N>), so a legitimate topic slug that
+# happens to contain digits ("arc42-…") stays admissible while every
+# issue-named file is rejected.
+ISSUE_NAMED_RE = re.compile(r"issue[-_ ]?\d+", re.IGNORECASE)
 
 
 def fail(msg: str) -> None:
@@ -41,7 +55,19 @@ def scenario_count(doc) -> int:
 
 
 def validate_file(path: str) -> tuple[int, list[str]]:
+    errs: list[str] = []
+    # Topic structure, enforced before (and without) the parser: a file
+    # named after an issue would make a search for its topic sweep the whole
+    # oracle; the file must be named after the topic it covers.
+    if ISSUE_NAMED_RE.search(os.path.basename(path)):
+        errs.append(f"{path}: named after an issue — the oracle is structured "
+                    f"by topic; name the file after the topic it covers")
     if Parser is None:
+        if errs:
+            errs.append(f"{path}: parse check skipped — the official Gherkin "
+                        f"parser port is not installed on this interpreter "
+                        f"(skipped, not failed)")
+            return 1, errs
         return (0, [f"{path}: skipped — the official Gherkin parser port is "
                     f"not installed on this interpreter (skipped, not failed)"])
     with open(path, encoding="utf-8") as f:
@@ -49,14 +75,13 @@ def validate_file(path: str) -> tuple[int, list[str]]:
     try:
         doc = Parser().parse(source)
     except Exception as e:  # CompositeParserException / friends
-        return 1, [f"{path}: parse error: {str(e).splitlines()[0][:160]}"]
+        return 1, errs + [f"{path}: parse error: {str(e).splitlines()[0][:160]}"]
     if "errors" in doc and doc["errors"]:
-        return 1, [f"{path}: gherkin errors: " + "; ".join(
+        errs += [f"{path}: gherkin errors: " + "; ".join(
             str(e.get("message", e))[:120] for e in doc["errors"])]
     if not source.lstrip().startswith("#! language") and "Feature:" not in source:
-        return 1, [f"{path}: no 'Feature:' line"]
+        errs.append(f"{path}: no 'Feature:' line")
     n = scenario_count(doc)
-    errs = []
     if n == 0:
         errs.append(f"{path}: no Scenario — a requirement-free feature is not executable")
     return (1 if errs else 0), errs
@@ -77,11 +102,13 @@ def main() -> int:
     if len(sys.argv) < 2:
         print("usage: gherkin-validate.py <file-or-dir>…", file=sys.stderr)
         return 2
+    # Without the official parser port the parse check is
+    # skipped-not-failed (the suite must run on an interpreter that may lack
+    # it); the topic-naming check needs no parser and still runs.
     if Parser is None:
         print("gherkin-validate: SKIP — the official Gherkin parser port is not "
-              "installed on this interpreter; the oracle check is skipped, "
-              "not failed")
-        return 0
+              "installed on this interpreter; the parse check is skipped, "
+              "not failed (the topic-naming check still runs)")
     total = ok = 0
     problems: list[str] = []
     for path in iter_features(sys.argv[1:]):

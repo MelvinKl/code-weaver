@@ -40,7 +40,9 @@
   the factory, so reconciling the two lines is the owner's call — a
   requirement that cannot be fulfilled is reported, not rewritten.
 - **Extraction delta shape** — the guard pins exactly one new file named
-  after the issue, and no existing feature file may differ from the
+  after the topic the delta covers (never after the issue — the oracle is
+  structured by topic, so a search for a topic targets that topic's files),
+  and no existing feature file may differ from the
   baseline (a changed existing file is reverted and the stage re-runs). A
   delta that genuinely contradicts an existing scenario is reported in
   the model's reply and resolved by the review stage — the oracle stays
@@ -51,7 +53,7 @@
   `ai-requirements`") no longer holds: under the `labeled`-only consumer
   trigger that issue #20 declared (README example, the repo's own
   `.github/workflows/code-weaver.yml`, and
-  `issue-20-labeled-only-trigger.feature`), an issue *opened* with the
+  `labeled-only-trigger.feature`), an issue *opened* with the
   label attached schedules no run at all. The consistent rewording,
   specified in `plans/20.md` (Task 5 — the plan is the carrying text):
   rename the scenario to "An opened issue starts the factory once the
@@ -69,7 +71,7 @@
   edit in `requirements/trigger.feature` (a follow-up issue).
 - **Open item for the owner (four standing scenarios superseded by
   #43)** — the issue-43 delta's header
-  (`issue-43-cost-and-token-usage.feature`) declares four standing
+  (`cost-and-token-usage.feature`) declares four standing
   scenarios superseded, “reported in the stage reply, not edited here —
   requirements/ is read-only to the extraction stage”:
   `configuration.feature`’s “The loop caps are configurable” and “A loop

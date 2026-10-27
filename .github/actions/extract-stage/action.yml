@@ -2,7 +2,8 @@ name: extract-stage
 description: >-
   Stages 4+5 — requirement extraction + requirement check, one bounded
   loop: pi derives the delta requirements (valid Gherkin, canonical
-  keywords) from the issue into the requirements dir; the shared guard
+  keywords, the new file named after the topic the delta covers — never
+  the issue) from the issue into the requirements dir; the shared guard
   verifies only that dir changed (a leak is reverted and the stage re-run);
   generated files must parse with Cucumber's official Gherkin parser.
 runs:

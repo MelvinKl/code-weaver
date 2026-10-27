@@ -9,10 +9,14 @@ The context handed to you is the project itself: the Gherkin oracle under
 (the issue's change set against the target branch, recorded by the baseline
 stage). Derive against all of it.
 
-Produce **exactly one new file**: `requirements/issue-<N>-<short-slug>.feature`
-where `<N>` is the issue number and `<short-slug>` a lowercase-kebab summary
-(for issue 3 about merging before the final check →
-`requirements/issue-3-merge-base-before-final-check.feature`). Do **not**
+Produce **exactly one new file**: `requirements/<topic-slug>.feature` —
+named after the **topic** the delta covers, never after the issue. The oracle
+is structured by topic, not by issue: each file is where a reader (or a
+search) goes for that topic, so a file named after an issue would scatter a
+topic across the issue history and force every search to sweep all the
+Gherkin files. `<topic-slug>` is the lowercase-kebab name of the topic (a
+delta about merging the base branch before the final check →
+`requirements/merge-base-before-final-check.feature`). Do **not**
 modify, create or delete any other file — not even an existing requirement
 file (see rule 2). If the delta touches a topic an existing file already
 covers, add the new scenarios to YOUR file and leave every existing file
@@ -27,7 +31,7 @@ no prose**. Every scenario must be executable by a test suite, mirroring the
 naming and granularity of the existing requirement files. A minimal file:
 
 ```
-@issue-3
+@merge-base
 Feature: merge base branch before the final check
 
   Scenario: the target branch is merged before the final verification runs

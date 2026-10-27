@@ -91,6 +91,43 @@ def test_feature_without_scenarios_fails():
             os.chdir(cwd)
 
 
+def test_issue_named_file_fails():
+    """The oracle is structured by topic, not by issue — a file named after
+    the issue that produced it would scatter a topic across the issue history
+    and force a search to sweep every Gherkin file instead of directing it at
+    the topic's file. The naming rule needs no parser, so it holds (and is
+    testable) even on an interpreter without the official parser port."""
+    with tempfile.TemporaryDirectory() as d:
+        cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            for name in ("issue-7-merge-base.feature", "issue_7.feature"):
+                with open(name, "w") as f:
+                    f.write(VALID)
+                rc, errs = mod.validate_file(name)
+                assert rc == 1, f"{name} must fail the topic-naming check"
+                assert any("named after an issue" in e for e in errs)
+        finally:
+            os.chdir(cwd)
+
+
+def test_topic_named_file_passes():
+    """A file named after the topic it covers passes the naming check; on an
+    interpreter without the parser port the parse half skips-not-fails while
+    the naming rule still applies."""
+    with tempfile.TemporaryDirectory() as d:
+        cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            with open("merge-base.feature", "w") as f:
+                f.write(VALID)
+            rc, errs = mod.validate_file("merge-base.feature")
+            assert rc == 0, f"a topic-named file must pass: {errs}"
+            assert not any("named after an issue" in e for e in errs)
+        finally:
+            os.chdir(cwd)
+
+
 def test_directory_walk():
     with tempfile.TemporaryDirectory() as d:
         cwd = os.getcwd()

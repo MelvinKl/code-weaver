@@ -13,7 +13,7 @@ The pins (one per scenario the fix loop had to fulfil):
   referenced by path, not injected into the pi call");
 - the extract prompt never edits an existing feature file
   (requirement-extraction "extraction writes one new file named after the
-  issue") and tolerates arc42 structure variance (safety "the factory
+  topic") and tolerates arc42 structure variance (safety "the factory
   tolerates arc42 structure variance");
 - the consumer workflow and the README pin the oracle's owner and a
   version tag (reuse-by-ref "the factory is invoked as a reusable
@@ -94,7 +94,7 @@ def test_extract_stage_uses_file_argument_context():
 
 def test_extract_prompt_forbids_editing_existing_files():
     """(requirement-extraction "extraction writes one new file named after
-    the issue") the prompt's contract: exactly one new file, and no
+    the topic") the prompt's contract: exactly one new file, and no
     existing feature file may differ from the baseline — a changed
     existing file is a violation the guard reverts."""
     prompt = _read("pi-prompts/requirements.md")
@@ -103,6 +103,23 @@ def test_extract_prompt_forbids_editing_existing_files():
     assert "byte-identical" in prompt
     stage = _read(".github/actions/extract-stage/stage.py")
     assert "no existing feature file may differ from the baseline" in stage
+
+
+def test_extract_prompt_names_new_file_after_topic():
+    """(requirement-extraction "extraction writes one new file named after
+    the topic") the oracle is structured by topic, not by issue: the prompt
+    names the new file after the topic the delta covers — never after the
+    issue (an issue-named file would scatter a topic across the issue
+    history and force a search to sweep every Gherkin file), and the
+    validator enforces the same rule on the generated files (house CI runs
+    it over the whole oracle, so the rule holds for existing files too).
+    """
+    prompt = _read("pi-prompts/requirements.md")
+    assert "named after the **topic**" in prompt
+    assert "never after the issue" in prompt
+    validator = _read(".github/scripts/gherkin-validate.py")
+    assert "named after an issue" in validator
+    assert "ISSUE_NAMED_RE" in validator
 
 
 def test_extract_prompt_tolerates_arc42_structure_variance():

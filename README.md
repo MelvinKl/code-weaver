@@ -20,13 +20,15 @@ this repo's reusable workflow takes over:
    oracle, the arc42 markdown, `README.md`, the baseline diff) is handed to pi
    as `@`-file arguments, which pi reads as context before answering; arc42
    structure variance is tolerated (extraction proceeds on the readable
-   parts); the result is exactly one new file named after the issue — a
-   changed existing feature file is a guard violation, reverted and re-run —
-   and an empty body writes nothing; the result is validated with Cucumber's
-   official parser (skipped-not-failed where the parser port is absent);
+   parts); the result is exactly one new file named after the topic the
+   delta covers (never after the issue — the oracle is structured by
+   topic) — a changed existing feature file is a guard violation, reverted
+   and re-run — and an empty body writes nothing; the result is validated
+   with Cucumber's official parser (skipped-not-failed where the parser
+   port is absent);
 5. **requirement check** — the shared guard: only the requirements dir may
-   have changed (and the delta's shape is pinned: at most one new file named
-   after the issue);
+   have changed (and the delta's shape is pinned: at most one new file,
+   named after the topic it covers — never after the issue);
 6. **plan** — markdown plan(s) under `plans/`, covering **every** requirement
    change, grounded in the arc42 documentation (the `docs/` set — the
    top-level `PLAN.md` where a target has no doc dir);
@@ -164,9 +166,13 @@ PLAN.md                the implementation plan this code implements
 ## Requirements
 
 `requirements/` holds **130 Gherkin scenarios** — the oracle this
-implementation satisfies. House CI validates them with Cucumber's official
-parser on every push/PR; in a target repo the test-and-review stage runs them
-as executable acceptance tests.
+implementation satisfies. The files are **structured by topic, not by
+issue**: each file is named after the topic it covers, so a search for a
+topic targets that topic's file instead of sweeping the whole oracle — and
+house CI rejects any feature file named after an issue number, so the
+structure holds for files the factory creates too. House CI validates them
+with Cucumber's official parser on every push/PR; in a target repo the
+test-and-review stage runs them as executable acceptance tests.
 
 ## What this is *not*
 

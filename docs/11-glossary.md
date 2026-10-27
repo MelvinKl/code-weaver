@@ -14,7 +14,8 @@
   every guard check measures against.
 - **Delta requirements** — the requirement change an issue implies,
   relative to the baseline; extracted as Gherkin into exactly one new
-  file named after the issue.
+  file named after the topic the delta covers — never after the issue,
+  the oracle being structured by topic.
 - **Delta-scoped review** — the test-and-review stage's review judges only the
   scenarios of the feature files a run changed (the suite still executes the
   whole oracle). The standing oracle is the accumulated set, so re-judging
@@ -25,7 +26,9 @@
   that DID change scenarios with zero parseable verdicts still fails the
   stage — the oracle cannot be assumed green.
 - **Oracle** — the Gherkin requirements under `requirements/` (14 files,
-  130 scenarios); the acceptance tests stage 10 runs, and the set the
+  130 scenarios), structured by topic: each file is named after the topic
+  it covers, so a search for a topic targets that file instead of sweeping
+  the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
 - **Guard** — the shared "only X changed" check (one implementation,
   three call sites): collects working-tree changes against the stage

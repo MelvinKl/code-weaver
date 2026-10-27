@@ -56,14 +56,17 @@ def _revert(f: str, baseline: str) -> None:
 def post_ok() -> bool:
     """The Gherkin-oracle half of stage 5: every generated .feature must
     parse with the official parser, and the delta's shape is pinned — exactly
-    ONE new file, named after the issue, and NO existing feature file differs
-    from the baseline: a changed existing requirement file is reverted to its
-    baseline content and the extraction re-runs (the prompt forbids editing
-    existing files — scenario: "Extraction writes one new file named after
-    the issue" — "no existing feature file differs from the baseline"). A
-    violation is reverted and its verdict persisted, so the next iteration's
-    prompt carries it and the model repairs against the exact complaint
-    instead of regenerating blind."""
+    ONE new file, named after the topic the delta covers (never after the
+    issue — the oracle is structured by topic, so a search for a topic
+    targets that topic's files instead of sweeping every Gherkin file; the
+    validator's naming check carries that complaint), and NO existing feature
+    file differs from the baseline: a changed existing requirement file is
+    reverted to its baseline content and the extraction re-runs (the prompt
+    forbids editing existing files — scenario: "Extraction writes one new
+    file named after the topic" — "no existing feature file differs from
+    the baseline"). A violation is reverted and its verdict persisted, so
+    the next iteration's prompt carries it and the model repairs against the
+    exact complaint instead of regenerating blind."""
     baseline = stages.baseline_sha()
     req = common.env_dir("REQUIREMENTS_DIR").rstrip("/")
     validator = os.path.join(stages.repo_root(), ".github", "scripts", "gherkin-validate.py")
@@ -75,7 +78,6 @@ def post_ok() -> bool:
 
     # Delta shape: the guard keeps changes inside the requirements dir; the
     # stage pins what is allowed inside it.
-    num = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
     new: list[str] = []
     edited: list[str] = []
     for f in changed:
@@ -89,17 +91,15 @@ def post_ok() -> bool:
             # a violation: reverted to its baseline content, re-run.
             edited.append(f)
         else:
-            # A genuinely new file is the one named after the issue
-            # (checked below).
+            # A genuinely new file must be named after the topic the delta
+            # covers, never after the issue — the validator's naming check
+            # (the topic-structured oracle) carries that complaint for the
+            # changed files below, which also triggers the revert.
             new.append(f)
     if len(new) > 1:
         complaints.append(f"exactly one new file is allowed — found {len(new)}: "
                           + ", ".join(new))
         revert += new
-    elif len(new) == 1 and num and str(num) not in os.path.basename(new[0]):
-        complaints.append(f"the one new file must be named after the issue — expected "
-                          f"a name containing #{num}, got '{os.path.basename(new[0])}'")
-        revert.append(new[0])
     if edited:
         complaints.append("no existing feature file may differ from the baseline — "
                           f"reverted: {', '.join(edited)}")
@@ -115,7 +115,13 @@ def post_ok() -> bool:
             for line in r.stderr.splitlines():
                 if line.startswith("FAIL "):
                     name = line[len("FAIL "):].split(":", 1)[0].strip()
-                    complaints.append(f"the official Gherkin parser rejected {name}")
+                    if "named after an issue" in line:
+                        complaints.append(
+                            f"the new file must be named after the topic it "
+                            f"covers, never after the issue — got "
+                            f"'{os.path.basename(name)}'")
+                    else:
+                        complaints.append(f"the official Gherkin parser rejected {name}")
                     if name not in revert:
                         revert.append(name)
             parser_verdict = r.stderr.strip()
@@ -161,11 +167,14 @@ def main() -> None:
         return
 
     def build_prompt():
-        # The model names its output file after the issue — the number and
-        # title ride a small header above the body, so the file name it
-        # chooses is deterministic for the issue (idempotent re-runs).
-        # Rebuilt every iteration: after a failed validation the parser's
-        # verdict is appended, so the model repairs its own Gherkin.
+        # The model names its output file after the TOPIC the delta covers
+        # (never the issue — the oracle is structured by topic, so a search
+        # for a topic targets that topic's files): same unchanged input →
+        # same derived topic → same file name, so re-runs stay idempotent.
+        # The issue's number and title ride a small header above the body as
+        # context — not as the file name. Rebuilt every iteration: after a
+        # failed validation the validator's verdict is appended, so the model
+        # repairs its own Gherkin against the exact complaint.
         if not os.path.exists(body):
             return None
         text = open(body, encoding="utf-8").read()

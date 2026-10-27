@@ -1,4 +1,4 @@
-# requirements/issue-43-cost-and-token-usage.feature
+# requirements/cost-and-token-usage.feature
 # Issue 43 — the final report carries the run's total cost and input/output
 # token usage; the token budget (MAX_TOTAL_TOKENS), which cannot be enforced
 # during a pi call, is removed from the configuration surface.
