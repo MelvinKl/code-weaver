@@ -51,15 +51,24 @@ The pins (one per scenario the fix loop had to fulfil):
   plan dir, and the constructed allow set admits the current issue's plan
   file while rejecting any other plan file (implement "implementation may
   only edit the current issue's plan", "the allow set covers the repo's
-  real layout").
+  real layout");
+- the gates stage's run query is scoped to the PR's head sha server-side
+  and paginated to the end of the result set, a head with no PR-triggered
+  workflow is vacuously green after the grace window, and in-progress
+  runs keep the gate polling until they complete (pr-and-gates "all
+  PR-triggered workflows must be green", "the gate sees the PR's runs on
+  a busy repo", "a head with no PR-triggered workflow is vacuously
+  green").
 """
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import sys
 import tempfile
+import types
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -582,3 +591,191 @@ def test_implement_guard_allows_only_the_current_issue_plan():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def _run_gates_stage(pages, head_sha="a" * 40, empty_polls=None):
+    """Exec the gates stage's python in a sandbox: a temp RUNNER_TEMP state
+    dir, a fake `gh` on PATH serving the canned `actions/runs` pages in
+    call order (recording every query URL), and a no-op `time.sleep` so
+    the poll loop runs at test speed — no network, no pi. Returns (exit
+    code, the stage-summary file's text, the recorded query URLs).
+
+    `pages` is the list of response bodies the fake serves, one per call
+    (the last page repeats once the list is exhausted) — exactly the page
+    walk `pr_runs` performs against the live endpoint.
+    """
+    import shutil
+    import tempfile as _tf
+    ws = _tf.mkdtemp(prefix="cw-gates-ws-")
+    rt = _tf.mkdtemp(prefix="cw-gates-rt-")
+    fake = _tf.mkdtemp(prefix="cw-gates-fake-")
+    binp = os.path.join(fake, "bin")
+    os.makedirs(binp)
+    pages_f = os.path.join(fake, "pages.json")
+    urls_f = os.path.join(fake, "urls.txt")
+    with open(pages_f, "w", encoding="utf-8") as f:
+        json.dump(pages, f)
+    with open(os.path.join(binp, "gh"), "w", encoding="utf-8") as f:
+        f.write("#!%s\n" % sys.executable +
+                "import json, os, sys\n"
+                "args = sys.argv[1:]\n"
+                "logf = os.environ['FAKE_GH_URLS']\n"
+                "n = sum(1 for _ in open(logf)) if os.path.exists(logf) else 0\n"
+                "with open(logf, 'a') as lf:\n"
+                "    lf.write((args[-1] if args else '') + chr(10))\n"
+                "if any('actions/runs' in a for a in args):\n"
+                "    pages = json.load(open(os.environ['FAKE_GH_PAGES']))\n"
+                "    print(json.dumps(pages[min(n, len(pages) - 1)]))\n"
+                "else:\n"
+                "    print('{}')\n")
+    os.chmod(os.path.join(binp, "gh"), 0o755)
+    keys = ("PATH", "RUNNER_TEMP", "GITHUB_WORKSPACE", "GITHUB_REPOSITORY",
+            "GH_TOKEN", "CW_HEAD_SHA", "CW_GATE_EMPTY_POLLS", "CW_GATE_POLLS",
+            "AI_BRANCH", "FAKE_GH_PAGES", "FAKE_GH_URLS", "INPUT_HEAD_SHA")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "PATH": binp + os.pathsep + (saved["PATH"] or ""),
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "GITHUB_REPOSITORY": "code-weaver/test-target",
+        "GH_TOKEN": "fake-token",
+        "AI_BRANCH": "ai/code-weaver/test",
+        "CW_HEAD_SHA": head_sha,
+        "FAKE_GH_PAGES": pages_f,
+        "FAKE_GH_URLS": urls_f,
+    })
+    if empty_polls is not None:
+        os.environ["CW_GATE_EMPTY_POLLS"] = str(empty_polls)
+    # a no-op `time` stands in for the stdlib one so the poll loop does not
+    # sleep for real: the stage's `import time` picks the stub up via
+    # sys.modules (nothing else in the sandbox touches time)
+    real_time = sys.modules.get("time")
+    stub = types.ModuleType("time")
+    stub.sleep = lambda s: None
+    sys.modules["time"] = stub
+    ns = {"__name__": "__main__",
+          "__file__": os.path.join(ROOT, ".github", "actions", "gates-stage",
+                                   "stage.py")}
+    hook, cwd = sys.excepthook, os.getcwd()
+    code = 0
+    summary = ""
+    urls = []
+    os.chdir(ws)
+    try:
+        try:
+            exec(compile(_read(".github/actions/gates-stage/stage.py"),
+                         ns["__file__"], "exec"), ns)
+        except SystemExit as e:
+            code = (e.code if isinstance(e.code, int)
+                    else (0 if e.code is None else 1))
+        # read the state the stage left behind before the finally block
+        # removes the temp dirs
+        sf = os.path.join(rt, "cw", "stage-summary.txt")
+        if os.path.isfile(sf):
+            summary = open(sf, encoding="utf-8").read()
+        if os.path.isfile(urls_f):
+            urls = [l.strip() for l in open(urls_f) if l.strip()]
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        sys.modules["time"] = real_time
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(fake, ignore_errors=True)
+    return code, summary, urls
+
+
+def test_gates_stage_query_is_scoped_to_the_pr_head():
+    """(pr-and-gates "all PR-triggered workflows must be green") the run
+    query is scoped to the PR's head sha server-side — never a client-side
+    filter over the repo-wide listing's first 100 newest runs — and the
+    client-side event filter keeps push-triggered runs on the same sha out
+    of the gate (they are not triggered on the pull request)."""
+    sha = "b" * 40
+    pages = [{"total_count": 3, "workflow_runs": [
+        {"id": 1, "name": "house CI", "event": "pull_request",
+         "head_sha": sha, "status": "completed", "conclusion": "success"},
+        {"id": 2, "name": "fork-safe CI", "event": "pull_request_target",
+         "head_sha": sha, "status": "completed", "conclusion": "success"},
+        {"id": 3, "name": "push-only CI", "event": "push",
+         "head_sha": sha, "status": "completed", "conclusion": "failure"},
+    ]}]
+    code, summary, urls = _run_gates_stage(pages, head_sha=sha)
+    assert code == 0, \
+        f"a green head passes the gates (push runs are not part of them): {summary!r}"
+    assert "all 2 green" in summary, \
+        f"the gate covers exactly the PR-triggered runs: {summary!r}"
+    assert urls, "the gate never queried the runs endpoint"
+    for u in urls:
+        assert "head_sha=" + sha in u, \
+            f"the run query must be scoped to the PR's head sha: {u}"
+        assert "per_page=100" in u, f"the run query must page explicitly: {u}"
+
+
+def test_gates_stage_sees_runs_beyond_the_first_hundred():
+    """(pr-and-gates "the gate sees the PR's runs on a busy repo") the run
+    query walks the result set to its end — a full page means a next page
+    exists — so a PR whose runs sit past the listing's first 100 is still
+    polled and judged. This is the field failure behind the rewrite: the
+    earlier version read only that first page and hard-failed a healthy
+    head whose runs it never saw."""
+    sha = "e" * 40
+    full = {"total_count": 101, "workflow_runs": [
+        {"id": i, "name": f"noise {i}", "event": "push",
+         "head_sha": sha, "status": "completed", "conclusion": "success"}
+        for i in range(100)]}
+    tail = {"total_count": 101, "workflow_runs": [
+        {"id": 101, "name": "house CI", "event": "pull_request",
+         "head_sha": sha, "status": "completed", "conclusion": "success"}]}
+    code, summary, urls = _run_gates_stage([full, tail], head_sha=sha)
+    assert code == 0, \
+        f"the gate must find the PR's run on page two: {summary!r}"
+    assert "all 1 green" in summary, \
+        f"the gate judges exactly the PR-triggered runs: {summary!r}"
+    assert any("page=2" in u for u in urls), \
+        "a full page must page on — the run set was never walked to its end"
+
+
+def test_gates_stage_empty_head_is_vacuously_green():
+    """(pr-and-gates "a head with no PR-triggered workflow is vacuously
+    green") a head with no visible PR-triggered run succeeds after the grace
+    window: the earlier version's vacuously-green return was dead code
+    inside the all-completed branch, so such a head fell through to the
+    in-progress branch and hard-failed its poll cap twenty minutes later
+    instead of letting the factory proceed."""
+    code, summary, urls = _run_gates_stage(
+        [{"total_count": 0, "workflow_runs": []}],
+        head_sha="c" * 40, empty_polls=2)
+    assert code == 0, \
+        f"an empty gate set is vacuously green, not a poll-cap failure: {summary!r}"
+    assert "vacuously green" in summary, \
+        f"the summary records the vacuous pass: {summary!r}"
+    assert urls, "the grace window must actually poll the endpoint"
+
+
+def test_gates_stage_polls_in_progress_runs_to_green():
+    """(pr-and-gates "all PR-triggered workflows must be green") runs that
+    are still in progress keep the gate polling (bounded by the poll cap,
+    the job timeout behind that), and the gate proceeds only once every
+    run has completed green — the stage's exit reflects the final state,
+    not the first poll."""
+    sha = "d" * 40
+    running = {"id": 1, "name": "house CI", "event": "pull_request",
+               "head_sha": sha, "status": "in_progress", "conclusion": None}
+    done = {"id": 1, "name": "house CI", "event": "pull_request",
+            "head_sha": sha, "status": "completed", "conclusion": "success"}
+    code, summary, urls = _run_gates_stage(
+        [{"total_count": 1, "workflow_runs": [running]},
+         {"total_count": 1, "workflow_runs": [done]}],
+        head_sha=sha)
+    assert code == 0 and "all 1 green" in summary, \
+        f"the gate waits out the in-progress run and then passes: {summary!r}"
+    assert len(urls) >= 2, \
+        "the gate must re-poll until every run has completed"

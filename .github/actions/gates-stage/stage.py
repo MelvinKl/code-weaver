@@ -9,6 +9,15 @@ and the gates re-poll. Fix iterations are bounded by MAX_LOOPS (0 = no cap);
 polling has its own count plus the job timeout as the hard backstop.
 Nowhere in this script — or the factory — is there a merge call: merging
 the PR stays a human decision.
+
+The run query is scoped to the PR's head sha server-side (`?head_sha=`) and
+paginated to the end of the result set: a repo-wide first-page listing
+(100 newest runs of every branch and event) is a window the PR's runs do
+not sit in on a busy target repo, and a gate that polls such a head never
+sees them ("the PR gate is unable to get the status of the workflows").
+A head that genuinely has no PR-triggered workflow is vacuously green: the
+gate waits out a short grace window — so a run GitHub has not materialised
+yet is not mistaken for an absent one — and only then returns green.
 """
 from __future__ import annotations
 
@@ -29,16 +38,49 @@ import stages
 
 POLL_SECONDS = 30
 POLL_MAX = int(os.environ.get("CW_GATE_POLLS", "40"))  # + job timeout backstops
+# A head with no PR-triggered run visible yet: GitHub materialises the run
+# within seconds of the PR opening or updating, and the gates job starts
+# only after the whole PR stage (whose pi body call alone takes minutes)
+# has finished — a head still empty after this many polls has no
+# pull_request-triggered workflow at all: the gate set is empty, and "all
+# PR-triggered workflows are green" holds vacuously. The grace makes that
+# return reachable: the earlier version's vacuously-green branch sat inside
+# the all-completed check, which requires at least one run, so a truly empty
+# head fell through to the in-progress branch and hard-failed its poll cap
+# twenty minutes later instead of succeeding.
+EMPTY_GRACE_POLLS = int(os.environ.get("CW_GATE_EMPTY_POLLS", "6"))
+# Backstop for the run query's page walk: a head's run set is small (one
+# run per triggered workflow); the cap bounds a degenerate walk only.
+RUNS_QUERY_MAX_PAGES = 10
 
 
 def pr_runs(head_sha: str) -> list[dict]:
-    data = json.loads(common.gh_api(
-        f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs?per_page=100"))
+    """Every PR-triggered workflow run on the target repo for this head sha.
+
+    Scoped to the sha server-side (`?head_sha=`) and paginated to the end
+    of the result set, then filtered to the pull_request(-target) events
+    client-side: the same sha can also carry push- or
+    schedule-triggered runs that are not part of the gate. The earlier
+    version read only the repo-wide listing's first page — the 100 newest
+    runs across every branch and event — and filtered client-side; on a
+    busy target repo the PR's runs sat outside that window, so the gate
+    polled a head whose runs it could never see and failed a healthy PR
+    (the field symptom behind this rewrite).
+    """
     out = []
-    for r in data.get("workflow_runs", []):
-        if r.get("head_sha") == head_sha and r.get("event") in (
-                "pull_request", "pull_request_target"):
-            out.append(r)
+    page = 1
+    while page <= RUNS_QUERY_MAX_PAGES:
+        data = json.loads(common.gh_api(
+            f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs"
+            f"?head_sha={head_sha}&per_page=100&page={page}"))
+        runs = data.get("workflow_runs", [])
+        for r in runs:
+            if r.get("head_sha") == head_sha and r.get("event") in (
+                    "pull_request", "pull_request_target"):
+                out.append(r)
+        if len(runs) < 100:
+            break  # short page = end of the result set
+        page += 1
     return out
 
 
@@ -94,12 +136,22 @@ def main() -> None:
     fix_iter = 0
     while True:
         runs = pr_runs(head_sha)
-        if runs and all(r.get("status") == "completed" for r in runs):
+        if runs:
+            if not all(r.get("status") == "completed" for r in runs):
+                # still running — poll (bounded count; the job timeout is
+                # the hard backstop)
+                polls += 1
+                if polls > POLL_MAX:
+                    common.log("::error::stage 13: gate polling exceeded its cap "
+                               "while runs were still in progress")
+                    sys.exit(1)
+                pending = ", ".join(
+                    f"{r['name']}({r.get('status')})" for r in runs)
+                common.log(f"stage 13: waiting for PR-triggered runs: {pending} "
+                           f"(poll {polls}/{POLL_MAX})")
+                time.sleep(POLL_SECONDS)
+                continue
             failed = [r for r in runs if r.get("conclusion") != "success"]
-            if not runs:
-                common.log("stage 13: no PR-triggered workflows on this head — "
-                           "vacuously green")
-                return
             if not failed:
                 common.log(f"stage 13: all {len(runs)} PR-triggered workflow(s) green")
                 open(common.state_file("stage-summary.txt"), "a").write(
@@ -146,15 +198,22 @@ def main() -> None:
             fix_iter += 1
             polls = 0
             continue
-        # still running — poll (bounded count; the job timeout is the backstop)
+        # No PR-triggered run for this head is visible yet — either the repo
+        # triggers no workflow on the pull request at all (gate set empty =
+        # vacuously green) or GitHub has not materialised the run yet. The
+        # grace window distinguishes the two and makes the vacuous return
+        # reachable — the earlier version sent an empty head straight to the
+        # in-progress branch above, where it hard-failed the poll cap.
         polls += 1
-        if polls > POLL_MAX:
-            common.log("::error::stage 13: gate polling exceeded its cap while "
-                       "runs were still in progress")
-            sys.exit(1)
-        pending = ", ".join(f"{r['name']}({r.get('status')})" for r in runs) or "none yet"
-        common.log(f"stage 13: waiting for PR-triggered runs: {pending} "
-                   f"(poll {polls}/{POLL_MAX})")
+        if polls > EMPTY_GRACE_POLLS:
+            common.log("stage 13: no PR-triggered workflow on this head — "
+                       f"vacuously green (after {EMPTY_GRACE_POLLS} empty polls)")
+            open(common.state_file("stage-summary.txt"), "a").write(
+                "stage 13 pr-gates: no PR-triggered workflow on this head "
+                "(vacuously green)\n")
+            return
+        common.log(f"stage 13: no PR-triggered runs visible for "
+                   f"{head_sha[:12]} yet (grace poll {polls}/{EMPTY_GRACE_POLLS})")
         time.sleep(POLL_SECONDS)
 
 

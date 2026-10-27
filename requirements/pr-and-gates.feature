@@ -31,6 +31,19 @@ Feature: Pull request and gate loop
     Then the stage succeeds only when all of them are green
 
   @gates
+  Scenario: The gate sees the PR's runs on a busy repo
+    Given the target repo has more than one hundred recent workflow runs
+    When the pr-gates stage polls the PR's head
+    Then it still finds every run triggered on that head
+
+  @gates
+  Scenario: A head with no PR-triggered workflow is vacuously green
+    Given the PR is open
+    And no workflow on the target repo is triggered by the pull request
+    When the pr-gates stage finds no run for the PR's head after its grace window
+    Then the stage succeeds vacuously and the factory proceeds
+
+  @gates
   Scenario: A failed gate is fixed and re-checked
     Given one PR-triggered workflow is red
     When the pr-gate-fix stage fixes the failure and re-runs pr-gates
