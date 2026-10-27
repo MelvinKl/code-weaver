@@ -128,6 +128,20 @@ def test_topic_named_file_passes():
             os.chdir(cwd)
 
 
+def test_missing_file_fails():
+    """A deleted feature file fails validation instead of crashing the
+    validator — a topic's home is extended or created, never deleted; the
+    extract stage reverts a deleted file and re-runs."""
+    with tempfile.TemporaryDirectory() as d:
+        cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            rc, errs = mod.validate_file("deleted-topic.feature")
+            assert rc == 1 and any("missing" in e for e in errs)
+        finally:
+            os.chdir(cwd)
+
+
 def test_directory_walk():
     with tempfile.TemporaryDirectory() as d:
         cwd = os.getcwd()

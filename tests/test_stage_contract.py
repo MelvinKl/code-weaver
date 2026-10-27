@@ -11,10 +11,11 @@ The pins (one per scenario the fix loop had to fulfil):
   "requirements are derived from the project itself" — while the other
   stages keep the path-referenced slice (configuration "project files are
   referenced by path, not injected into the pi call");
-- the extract prompt never edits an existing feature file
-  (requirement-extraction "extraction writes one new file named after the
-  topic") and tolerates arc42 structure variance (safety "the factory
-  tolerates arc42 structure variance");
+- the extract prompt places the delta by topic — extending the existing
+  topic file, creating a new file only for a topic no file yet covers
+  (requirement-extraction "extraction places the delta by topic") — and
+  tolerates arc42 structure variance (safety "the factory tolerates arc42
+  structure variance");
 - the consumer workflow and the README pin the oracle's owner and a
   version tag (reuse-by-ref "the factory is invoked as a reusable
   workflow");
@@ -92,31 +93,30 @@ def test_extract_stage_uses_file_argument_context():
     assert "context_as_args" not in review
 
 
-def test_extract_prompt_forbids_editing_existing_files():
-    """(requirement-extraction "extraction writes one new file named after
-    the topic") the prompt's contract: exactly one new file, and no
-    existing feature file may differ from the baseline — a changed
-    existing file is a violation the guard reverts."""
+def test_extract_prompt_places_delta_by_topic():
+    """(requirement-extraction "extraction places the delta by topic") the
+    prompt's contract: a delta's scenarios extend the existing topic file
+    that covers their topic — an edit to an existing file is the placement,
+    not a violation — and a new file is created only for a topic no existing
+    file covers, named after the topic, never after the issue. The stage
+    accordingly no longer reverts a merely changed existing file (it reverts
+    one that no longer parses, and a deleted topic file)."""
     prompt = _read("pi-prompts/requirements.md")
-    assert "exactly one new file" in prompt
-    assert "Never edit an existing" in prompt
-    assert "byte-identical" in prompt
+    assert "extend the existing topic file" in prompt
+    assert "no existing file covers the topic" in prompt
+    assert "create a new file named after the topic" in prompt
     stage = _read(".github/actions/extract-stage/stage.py")
-    assert "no existing feature file may differ from the baseline" in stage
+    assert "no existing feature file may differ from the baseline" not in stage
 
 
-def test_extract_prompt_names_new_file_after_topic():
-    """(requirement-extraction "extraction writes one new file named after
-    the topic") the oracle is structured by topic, not by issue: the prompt
-    names the new file after the topic the delta covers — never after the
-    issue (an issue-named file would scatter a topic across the issue
-    history and force a search to sweep every Gherkin file), and the
-    validator enforces the same rule on the generated files (house CI runs
-    it over the whole oracle, so the rule holds for existing files too).
-    """
+def test_extract_prompt_names_files_after_topic():
+    """(requirement-extraction "extraction places the delta by topic") the
+    oracle is structured by topic, not by issue: no file name in the prompt
+    carries an issue number, and the validator enforces the same rule on the
+    changed files (house CI runs it over the whole oracle, so the structure
+    holds for the existing files too)."""
     prompt = _read("pi-prompts/requirements.md")
-    assert "named after the **topic**" in prompt
-    assert "never after the issue" in prompt
+    assert "carries an issue number" in prompt
     validator = _read(".github/scripts/gherkin-validate.py")
     assert "named after an issue" in validator
     assert "ISSUE_NAMED_RE" in validator

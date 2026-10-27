@@ -2,13 +2,14 @@
 """Validate Gherkin source files with Cucumber's official Gherkin parser.
 
 Usage: gherkin-validate.py <file-or-dir>…
-Exit 0 only if every .feature file parses AND each feature has at least one
-Scenario (the oracle must be executable: the test-and-review stage runs every
-scenario as an acceptance test) AND no file is named after an issue (the
-oracle is structured by topic, not by issue — an issue-named file would
-scatter a topic across the issue history and force a search to sweep every
-Gherkin file instead of directing it at the topic's file). The naming check
-needs no parser, so it holds even where the official parser port is absent.
+Exit 0 only if every .feature file exists AND parses AND each feature has at
+least one Scenario (the oracle must be executable: the test-and-review stage
+runs every scenario as an acceptance test) AND no file is named after an
+issue (the oracle is structured by topic, not by issue — an issue-named file
+would scatter a topic across the issue history and force a search to sweep
+every Gherkin file instead of directing it at the topic's file). The naming
+and existence checks need no parser, so they hold even where the official
+parser port is absent.
 
 The `gherkin` import is Cucumber's official Python port — the same parser the
 requirements must satisfy, so a file that validates here validates everywhere
@@ -56,6 +57,12 @@ def scenario_count(doc) -> int:
 
 def validate_file(path: str) -> tuple[int, list[str]]:
     errs: list[str] = []
+    # A deleted feature file fails validation rather than crashing it: a
+    # topic's home is extended or created, never deleted.
+    if not os.path.isfile(path):
+        return 1, [f"{path}: missing on disk — a deleted feature file fails "
+                   f"validation (a topic's file is extended or created, never "
+                   f"deleted)"]
     # Topic structure, enforced before (and without) the parser: a file
     # named after an issue would make a search for its topic sweep the whole
     # oracle; the file must be named after the topic it covers.

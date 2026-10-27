@@ -13,9 +13,10 @@
   the issue's change-set diff, recorded as state files; the reference
   every guard check measures against.
 - **Delta requirements** — the requirement change an issue implies,
-  relative to the baseline; extracted as Gherkin into exactly one new
-  file named after the topic the delta covers — never after the issue,
-  the oracle being structured by topic.
+  relative to the baseline; extracted as Gherkin into the oracle's topic
+  structure — a delta's scenarios extend the existing topic file that covers
+  them, a new file is created only for a topic no file yet covers, and no
+  file is named after the issue.
 - **Delta-scoped review** — the test-and-review stage's review judges only the
   scenarios of the feature files a run changed (the suite still executes the
   whole oracle). The standing oracle is the accumulated set, so re-judging

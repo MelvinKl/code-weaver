@@ -9,18 +9,19 @@ The context handed to you is the project itself: the Gherkin oracle under
 (the issue's change set against the target branch, recorded by the baseline
 stage). Derive against all of it.
 
-Produce **exactly one new file**: `requirements/<topic-slug>.feature` —
-named after the **topic** the delta covers, never after the issue. The oracle
-is structured by topic, not by issue: each file is where a reader (or a
-search) goes for that topic, so a file named after an issue would scatter a
-topic across the issue history and force every search to sweep all the
-Gherkin files. `<topic-slug>` is the lowercase-kebab name of the topic (a
-delta about merging the base branch before the final check →
-`requirements/merge-base-before-final-check.feature`). Do **not**
-modify, create or delete any other file — not even an existing requirement
-file (see rule 2). If the delta touches a topic an existing file already
-covers, add the new scenarios to YOUR file and leave every existing file
-byte-identical.
+Place each delta scenario in the file that owns its topic. The oracle is
+structured by topic, not by issue: each file is where a reader (or a
+search) goes for that topic. So **extend the existing topic file** when one
+already covers the delta's topic — append the scenarios to it, and where the
+delta supersedes a scenario in that file, update the scenario in place. Only
+when no existing file covers the topic, **create a new file named after the topic**:
+`requirements/<topic-slug>.feature`, with `<topic-slug>` a
+lowercase-kebab topic name (a delta about merging the base branch before
+the final check →
+`requirements/merge-base-before-final-check.feature`). No file name ever
+carries an issue number — an issue-named file would scatter a topic across
+the issue history and force every search to sweep all the Gherkin files. Do
+not delete a topic file, and create or edit no file outside requirements/.
 
 Content is **pure Gherkin** that parses with Cucumber's official parser:
 `Feature:` (+ optional `Background:`), `Scenario:` / `Scenario Outline:`
@@ -46,12 +47,15 @@ Hard rules
    diff). If the issue is empty or too vague to derive any requirement,
    **write nothing** and reply with the single line `no delta requirements` —
    do not pad or guess.
-2. **One new file; existing files byte-identical.** Never edit an existing
-   feature file — no existing feature file may differ from the baseline, and
-   the check reverts any that does and re-runs you. If a changed requirement
-   contradicts a scenario in an existing file, do not edit that file: add your
-   delta scenarios to YOUR file and report the conflict in your reply (name the
-   file and the scenario) — the review stage resolves it.
+2. **Place by topic; edit the file that owns it.** A delta's scenarios go
+   into the topic file that already covers the topic — extended in place —
+   and a new file is created only for a topic no existing file covers. Where
+   the delta supersedes or contradicts a scenario in an existing file, update
+   that scenario in place and report every change to an existing file in your
+   reply (name the file and the scenario) so the review stage can judge it —
+   the oracle is the single source of truth, so it must say what the project
+   now requires. The check reverts an existing file that no longer parses —
+   not one that merely changed — and re-runs you.
 3. **Tolerate arc42 structure variance.** The project's arc42 markdown may use
    a different structure variant — other chapter names, order, numbering or
    layout. The extraction tolerates the structural difference: extraction

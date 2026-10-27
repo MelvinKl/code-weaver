@@ -20,15 +20,16 @@ this repo's reusable workflow takes over:
    oracle, the arc42 markdown, `README.md`, the baseline diff) is handed to pi
    as `@`-file arguments, which pi reads as context before answering; arc42
    structure variance is tolerated (extraction proceeds on the readable
-   parts); the result is exactly one new file named after the topic the
-   delta covers (never after the issue — the oracle is structured by
-   topic) — a changed existing feature file is a guard violation, reverted
-   and re-run — and an empty body writes nothing; the result is validated
-   with Cucumber's official parser (skipped-not-failed where the parser
-   port is absent);
+   parts); the result is the delta placed by topic — the existing topic
+   file extended in place, a new file only for a topic no file yet covers,
+   never named after an issue — a changed existing file that no longer
+   parses is a guard violation, reverted and re-run — and an empty body
+   writes nothing; the result is validated with Cucumber's official parser
+   (skipped-not-failed where the parser port is absent);
 5. **requirement check** — the shared guard: only the requirements dir may
-   have changed (and the delta's shape is pinned: at most one new file,
-   named after the topic it covers — never after the issue);
+   have changed (and the delta's shape is pinned to the topic placement —
+   extended existing topic files, new files only for uncovered topics,
+   never named after an issue);
 6. **plan** — markdown plan(s) under `plans/`, covering **every** requirement
    change, grounded in the arc42 documentation (the `docs/` set — the
    top-level `PLAN.md` where a target has no doc dir);
@@ -170,9 +171,9 @@ implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and
 house CI rejects any feature file named after an issue number, so the
-structure holds for files the factory creates too. House CI validates them
-with Cucumber's official parser on every push/PR; in a target repo the
-test-and-review stage runs them as executable acceptance tests.
+structure holds for every file the factory creates or edits. House CI
+validates them with Cucumber's official parser on every push/PR; in a target
+repo the test-and-review stage runs them as executable acceptance tests.
 
 ## What this is *not*
 

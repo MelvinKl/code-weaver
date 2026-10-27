@@ -2,8 +2,11 @@
 # Issue 43 — the final report carries the run's total cost and input/output
 # token usage; the token budget (MAX_TOTAL_TOKENS), which cannot be enforced
 # during a pi call, is removed from the configuration surface.
-# Standing scenarios this delta supersedes (reported in the stage reply, not
-# edited here — requirements/ is read-only to the extraction stage):
+# Standing scenarios this delta supersedes (run #43 reported them in its
+# stage reply instead of editing — requirements/ was read-only to the
+# extraction stage then; the placement change lifts that read-only pin, so
+# the rewording specified in plans/43.md can now land in the files
+# themselves, by the owner or a follow-up run):
 #   configuration.feature "The loop caps are configurable"
 #   configuration.feature "A loop cap of 0 means no cap"
 #   test-and-review.feature "The loop respects the token budget"

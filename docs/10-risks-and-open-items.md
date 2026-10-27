@@ -36,17 +36,19 @@
   `implement.feature`'s “implementation may only edit the current
   issue's plan” pins the tighter separation. The stricter implement pin is
   what the guard enforces, and the guard-rail line stays satisfied (the
-  current plan file lives under `plans/`). `requirements/` is read-only to
-  the factory, so reconciling the two lines is the owner's call — a
+  current plan file lives under `plans/`). The implement stage stays walled
+  off from the oracle (its guard reverts requirement edits and loops back to
+  planning), so reconciling the two lines is the owner's call — a
   requirement that cannot be fulfilled is reported, not rewritten.
-- **Extraction delta shape** — the guard pins exactly one new file named
-  after the topic the delta covers (never after the issue — the oracle is
-  structured by topic, so a search for a topic targets that topic's files),
-  and no existing feature file may differ from the
-  baseline (a changed existing file is reverted and the stage re-runs). A
-  delta that genuinely contradicts an existing scenario is reported in
-  the model's reply and resolved by the review stage — the oracle stays
-  the single source of truth.
+- **Extraction delta shape** — the guard keeps the delta inside the
+  requirements dir; inside it, the stage pins the topic placement: a
+  delta's scenarios extend the existing topic file that covers their topic
+  (a merely changed file is not a violation), a new file is created only for
+  a topic no file yet covers (named after the topic, never after the issue),
+  and a changed existing file that no longer parses — or a deleted topic
+  file — is reverted and the stage re-runs. A delta that supersedes a
+  standing scenario updates that scenario in place (the oracle is the single
+  source of truth) and reports the change — the review stage judges it.
 - **Open item for the owner (trigger scenario superseded by #20)** —
   `trigger.feature`'s standing scenario "Issue opened with the label
   starts the factory" (When: "the issue *carries* the label
@@ -60,20 +62,23 @@
   label is added" and change the When step to "the label
   `ai-requirements` is *added* to the issue"; the Then steps (the factory
   runs and records the issue number and the issue body) are unchanged —
-  the outcome now rides the `labeled` event. The factory does not make
-  that edit: `requirements/` is read-only to every stage (the extract
-  guard pins exactly one new file; the implement guard reverts
-  requirement edits and loops back to planning), so per the rule above the
-  contradiction is reported, not edited, and the oracle stays the single
-  source of truth. Meanwhile `PLAN.md` §7 already cites the post-change
+  the outcome now rides the `labeled` event. In run #20 the factory did not
+  make that edit: `requirements/` was read-only to every stage (the extract
+  guard then pinned exactly one new file; the implement guard still reverts
+  requirement edits and loops back to planning), so the contradiction was
+  reported, not edited. The placement change lifts the extraction stage's
+  read-only pin, so a follow-up run touching the trigger topic can now make
+  it; until then the oracle stands as #20 reported it. Meanwhile `PLAN.md`
+  §7 already cites the post-change
   scenario name (the one-file-behind state the review stage is the
   designated resolver of). The owner's follow-up is the rename + When
   edit in `requirements/trigger.feature` (a follow-up issue).
 - **Open item for the owner (four standing scenarios superseded by
   #43)** — the issue-43 delta's header
   (`cost-and-token-usage.feature`) declares four standing
-  scenarios superseded, “reported in the stage reply, not edited here —
-  requirements/ is read-only to the extraction stage”:
+  scenarios superseded — run #43 reported them in its stage reply instead of
+  editing (at the time requirements/ was read-only to the extraction
+  stage; the placement change lifts that pin):
   `configuration.feature`’s “The loop caps are configurable” and “A loop
   cap of 0 means no cap” (both Givens pin “the defaults are MAX_LOOPS 5
   and MAX_TOTAL_TOKENS 500000”); `test-and-review.feature`’s “The loop
@@ -95,12 +100,14 @@
   its cap” — the Then lines reword to the delta’s form, “every bounded
   loop is bounded by its iteration cap alone” / “the factory is
   guaranteed to terminate while all remaining loop caps are non-zero”,
-  with the “a cap of 0 means that loop is uncapped” line staying. The
-  factory does not make that edit: `requirements/` is read-only to every
-  stage, so per the rule above the contradiction is reported, not edited,
-  and the oracle stays the single source of truth. `PLAN.md` — where the
-  arc42 set lives in a target without a `docs/` dir — is not in this
-  repo’s tree, so this entry stands alone. The owner’s follow-up is the
+  with the “a cap of 0 means that loop is uncapped” line staying. In run
+  #43 the factory did not make that edit: at the time `requirements/` was
+  read-only to every stage, so per the rule then in force the contradiction
+  was reported, not edited. The placement change lifts the extraction
+  stage's read-only pin, so the rewording above can now land in the three
+  files, by the owner or a follow-up run. `PLAN.md` — where the
+  arc42 set lives in a target without a `docs/` dir — is not in this repo's
+  tree, so this entry stands alone. The owner's follow-up is the
   rewording above in `requirements/configuration.feature`,
   `requirements/test-and-review.feature` and
   `requirements/safety.feature` (a follow-up issue).

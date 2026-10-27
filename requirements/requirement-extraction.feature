@@ -32,7 +32,7 @@ Feature: Requirement extraction
     Given the extraction stage produced delta requirements
     When pi writes the requirements
     Then the requirements land as .feature files under the configured REQUIREMENTS_DIR
-    And every generated file is valid, parseable Gherkin
+    And every changed file is valid, parseable Gherkin
 
   @extraction
   Scenario: Gherkin structure follows the canonical keywords
@@ -63,12 +63,12 @@ Feature: Requirement extraction
     Then every context argument is a file that exists
     And directories are expanded to the files they contain
 
-  Scenario: Extraction writes one new file named after the topic
+  Scenario: Extraction places the delta by topic
     Given an issue with a number and a title
     When the extraction stage writes its delta requirements
-    Then it creates exactly one new feature file named after the topic the delta covers
-    And the file name carries no issue number — the oracle is structured by topic, so a search for a topic targets that topic's files, not every Gherkin file
-    And no existing feature file differs from the baseline
+    Then each delta scenario lands in the feature file that owns its topic — an existing file extended in place where one already covers the topic
+    And a new feature file is created only for a topic no existing file covers, named after that topic
+    And no file name carries an issue number — the oracle is structured by topic, so a search for a topic targets that topic's files, not every Gherkin file
 
   Scenario: An empty model response does not consume the loop budget
     # a wedged or silent model must not burn a bounded-loop iteration the
