@@ -1,14 +1,13 @@
 # Code Weaver — release machinery (reuse-by-ref)
 #
-# Tagging vX.Y.Z publishes a GitHub release: the ref every target pins.
+# A push to main publishes a GitHub release: the ref every target pins.
 # Tags are immutable — workflows on a target that pinned an older ref keep
 # working; upgrading is a one-line ref bump in the target's workflow.
 name: code-weaver release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
 
 permissions:
   contents: write
@@ -22,9 +21,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
+          # The tag is the next single increasing number: the number after
+          # the highest published version of the new scheme (no published
+          # number yet → 1). The shared-plumbing helper
+          # (`.github/scripts/release-number.py`) does the computation —
+          # its pure function is unit-tested by
+          # tests/test_release_contract.py. Older-scheme tags are not
+          # numbers, so they stay out of the series: published version
+          # numbers never repeat and never decrease.
+          TAGS=$(git ls-remote --tags origin \
+            | awk -F'\t' 'substr($2, length($2)-2) != "^{}" { sub(/^refs\/tags\//, "", $2); print $2 }')
+          NEXT=$(printf '%s\n' "$TAGS" | python3 .github/scripts/release-number.py)
           PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
           RANGEFROM=${PREV:-$(git rev-list --max-parents=0 HEAD)}
-          CHANGES=$(git diff --stat "$RANGEFROM" "$TAG" -- .github pi-prompts requirements | tail -n +2)
-          NOTES=$(printf '## %s\n\nChanged since %s:\n\n`%s`\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$TAG" "${PREV:-the first commit}" "$CHANGES" "$TAG")
-          gh release create "$TAG" --title "code-weaver $TAG" --notes "$NOTES"
+          CHANGES=$(git diff --stat "$RANGEFROM" HEAD -- .github pi-prompts requirements | tail -n +2)
+          git tag "$NEXT" HEAD
+          git push origin "refs/tags/$NEXT"
+          NOTES=$(printf '## %s\n\nChanged since %s:\n\n`%s`\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `@%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$NEXT" "${PREV:-the first commit}" "$CHANGES" "$NEXT")
+          gh release create "$NEXT" --title "code-weaver $NEXT" --notes "$NOTES"

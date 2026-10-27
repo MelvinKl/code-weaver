@@ -26,8 +26,8 @@
   suite's full result stands, the empty verdict block is the answer); a run
   that DID change scenarios with zero parseable verdicts still fails the
   stage — the oracle cannot be assumed green.
-- **Oracle** — the Gherkin requirements under `requirements/` (14 files,
-  130 scenarios), structured by topic: each file is named after the topic
+- **Oracle** — the Gherkin requirements under `requirements/` (15 files,
+  135 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
@@ -50,8 +50,8 @@
   repo) after each run.
 - **Reuse by ref** — the factory lives in this repo and is referenced by
   ref (reusable workflow + composite actions + prompt templates); an
-  upgrade is a one-line ref bump, and every published `vX.Y.Z` tag is a
-  stable ref.
+  upgrade is a one-line ref bump, and every published version — an older
+  `vX.Y.Z` tag or a new single-number tag — is a stable ref.
 - **Satisfied no-op** — a re-run of work already on the branch: the
   model's empty answer with a non-empty diff against the run's baseline
   means the work is in place — the stage is green, not an error.

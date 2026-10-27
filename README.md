@@ -100,7 +100,8 @@ seconds with the exact cause in the log — not as an opaque red checkout.
 
 **Upgrading is a ref bump** in that one `uses:` line — a reusable workflow
 (plus the composite actions and pi prompt templates it references, all from
-this repo). **Every published version is a stable ref**: tag `vX.Y.Z` →
+this repo). **Every published version is a stable ref**: a push to the
+factory's `main` branch publishes the next single increasing number as a
 GitHub release; targets pinned to an older ref keep working.
 
 ## Inputs
@@ -140,7 +141,7 @@ it without touching the factory.
   workflows/
     factory.yml        the 15-stage pipeline as one reusable workflow
     house-ci.yml       this repo's own gate (uv; compile+YAML+oracle+pytest)
-    release.yml        tag vX.Y.Z → GitHub release (the ref targets pin)
+    release.yml        push to main → next single increasing number → GitHub release (the ref targets pin)
   actions/
     setup-pi/          stage 2 — verify (never install) pi + backend + model
     pi-run/            one headless `pi --print` run (the stage primitive)
@@ -157,8 +158,9 @@ it without touching the factory.
     common.py          shared plumbing (state dir, caps, guard, pi, git)
     stages.py          the shared generation/review loop machinery
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
+    release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (14 files, 130 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 135 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -166,7 +168,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **130 Gherkin scenarios** — the oracle this
+`requirements/` holds **135 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

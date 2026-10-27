@@ -39,8 +39,8 @@ Feature: Reuse by ref, never copy-paste
   @reuse
   Scenario: Every published version is a stable ref
     Given the code-weaver repo has published versions
-    When a maintainer tags a new release
-    Then the tag follows vX.Y.Z semver
+    When a new release is published
+    Then its tag is a single increasing version number
     And workflows pinned to an older ref keep working
 
   Scenario: Composite action steps declare their shell explicitly

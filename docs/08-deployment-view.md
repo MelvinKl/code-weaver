@@ -10,9 +10,11 @@ consumption example declare the same owner and the same tag (the
 trigger-contract tests keep the two surfaces in lock-step on the
 `labeled`-only trigger).
 
-**Upgrades are a ref bump.** `release.yml` turns a `vX.Y.Z` tag into a
-GitHub release; tags are immutable, so targets pinned to an older ref keep
-working, and bumping the ref is the only change a target ever makes.
+**Upgrades are a ref bump.** `release.yml` fires on the main branch's
+advance: the advance is tagged with the next single increasing number and
+published as a GitHub release without any maintainer action; tags are
+immutable, so targets pinned to an older ref keep working, and bumping the
+ref is the only change a target ever makes.
 
 **The runner environment.** A runner labelled for the factory must have,
 ahead of time: `pi` installed and configured (its LLM backend — e.g. the
