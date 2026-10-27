@@ -5,8 +5,8 @@ Contract every stage script keeps:
     (the reporting requirement: nothing under test-results/ is ever committed)
   - every loop respects MAX_LOOPS; 0 means no cap
     (the safety requirement: every loop respects its cap)
-  - pi is pre-installed & pre-configured in the runner environment —
-    stages invoke it, they never install or reconfigure it
+  - pi is installed and configured for the run by stage 2 (setup-pi) —
+    the later stages invoke it; only the setup stage writes its configuration
 """
 from __future__ import annotations
 
@@ -249,9 +249,10 @@ def pi_invoke(
     timeout: int = 21600,
     context_as_args: bool = False,
 ) -> subprocess.CompletedProcess:
-    """One headless pi run. The backend comes from the pi configuration that
-    is a pre-requisite of the runner environment — this never passes or
-    overrides it (setup-pi requirement). Only the model is selected here.
+    """One headless pi run. The backend comes from the pi configuration the
+    setup stage wrote into the agent directory for the run — this never
+    passes or overrides it (setup-pi contract). Only the model is selected
+    here.
 
     The thinking level is deliberately NOT passed: pi-jev is configured
     (PI_JEV_THINKING / --jev-thinking) and classifies *each* prompt and picks

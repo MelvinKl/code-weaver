@@ -1,151 +1,72 @@
 name: setup-pi
 description: >-
-  Stage 2 — verify the pre-installed, pre-configured pi. pi's presence and its
-  LLM-backend configuration are pre-requisites of the runner environment: the
-  action only VERIFIES (presence → configuration → backend reachability →
-  configured-model set → headless smoke check on the selected model) and
-  fails with an explicit message. It never installs or re-configures pi, and
-  the only adjustable LLM setting is which configured model is used.
+  Stage 2 — install pi for this workflow run and configure it from the
+  run's provided harness. The harness is provided per run: the model
+  configuration via a GitHub secret or the repo file .pi/agent/models.json
+  (the backend in it is the run's LLM backend), the additional packages via
+  a GitHub secret or .pi/settings.json (an empty or absent provider leaves
+  pi without additional packages), the MCP configuration via an optional
+  GitHub secret or .pi/mcp.json, and the extension's environment variables
+  (such as the ones .pi/extensions/pi-jev-config.ts carries) via a
+  .env-style GitHub secret. The stage installs pi so every later pi
+  invocation in the run uses that installed copy, materialises the harness
+  into the agent directory the run's pi invocations resolve
+  (~/.pi/agent/, or PI_CODING_AGENT_DIR — replacing the runner's
+  pre-existing user-level configuration for the run), and verifies the
+  result: backend reachability → model in the written set → a headless
+  pi --print smoke check on the installed pi. A setup that cannot install or
+  configure pi fails the stage with an explicit message — no later stage
+  runs. pi is not a pre-requisite of the runner environment.
 inputs:
   llm-model:
-    description: Which configured model the run uses (must be in the configured set)
+    description: Which configured model the run uses (must be listed in the model set of the run's provided model configuration)
     required: false
     default: Ornith-1.5-35B-A3B
+  # The run's pi harness providers (the factory's four harness secrets ride
+  # here): each carries the full content of the named element — an empty
+  # value means "no provider for this element" and the stage resolves the
+  # repo file instead. The factory delivers them with: + CW_<name> env per
+  # its documented relay idiom; the stage code consumes them as INPUT_*
+  # falling back to CW_*.
+  pi-models:
+    description: The run's model configuration — the content of .pi/agent/models.json (empty = the repo file is the provider)
+    required: false
+  pi-settings:
+    description: The run's additional-packages settings — the content of .pi/settings.json (empty = pi without additional packages)
+    required: false
+  pi-mcp:
+    description: The run's MCP configuration — the content of .pi/mcp.json (empty = the run's pi runs without MCP servers)
+    required: false
+  pi-extension-env:
+    description: The pi extension's environment variables in .env style (empty = no provider for the extension's environment)
+    required: false
 runs:
   using: composite
   steps:
     - id: verify
-      name: Verify pi (pre-requisite of the runner environment)
-      shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
+      name: Stage 2 — install pi for the run, configure it from the provided harness
+      # shell: is declared on every script step — this runner build's
+      # manifest loader rejects a composite step that has run: but no
+      # shell: (v2.338: "Required property is missing: shell").
+      shell: bash
       working-directory: ${{ github.workspace }}
+      # GITHUB_ACTION_PATH is unreliable inside composite inner
+      # steps on this runner build (unset or mis-pointed), so the
+      # run line verifies its target and falls back to the
+      # checkout-relative action path — a healthy runner resolves
+      # the var to the same directory anyway. Step-level env: this
+      # runner build does not propagate job-level values into a
+      # composite action's inner steps.
       env:
         LLM_MODEL: ${{ inputs.llm-model }}
-      run: |
-        import os, shutil, sys, urllib.request, json, subprocess
-        action_dir = os.environ.get("GITHUB_ACTION_PATH") or os.path.join(os.environ.get("GITHUB_WORKSPACE", ""), ".github", "actions", "setup-pi")
-        scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-        if os.path.isdir(scripts):
-            sys.path.insert(0, scripts)
-        try:
-            from common import state_dir, log
-        except ImportError:  # degenerate sparse checkout — minimal local stand-ins
-            def state_dir():
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                return d
-            def log(m):
-                print(m, flush=True)
-
-        def fail(msg):
-            # the job log dies with the run — persist the reason (the
-            # summary/upload steps carry stage-fail-reason.txt on); the flag
-            # keeps the excepthook from writing a second entry for it
-            globals()["_cw_persisted"] = True
-            try:
-                d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                os.makedirs(d, exist_ok=True)
-                with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                    f.write(f"stage 2 setup-pi FAILED — {msg}\n")
-                with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                    f.write(f"=== stage 2 setup-pi FAILED ===\n{msg}\n")
-            except Exception:
-                pass
-            print(f"::error::{msg}")
-            sys.exit(1)
-
-        # 1. presence — the factory never installs pi
-        if shutil.which("pi") is None:
-            fail("pi not installed or configured on this runner — pre-requisite of the "
-                 "runner environment; the factory never installs or re-configures pi")
-
-        # 2+3. locate the pi configuration and extract the OpenAI-compatible
-        # backend URL. The repo ships BOTH .pi/mcp.json (an MCP server
-        # registry — no LLM backend) and .pi/agent/models.json, so a
-        # first-existing-file-wins probe locks onto the registry and finds no
-        # URL (field case: after the repo gained .pi/mcp.json, run
-        # 40131155394's stage 2 died "no OpenAI-compatible URL in .pi/" while
-        # the correct file sat two candidates later). Scan every candidate —
-        # repo-local first (the probe's reference, never a runtime override),
-        # then the runner's user config, both layouts — and take the first
-        # file that actually yields a backend URL; files that don't are
-        # skipped, not treated as the configuration.
-        candidates = []
-        for base in (os.environ["GITHUB_WORKSPACE"], os.path.expanduser("~")):
-            for sub in ("", "agent"):
-                candidates += [os.path.join(base, ".pi", sub, "mcp.json"),
-                               os.path.join(base, ".pi", sub, "models.json")]
-        def walk(o):
-            if isinstance(o, dict):
-                for k, v in o.items():
-                    if k.lower() in ("url", "baseurl", "base_url") and isinstance(v, str) and v.startswith("http"):
-                        yield v.rstrip("/")
-                    else:
-                        yield from walk(v)
-            elif isinstance(o, list):
-                for v in o:
-                    yield from walk(v)
-        import re
-        cfg_src, backend = None, None
-        for p in candidates:
-            if not os.path.exists(p):
-                continue
-            try:
-                raw = open(p, encoding="utf-8").read()
-                data = json.loads(raw)
-            except Exception:
-                data, raw = {}, ""
-            backend = next(iter(walk(data)), None)
-            if backend is None:
-                m = re.search(r"https?://[^\s\"'<>]+/v1", raw)
-                backend = m.group(0).rstrip("/") if m else None
-            if backend:
-                cfg_src = p
-                break
-        if backend is None:
-            found = [p for p in candidates if os.path.exists(p)]
-            fail("LLM backend not found in the runner's pi configuration "
-                 "(pre-requisite of the environment) — no OpenAI-compatible URL in "
-                 f".pi/ (scanned: {found or 'no .pi config files at all'})")
-        backend = backend if backend.endswith("/v1") else backend + "/v1"
-
-        # 4. backend reachability
-        try:
-            req = urllib.request.Request(backend + "/models", headers={"User-Agent": "code-weaver-setup"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                models = json.load(r)
-            ids = [m.get("id") for m in models.get("data", []) if m.get("id")]
-        except Exception as e:
-            fail(f"LLM backend {backend} unreachable — pre-requisite of the runner "
-                 f"environment: {e.__class__.__name__}")
-
-        # 5. the selected model must be in the configured set
-        model = os.environ.get("LLM_MODEL", "")
-        if model not in ids:
-            fail(f"model '{model}' is not in the configured model set: {ids}")
-
-        # 6. headless smoke check on the selected model. The window must absorb a
-        # COLD backend load: the host's llama-swap unloads the Ornith entry after
-        # an idle ttl, so a run started >1 h after the last use finds it unloaded
-        # and the swap loads it on the first request (2-3 min cold) before the
-        # first answer. 120 s (the old window) sat inside that load and failed
-        # the stage; 420 s leaves 2-4x margin while staying inside the job cap.
-        import subprocess
-        r = subprocess.run(["pi", "--print", "--model", model,
-                            "Reply with exactly: OK"],
-                           capture_output=True, text=True, timeout=420)
-        if r.returncode != 0 or not r.stdout.strip():
-            fail(f"pi smoke check failed for model '{model}' (exit {r.returncode}) — "
-                 f"check the runner's pi configuration: {r.stderr.strip()[:200]}")
-
-        env_f = os.path.join(state_dir(), "setup-env")
-        with open(env_f, "w") as f:
-            f.write(f"BACKEND_URL={backend}\nMODEL={model}\nCONFIG_SRC={cfg_src or '(pi built-in defaults)'}\n")
-        log(f"setup-pi: OK — pi present, backend {backend} reachable, model '{model}' "
-            f"in configured set, smoke check passed (config: {cfg_src or 'pi defaults'})")
-        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"backend-url={backend}\nmodel={model}\n")
+      run: |-
+        S="${GITHUB_ACTION_PATH}/stage.py"
+        [ -f "$S" ] || S="$GITHUB_WORKSPACE/.github/actions/setup-pi/stage.py"
+        python3 "$S"
 outputs:
   backend-url:
     value: ${{ steps.verify.outputs.backend-url }}
   model:
     value: ${{ steps.verify.outputs.model }}
+  pi-install-dir:
+    value: ${{ steps.verify.outputs.pi-install-dir }}

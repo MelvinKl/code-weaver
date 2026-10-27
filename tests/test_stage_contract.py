@@ -171,19 +171,41 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     consumer workflow uses the oracle's owner at a version tag — a moving
     branch ref is not a stable ref — and passes issue-number + the factory
     settings via with: and GH_TOKEN via secrets:; the README's example
-    agrees on the owner and the ref."""
+    agrees on the owner and the ref. The expected outcome extends to the
+    run's pi harness providers (configuration "The pi harness secrets ride
+    the reusable workflow's secrets block"): the same three surfaces — the
+    factory's secrets: block, the deployed consumer workflow, the README
+    example — carry the four provider secret entries in the same form,
+    while the owner/tag pin stays unchanged."""
     text = _read(".github/workflows/code-weaver.yml")
     m = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", text)
     assert m, "no uses: line naming the factory"
     owner, path, ref = m.groups()
     assert owner == "MelvinKl", f"oracle pins the MelvinKl owner, found {owner}"
     assert path.rstrip() == ".github/workflows/factory.yml"
-    assert re.fullmatch(r"v\d+\.\d+\.\d+", ref), f"@{ref} is not a version tag"
+    # a published version tag of either scheme — the older `vX.Y.Z` tags
+    # and the new single-increasing-number tags (the release machinery
+    # publishes both as stable refs, and workflows pinned to either keep
+    # working — a moving branch ref is not a stable ref)
+    assert re.fullmatch(r"v\d+\.\d+\.\d+|\d+", ref), f"@{ref} is not a version tag"
     assert "with:" in text and "GH_TOKEN" in text and "secrets:" in text
     # the README's consumption example agrees on the owner and the ref
     readme = _read("README.md")
     rm = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", readme)
     assert rm and rm.groups()[:2] == (owner, path), "README example drifted from the deployed workflow"
+    # the extension: all three consumer surfaces carry the four harness
+    # provider secret entries in the same form — the factory declares them
+    # in its workflow_call secrets: block, the deployed workflow and the
+    # README example wire them in their own secrets: blocks
+    factory = _read(".github/workflows/factory.yml")
+    for name in ("PI_MODELS", "PI_SETTINGS", "PI_MCP", "PI_EXTENSION_ENV"):
+        assert f"      {name}:" in factory, \
+            f"the factory's secrets: block must declare {name} as an optional entry"
+        line = f"      {name}: ${{{{ secrets.{name} }}}}"
+        assert line in text, \
+            f"the deployed consumer workflow must wire {name} in its secrets: block"
+        assert line in readme, \
+            f"the README example must wire {name} in its secrets: block — same form as the deployed workflow"
 
 
 def test_review_stage_judges_only_changed_feature_files():

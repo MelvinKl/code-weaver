@@ -14,7 +14,8 @@ jobs:
     # a reusable-workflow job may only carry `uses`/`with`/`secrets` — a
     # `runs-on:` here makes the file schema-invalid. The runner is chosen
     # through the factory's `runner` input instead (every factory job runs on
-    # it, so its environment must have pi pre-installed & configured).
+    # it; pi is not a pre-requisite of its environment — stage 2 installs
+    # and configures pi for the run).
     # the oracle pins the owner and a VERSION TAG (a moving branch ref is not
     # a stable ref)
     uses: MelvinKl/code-weaver/.github/workflows/factory.yml@1
@@ -24,6 +25,14 @@ jobs:
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Qwen3.8  # which configured model — the one adjustable LLM setting
-      runner: self-hosted      # runner label whose environment has pi pre-installed & configured
+      runner: self-hosted      # runner label the stage jobs run on (pi is installed & configured for the run by stage 2)
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
+      # the run's pi harness providers — optional: an unset secret arrives
+      # empty and stage 2 treats it as an absent provider (the repo's
+      # .pi/agent/models.json, .pi/settings.json and .pi/mcp.json are the
+      # fallbacks); never a plain input
+      PI_MODELS: ${{ secrets.PI_MODELS }}
+      PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
+      PI_MCP: ${{ secrets.PI_MCP }}
+      PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}

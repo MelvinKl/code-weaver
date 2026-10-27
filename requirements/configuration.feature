@@ -27,14 +27,14 @@ Feature: Configuration surface
     And the guard-rail allowed sets follow the overridden paths
 
   @config
-  Scenario: The LLM backend is a pre-requisite of the environment
-    Given the pi configuration in the runner environment defines the LLM backend
-    Then the backend is fixed by that pre-requisite configuration
-    And no target repo can change which backend the factory uses
+  Scenario: The LLM backend is provided for the run, not a pre-requisite of the environment
+    Given the run's model configuration is provided via a GitHub secret or the repo file ".pi/agent/models.json"
+    Then the backend the run uses is the one in that provided configuration
+    And the runner's pre-existing pi configuration is not the run's configuration
 
   @config
   Scenario: Which configured model is used is adjustable
-    Given the runner environment has pi pre-configured with several models
+    Given the run's provided model configuration lists several models
     And the default LLM_MODEL is "Ornith-1.5-35B-A3B"
     When a target sets LLM_MODEL to another already-configured model
     Then every pi invocation in the pipeline uses that model
@@ -75,12 +75,19 @@ Feature: Configuration surface
     Then it passes it via the reusable workflow's secrets block
     And no secret value appears in with inputs or committed files
 
+  @config @safety
+  Scenario: The pi harness secrets ride the reusable workflow's secrets block
+    Given the factory accepts the run's pi harness (the models, settings, mcp and extension-env providers) as GitHub secrets
+    When the target repo wires them
+    Then they pass via the reusable workflow's secrets block
+    And no harness secret value appears in with inputs or committed files
+
   Scenario: A stage's pi call lets pi-jev choose the thinking level
-    Given pi-jev is configured to classify each prompt (PI_JEV_THINKING / --jev-thinking)
+    Given pi-jev is configured for the run (its environment variables provided via the .env-style secret, or the repo file ".pi/extensions/pi-jev-config.ts") to classify each prompt (PI_JEV_THINKING / --jev-thinking)
     When a stage builds a headless pi invocation of a reasoning model
     Then the command does NOT pass an explicit --thinking level
     And pi-jev chooses the reasoning level for that prompt
-    And the runner's pre-installed pi configuration is never modified
+    And the stage's invocation never modifies the pi configuration — only the setup stage writes it for the run
     And a single call stays within the pi call's own time cap
 
   @config

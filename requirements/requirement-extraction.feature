@@ -70,6 +70,12 @@ Feature: Requirement extraction
     And a new feature file is created only for a topic no existing file covers, named after that topic
     And no file name carries an issue number — the oracle is structured by topic, so a search for a topic targets that topic's files, not every Gherkin file
 
+  Scenario: The documented oracle counts match the requirements tree
+    Given the README and the arc42 chapters state how many feature files and scenarios the oracle holds
+    When the stated counts are read against the requirements/ tree
+    Then the stated number of feature files equals the number of files under requirements/
+    And the stated number of scenarios equals the number of scenarios the tree holds
+
   Scenario: An empty model response does not consume the loop budget
     # a wedged or silent model must not burn a bounded-loop iteration the
     # guard could only trivially pass; the retry tolerance is itself bounded

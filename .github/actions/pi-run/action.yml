@@ -2,9 +2,9 @@ name: pi-run
 description: >-
   One headless pi run (stage 4/6/8/10 primitive): pi --print --mode json
   --model <model> <instructions + prompt>. The LLM backend comes
-  from the pi configuration that is a pre-requisite of the runner environment
-  — this action selects the model and supplies the prompt only, and records
-  pi's token usage in the run's usage ledger.
+  from the pi configuration the setup stage wrote into the agent directory
+  for the run — this action selects the model and supplies the prompt only,
+  and records pi's token usage in the run's usage ledger.
 
   pi's thinking level is never pinned (pi-jev chooses it per prompt). The
   template's stage instructions are handed to pi as normal USER TEXT — pi's

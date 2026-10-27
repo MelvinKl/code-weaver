@@ -1,13 +1,14 @@
 # 5. Solution Strategy
 
 One reusable workflow (`factory.yml`), **9 jobs**, on the target repo's
-runner — a runner whose environment already has pi installed & configured
-(stage 2 only verifies; the factory never installs or configures it).
+runner — no pre-installed or pre-configured pi is a pre-requisite of that
+environment: stage 2 installs pi for the run and configures it for the
+workflow run from the run's provided harness.
 
 | # | Stage | Job |
 |---|---|---|
 | 1 | trigger (label gate / dispatch / idempotency) | `trigger` |
-| 2 | setup-pi (verify pre-installed pi) | `setup-pi` |
+| 2 | setup-pi (installs pi for the run, configures the run's harness, verifies the result) | `setup-pi` |
 | 3 | baseline (cut/resume the AI branch, record the baseline) | `baseline` |
 | 4+5 | requirement-extraction (+ guard) | `extract` |
 | 6+7 | planning (+ guard) | `plan` |

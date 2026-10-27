@@ -8,10 +8,19 @@ this repo's reusable workflow takes over:
 1. **trigger** — a label addition to an issue (or a manual dispatch with
    an issue number) starts a run; re-entrant triggers on the same issue are
    idempotent;
-2. **setup-pi** — verifies `pi` is **pre-installed & pre-configured** in the
-   runner environment (the LLM backend is a fixed pre-requisite; the only
-   adjustable LLM setting is which configured model is used). The factory
-   verifies — it never installs;
+2. **setup-pi** — installs pi for the run and configures it for the
+   workflow run: every later pi invocation in the run uses that installed
+   copy, and the stage materialises the run's provided harness — the model
+   configuration, the additional packages, the MCP configuration, the
+   extension's environment variables — resolving each element's provider
+   (a non-empty GitHub secret wins over the named repo file) into the agent
+   directory the run's pi invocations resolve (`~/.pi/agent/`, or
+   `PI_CODING_AGENT_DIR`). No pre-installed or pre-configured pi is a
+   pre-requisite of the runner environment — the stage installs and
+   configures pi itself, and fails explicitly where it cannot; the only
+   adjustable LLM setting is which configured model the run uses (the
+   backend is the one in the run's provided model configuration, not a
+   property of the runner);
 3. **baseline** — cuts the AI branch `ai/code-weaver/<issue>` and records the
    baseline;
 4. **requirement-extraction** — pi derives the **delta requirements** from the
@@ -93,9 +102,17 @@ jobs:
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
-      runner: <label of a runner whose environment has pi pre-installed & configured>
+      runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
+      # the run's pi harness providers — optional: an unset secret arrives
+      # empty and stage 2 treats it as an absent provider (the repo's
+      # .pi/agent/models.json, .pi/settings.json and .pi/mcp.json are the
+      # fallbacks); never a plain input
+      PI_MODELS: ${{ secrets.PI_MODELS }}
+      PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
+      PI_MCP: ${{ secrets.PI_MCP }}
+      PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
 ```
 
 The `GH_TOKEN` secret holds the token every factory stage authenticates with
@@ -122,23 +139,47 @@ GitHub release; targets pinned to an older ref keep working.
 | `doc-dir` | `docs` | where the arc42 markdown files live |
 | `llm-model` | `Ornith-1.5-35B-A3B` | which **configured** model pi uses |
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
-| `runner` | `ubuntu-latest` | runner label (its environment must carry the pi pre-configuration) |
+| `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
 
-The **LLM backend is not an input** — it is a pre-requisite of the runner's
-pi configuration, fixed. Stage 2 verifies presence → configuration →
-reachability → configured-model set → a headless smoke check, and fails with
-an explicit message if any of that is missing.
+The **LLM backend is provided for the run** — via a GitHub secret or the
+repo file `.pi/agent/models.json`. The runner's pre-existing user-level
+configuration is replaced for the run, never what the invocation
+resolves. Stage 2 installs pi for the run, resolves the harness providers
+(a non-empty GitHub secret wins over the named repo file), writes the
+harness into the agent directory the invocation resolves, then verifies —
+backend reachability → the model in the set the stage wrote → a headless
+smoke check of the installed pi — and fails with an explicit message if
+any of that is missing.
 
-The `gh` CLI is the factory's second runner pre-requisite (the trigger,
-pr-open and gates stages shell out to it). One hygiene rule keeps it working:
-the runner **user** must own `~/.config` — a root-owned `~/.config` (left
-behind by an installer that ran as root) makes every token-bearing `gh`
-invocation die with `permission denied`, because gh initialises its config
-under that directory. Field case: on the ct133 runner this made the gates
-job's `Resolve the PR's head sha` step fail while every job scheduled to a
-healthy runner ran fine; `chown runner:runner ~/.config` on the runner fixed
-it without touching the factory.
+**The run's pi harness is provided per run.** Each element rides a GitHub
+secret in the consumer workflow's `secrets:` block (the four optional
+provider secrets of the example above; `GH_TOKEN` stays the only required
+one), a non-empty secret winning over the named repo file:
+
+| harness element | GitHub secret | repo file |
+|---|---|---|
+| the model configuration — the run's LLM backend is defined in it | `PI_MODELS` | `.pi/agent/models.json` |
+| the additional-packages settings | `PI_SETTINGS` | `.pi/settings.json` |
+| the MCP configuration | `PI_MCP` | `.pi/mcp.json` |
+| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries | `PI_EXTENSION_ENV` | — (the secret is the provider) |
+
+An empty or absent settings provider leaves pi without additional
+packages, and an absent MCP provider means the run's pi runs without MCP
+servers; the stage clears an element without a provider from the agent
+directory rather than inheriting the runner's pre-existing user-level
+configuration.
+
+The `gh` CLI is the factory's surviving runner pre-requisite (the trigger,
+pr-open and gates stages shell out to it); one hygiene rule keeps it
+working: the runner **user** must own `~/.config` — a root-owned
+`~/.config` (left behind by an installer that ran as root) makes every
+token-bearing `gh` invocation die with `permission denied`, because gh
+initialises its config under that directory. Field case: on the ct133
+runner this made the gates job's `Resolve the PR's head sha` step fail
+while every job scheduled to a healthy runner ran fine; `chown
+runner:runner ~/.config` on the runner fixed it without touching the
+factory.
 
 ## Repository layout
 
@@ -149,7 +190,7 @@ it without touching the factory.
     house-ci.yml       this repo's own gate (uv; compile+YAML+oracle+pytest)
     release.yml        push to main → next single increasing number → GitHub release (the ref targets pin)
   actions/
-    setup-pi/          stage 2 — verify (never install) pi + backend + model
+    setup-pi/          stage 2 — install pi for the run + write the provided harness + backend/model checks
     pi-run/            one headless `pi --print` run (the stage primitive)
     baseline/          stage 3 — branch ai/code-weaver/<issue> + baseline ref
     guard-check/       THE one shared "only X changed" guard script
@@ -166,7 +207,7 @@ it without touching the factory.
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 135 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 149 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -174,7 +215,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **135 Gherkin scenarios** — the oracle this
+`requirements/` holds **149 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and
@@ -187,5 +228,6 @@ repo the test-and-review stage runs them as executable acceptance tests.
 
 - not a long-running service — a workflow you trigger on an issue;
 - not a merger — the PR it opens waits on a human;
-- not an installer — it assumes a runner environment where pi is ready, and
-  says so loudly when it is not.
+- not a pre-requisite of the runner environment — the setup stage installs
+  and configures pi for the run itself, and says so explicitly where it
+  cannot.

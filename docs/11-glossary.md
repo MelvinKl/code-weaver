@@ -27,7 +27,7 @@
   that DID change scenarios with zero parseable verdicts still fails the
   stage — the oracle cannot be assumed green.
 - **Oracle** — the Gherkin requirements under `requirements/` (15 files,
-  135 scenarios), structured by topic: each file is named after the topic
+  149 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed

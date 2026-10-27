@@ -18,9 +18,11 @@
 # resolves each input as INPUT_<name> falling back to CW_<name>. The `with:`
 # blocks stay for portability to a runner that binds them correctly.
 #
-# 15 logical stages → the jobs below. The runner environment must have `pi`
-# pre-installed & pre-configured (LLM backend included) — stage 2 only
-# verifies and fails explicitly.
+# 15 logical stages → the jobs below. `pi` is not a pre-requisite of the
+# runner environment — stage 2 installs pi for the run and configures it
+# from the run's provided harness (the models, settings, MCP and
+# extension-env providers ride the workflow's secrets: block), and fails
+# explicitly where it cannot.
 name: Code Weaver factory
 
 on:
@@ -52,7 +54,7 @@ on:
         type: string
         default: docs
       llm-model:
-        description: Which configured model pi uses (the backend is a fixed pre-requisite of the runner's pi configuration)
+        description: Which configured model pi uses (the backend is the one in the run's provided model configuration — a GitHub secret or the repo file .pi/agent/models.json)
         type: string
         default: Ornith-1.5-35B-A3B
       max-loops:
@@ -60,7 +62,7 @@ on:
         type: string
         default: "5"
       runner:
-        description: Runner label whose environment has pi pre-installed & configured
+        description: Runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the environment)
         type: string
         default: ubuntu-latest
       workflow-name:
@@ -71,6 +73,23 @@ on:
       GH_TOKEN:
         description: Token with contents:write + issues:write + pull-requests:write on the target repo
         required: true
+      # The run's pi harness providers — all optional: an unset or empty
+      # secret arrives empty and the setup stage treats it as an absent
+      # provider (the repo files .pi/agent/models.json, .pi/settings.json
+      # and .pi/mcp.json are the fallbacks the stage resolves from). A
+      # provider value never appears in a with: input or a committed file.
+      PI_MODELS:
+        description: The run's model configuration — the content of .pi/agent/models.json; the backend in it is the run's LLM backend
+        required: false
+      PI_SETTINGS:
+        description: The run's additional-packages settings — the content of .pi/settings.json; empty or absent leaves pi without additional packages
+        required: false
+      PI_MCP:
+        description: The run's MCP configuration — the content of .pi/mcp.json; absent means the run's pi runs without MCP servers
+        required: false
+      PI_EXTENSION_ENV:
+        description: The pi extension's environment variables in .env style (such as the ones .pi/extensions/pi-jev-config.ts carries)
+        required: false
 
 permissions:
   contents: write
@@ -112,7 +131,7 @@ jobs:
           # mid-stage with an unhelpful exit 127 ("command not found")
           for TOOL in git jq gh python3; do
             command -v "$TOOL" >/dev/null 2>&1 || {
-              echo "::error::required tool '$TOOL' is not installed on this runner — install it in the runner environment (pi is verified separately in stage 2)"
+              echo "::error::required tool '$TOOL' is not installed on this runner — install it in the runner environment (pi is installed & configured separately in stage 2)"
               exit 1
             }
           done
@@ -192,7 +211,7 @@ jobs:
             echo "- issue: #$ISSUE (event: ${{ github.event_name }})"
             echo "- runner: \`${{ inputs.runner }}\`"
             echo "- LLM model (which configured model): \`${{ inputs.llm-model }}\`"
-            echo "- LLM backend: pre-requisite of the runner environment (fixed, not an input)"
+            echo "- LLM backend: provided for the run (a GitHub secret or the repo file .pi/agent/models.json) — stage 2 writes it for the run"
             echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
             echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
             echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
@@ -222,21 +241,40 @@ jobs:
 
   # ── stage 2 ────────────────────────────────────────────────────────────
   setup-pi:
-    name: "2 setup-pi (verify pre-installed pi)"
+    name: "2 setup-pi (install pi, configure the run's harness)"
     needs: trigger
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
     env:
       LLM_MODEL: ${{ inputs.llm-model }}
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      # The run's pi harness providers (the documented with: + CW_<name>
+      # env relay idiom): an empty secret value arrives empty and the stage
+      # treats it as an absent provider — the repo file is the fallback.
+      CW_PI_MODELS: ${{ secrets.PI_MODELS }}
+      CW_PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
+      CW_PI_MCP: ${{ secrets.PI_MCP }}
+      CW_PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
     steps:
       - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GH_TOKEN }}
-      - name: Stage 2 — verify (never install) pi, backend, model
+      - name: Stage 2 — install pi for the run, configure it from the provided harness
         uses: ./.github/actions/setup-pi/
         with:
           llm-model: ${{ inputs.llm-model }}
+          pi-models: ${{ secrets.PI_MODELS }}
+          pi-settings: ${{ secrets.PI_SETTINGS }}
+          pi-mcp: ${{ secrets.PI_MCP }}
+          pi-extension-env: ${{ secrets.PI_EXTENSION_ENV }}
+        # step-level env: this runner build does not propagate job-level
+        # values into a composite action's inner steps (and never
+        # binds with: to INPUT_* either); a step's own env: does reach them
+        env:
+          CW_PI_MODELS: ${{ inputs.pi-models }}
+          CW_PI_SETTINGS: ${{ inputs.pi-settings }}
+          CW_PI_MCP: ${{ inputs.pi-mcp }}
+          CW_PI_EXTENSION_ENV: ${{ inputs.pi-extension-env }}
       - name: Stage summary
         if: always()
         run: |

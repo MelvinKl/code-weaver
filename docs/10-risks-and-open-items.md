@@ -12,9 +12,13 @@
   disjoint stage boundaries (chapter 5): extraction is the `@`-file
   slice; plan/implement/review/pr-body are the path-referenced slice. An
   oracle edit that re-couples them contradicts itself again.
-- **Runner environment is a pre-requisite** — pi installed & configured,
-  backend reachable; stage 2 fails explicitly. The `gh` CLI is the second
-  pre-requisite, and the runner user must own `~/.config`. Ghost bindings
+- **Runner environment** — no pre-installed or pre-configured pi is a
+  pre-requisite: the setup stage installs pi for the run and configures it
+  for the workflow run from the run's provided harness, failing explicitly
+  where it cannot (an install or configuration that cannot complete, an
+  unreachable backend, a provided configuration without a backend URL).
+  The `gh` CLI is a runner pre-requisite, and the runner user must own
+  `~/.config`. Ghost bindings
   on this runner build (a `GITHUB_ENV` write not reaching the next
   step's expression; a composite `with:` never materialising as
   `INPUT_*`) are contained by the `CW_*`/state-file relay — but a re-run

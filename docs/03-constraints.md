@@ -1,15 +1,22 @@
 # 3. Constraints
 
-- **The runner environment is a pre-requisite.** `pi` is pre-installed and
-  pre-configured (LLM backend included) on the runner; the factory's
-  stage 2 only *verifies* and fails with an explicit message — it never
-  installs or re-configures pi. The only adjustable LLM setting is which
-  configured model the run uses. The `gh` CLI is the second pre-requisite
-  (trigger / pr-open / gates shell out to it).
+- **No pre-installed or pre-configured pi is a pre-requisite of the runner
+  environment.** The factory's setup stage (stage 2) installs pi for the
+  run and configures it for the workflow run from the run's provided
+  harness — a GitHub secret or the named repo file per element, written
+  into the agent directory the run's pi invocations resolve — and fails
+  with an explicit message where it cannot install or configure. The `gh`
+  CLI is a runner pre-requisite (trigger / pr-open / gates shell out to
+  it), as is a runner user that owns `~/.config`. The only adjustable LLM
+  setting is which configured model the run uses; the backend is provided
+  for the run (a GitHub secret or the repo file `.pi/agent/models.json`),
+  not a property of the runner.
 - **Secrets are never plain inputs.** `GH_TOKEN` (repo-scoped, with
   `issues:write` + `pull-requests:write` + `contents:write`) rides the
   reusable workflow's `secrets:` block only; no secret value ever appears
-  in `with:` inputs or committed files.
+  in `with:` inputs or committed files — the four optional harness
+  providers (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`, `PI_EXTENSION_ENV`)
+  ride the same block.
 - **The requirements are read-only.** No stage may edit a file under the
   requirements dir: the guard reverts such edits (and, during
   implementation, loops the run back to the plan stage).

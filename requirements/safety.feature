@@ -16,9 +16,9 @@ Feature: Secrets and safety
   @safety
   Scenario: The LLM backend needs no secret
     Given the backend is the internal keyless llama-swap
-    When the factory uses the pre-configured pi
+    When the setup stage configures pi for the run from the run's provided model configuration
     Then no API key secret is required
-    And the backend configuration is a pre-requisite of the runner environment
+    And the backend configuration is provided for the run via a GitHub secret or a repo file, not a pre-requisite of the runner environment
 
   @safety
   Scenario: Every loop in the pipeline respects its cap
