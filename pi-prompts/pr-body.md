@@ -12,16 +12,23 @@ prompt:
 - **the review** — the review's output: the per-scenario verdicts
   (fulfilled / unfulfilled) and the test results.
 
-The body you write must:
+The body you write describes the issue the run implements. It must:
 1. **Reference the source issue** — its number and title: the PR links back
    to the work it was opened for.
-2. **Summarise the change** — what the issue asked for, what the plan built,
-   which requirement scenarios changed.
-3. **Carry the review outcome** — the suite result and the scenario verdicts;
-   if any scenario is unfulfilled, say so plainly (the gates stage acts on
-   the PR).
-4. **Name the target branch** the PR opens against, and state that **merging
+2. **Summarise the issue** — what the issue asked for, which requirement
+   scenarios its delta adds or adjusts, what the plan set out to build, and
+   how the review went; if any scenario is unfulfilled, say so plainly (the
+   gates stage acts on the PR).
+3. **Name the target branch** the PR opens against, and state that **merging
    is a human decision** — the factory never merges.
+
+The body must NOT:
+- dump the resolved configuration (runner, model, dirs, caps) — that is
+  workflow-log material, never part of the PR description;
+- write a `## Final status` heading or any usage/cost figures of its own —
+  the final status stage (15) appends that section with the run's outcome,
+  the stage outcomes and the usage totals and cost it computes from the run's
+  usage ledger, and it closes the source issue when the run succeeded.
 
 Write the complete body (markdown — no code fence around the whole body, no
 trailing commentary) to the file named in the prompt. Do not edit any other

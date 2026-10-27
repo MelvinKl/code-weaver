@@ -21,6 +21,30 @@ Feature: Reporting
     Then a summary comment is posted on the source issue
 
   @report
+  Scenario: The PR description carries the same usage numbers as the issue comment
+    Given the run made pi calls and the report stage assembles the usage totals
+    When the report stage completes the PR body and comments the source issue
+    Then the PR description and the issue comment list the same total input tokens
+    And the PR description and the issue comment list the same total output tokens and the same total cost
+    And the stage verifies the PR-body completion actually landed before claiming the final status is in the PR body
+    And where the completion could not be applied to the PR — as when the PR was already merged — the issue comment carries the full final status itself instead of that claim
+
+  @report
+  Scenario: A successful run closes the source issue
+    Given the run reached the report stage with result success and the PR is open
+    When the report stage runs
+    Then the source issue is closed with the completed state reason
+    And the issue comment states the run result and that the issue is closed
+    And the factory still does not merge the PR itself
+
+  @report
+  Scenario: A failed run leaves the source issue open
+    Given the run reached the report stage with result failure
+    When the report stage runs
+    Then the source issue is left open for a re-trigger
+    And only the failure summary is commented on it
+
+  @report
   Scenario: The arc42 documents the AI activity
     When the report stage runs
     Then an AI-activity section is added to the arc42 markdown files under docs/

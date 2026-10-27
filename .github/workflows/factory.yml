@@ -874,40 +874,126 @@ jobs:
           fi
           echo "pi produced no body — assembling the template fallback"
           python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
-          import glob, os, sys
+          import glob, os, subprocess, sys
           out = sys.argv[1]
           cw = os.path.join(os.environ["RUNNER_TEMP"], "cw")
-          lines = ["# Code Weaver — AI branch `ai/code-weaver/%s`" % os.environ.get("CW_ISSUE", "?"),
+          repo = os.environ.get("GITHUB_WORKSPACE", ".")
+
+          def trigger_state(name):
+              # the trigger's state files are the authoritative channel: this
+              # runner build's job-env relay has been observed dropping the
+              # CW_* trigger values (a body once opened for 'issue: # —'); the
+              # env is the fallback for healthy runners, not the source
+              try:
+                  v = open(os.path.join(cw, "state", "trigger",
+                                        name + ".txt")).read().strip()
+              except OSError:
+                  v = ""
+              return v or os.environ.get("CW_" + name.upper().replace("-", "_"), "")
+
+          issue = trigger_state("issue-number") or "?"
+          title = trigger_state("issue-title")
+          target = os.environ.get("CW_TARGET", "main")
+
+          # the body describes the issue the run implements — not the
+          # configuration the run used (that lives in the workflow log, which
+          # the resolved-config file itself marks 'never committed')
+          lines = ["# %s" % (title or "AI work for issue #%s" % issue),
                    "",
-                   "Opened by the Code Weaver factory (15-stage pipeline). This "
-                   "pull request IS the final status report — its body is "
-                   "completed in stage 15.",
+                   "Opened by the Code Weaver factory — branch "
+                   "`ai/code-weaver/%s` → target `%s`. This pull request is "
+                   "the run's status report — stage 15 completes it." % (issue, target),
                    "",
-                   "## Source",
-                   "- issue: #%s — %s" % (os.environ.get("CW_ISSUE", "?"),
-                                           os.environ.get("CW_TITLE", "")),
-                   "- target branch: `%s`" % os.environ.get("CW_TARGET", "main"),
-                   "- LLM model: `%s` (backend: a pre-requisite of the runner's pi configuration)"
-                   % os.environ.get("CW_MODEL", "?"),
-                   "- runner: `%s`" % os.environ.get("CW_RUNNER", "?"),
+                   "## The issue this run implements",
+                   "- **Issue:** #%s%s" % (issue, (" — " + title) if title else ""),
+                   "- **Target branch:** `%s`" % target,
                    ""]
-          cfg = os.path.join(cw, "resolved-config.txt")
-          if os.path.exists(cfg):
-              lines += ["## Resolved configuration", "```"] + open(cfg).read().splitlines() + ["```", ""]
+
+          # the plan — what the run set out to build, task by task — embedded
+          # so the body stands on its own (the plan file is the issue's plan,
+          # in the repo)
+          plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
+                              issue + ".md")
+          if os.path.isfile(plan):
+              lines += ["## The plan for this issue", "```markdown"]
+              lines += open(plan, encoding="utf-8",
+                            errors="replace").read().splitlines()
+              lines += ["```", ""]
+
+          # the requirement scenarios the run changed — parsed from the
+          # diff's ADDED scenario lines (the delta's shape), not from all
+          # the scenarios of a merely touched file
+          req_rel = os.environ.get("REQUIREMENTS_DIR", "requirements")
+          base = trigger_state("base-sha")
+          changed = None
+          if base and os.path.isdir(os.path.join(repo, ".git")):
+              r = subprocess.run(
+                  ["git", "diff", "--name-only", base, "--", req_rel],
+                  cwd=repo, capture_output=True, text=True)
+              if r.returncode == 0:
+                  changed = [l for l in r.stdout.splitlines()
+                             if l.endswith(".feature")
+                             and os.path.isfile(os.path.join(repo, l))]
+          listed = []
+          any_diff = False
+          if changed is not None:
+              for rel in sorted(changed):
+                  r = subprocess.run(
+                      ["git", "diff", base, "--", rel],
+                      cwd=repo, capture_output=True, text=True)
+                  if r.returncode != 0 or not r.stdout.strip():
+                      continue
+                  any_diff = True
+                  for ln in r.stdout.splitlines():
+                      if ln.startswith("+") and not ln.startswith("+++"):
+                          s = ln[1:].strip()
+                          for kw in ("Scenario Outline: ", "Scenario: "):
+                              if s.startswith(kw):
+                                  listed.append("- %s — %s" %
+                                                (s[len(kw):].strip(),
+                                                 os.path.basename(rel)))
+                                  break
+              if listed:
+                  lines += (["## The requirement scenarios this run changed"]
+                             + listed + [""])
+              elif any_diff:
+                  lines += ["## The requirement scenarios this run changed",
+                            "- no scenario title was added — the run's delta "
+                            "to the oracle is recorded in the run's artifacts "
+                            "(the workflow log)",
+                            ""]
+              else:
+                  lines += ["## The requirement scenarios this run changed",
+                            "- the run changed no requirement scenario "
+                            "(a vacuous delta)",
+                            ""]
+          else:
+              lines += ["## The requirement scenarios this run changed",
+                        "- (the run's delta is recorded in the run's artifacts "
+                        "— the workflow log)",
+                        ""]
+
           stages = []
-          for f in sorted(glob.glob(os.path.join(cw, "**", "stage-summary.txt"), recursive=True)):
-              stages += [l for l in open(f) if l.strip()]
+          for f in sorted(glob.glob(os.path.join(cw, "**", "stage-summary.txt"),
+                                    recursive=True)):
+              stages += [l.strip() for l in open(f) if l.strip()]
           lines.append("## Stage outcomes so far")
           lines += ["- " + l for l in dict.fromkeys(stages)] or ["- (none captured yet)"]
-          lines += ["", "_Stage 15 (final status) appends the complete table once the gates are green."]
+          lines += ["",
+                    "_Stage 15 (final status) completes this description with the run's "
+                    "outcome, its usage totals and cost — and closes the issue on a "
+                    "successful run._"]
           open(out, "w").write("\n".join(lines) + "\n")
           EOF
         env:
+          # the state files are the source; the env is the fallback (this
+          # runner build's job-env relay has been observed dropping these
+          # values — the step reads the trigger's state files first)
           CW_ISSUE: ${{ env.CW_ISSUE_NUMBER }}
           CW_TITLE: ${{ env.CW_ISSUE_TITLE }}
           CW_TARGET: ${{ inputs.target-branch }}
-          CW_MODEL: ${{ inputs.llm-model }}
-          CW_RUNNER: ${{ inputs.runner }}
+          REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
+          PLAN_DIR: ${{ inputs.plan-dir }}
       - id: open-pr
         name: Stage 12 — push & open the PR
         if: ${{ env.CW_STARTED == 'true' }}

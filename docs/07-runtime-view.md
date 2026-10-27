@@ -55,4 +55,12 @@ total output tokens and total cost in every case — derived from the
 per-call usage records in the state dir (each stage's artifact carries the
 cumulative ledger), so a run that stopped early in a failed stage is
 reported with the usage and cost of the pi calls made before the stop, and
-a stage that never ran contributes nothing.
+a stage that never ran contributes nothing. The report stage re-reads the
+PR after editing its body and keeps the pointer comment ("final status is
+in the PR body") only where that completion verified; where it could not
+be applied — the PR was already merged, or the edit was refused on both
+write paths — the issue comment carries the full final status itself, so
+the PR description and the issue comment never disagree on the run's
+numbers. A run that succeeded has its source issue closed with the
+completed state reason (the close is best-effort — a refusal is warned,
+never fatal); a failed run leaves the issue open for a re-trigger.

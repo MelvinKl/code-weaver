@@ -10,7 +10,9 @@
   non-zero cap guarantees the run terminates.
 - **The human stays the gate.** The factory opens the PR and stops;
   merging is a manual decision, and the PR body is the final status
-  report a human reads before merging.
+  report a human reads before merging. When the run succeeded, the
+  factory closes the issue behind that PR; a failed run leaves the
+  issue open for a re-trigger.
 - **Reuse by ref, never copy-paste.** Factory upgrades are a one-line ref
   bump in the target; every published tag is a stable ref.
 - **The oracle is executable.** Every Gherkin scenario under

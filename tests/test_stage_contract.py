@@ -26,7 +26,13 @@ The pins (one per scenario the fix loop had to fulfil):
   passes vacuously instead of failing as unparseable);
 - the pr job generates the PR body with pi from the requirements, the
   plan and the review (pr-and-gates "a pull request is opened against
-  the target branch");
+  the target branch"), and the template fallback — used when the pi call
+  produced no body — describes the issue it implements: the source
+  issue's number and title read from the trigger's state files (a body
+  still names the issue where the job-env relay dropped the values), the
+  issue's plan embedded, the requirement scenarios the run changed
+  against the baseline listed, and no resolved-configuration dump
+  (pr-and-gates "the PR body describes the issue it implements");
 - the report stage's AI-activity section falls back to the top-level
   arc42 markdown when the doc dir is absent (reporting "the arc42
   documents the AI activity"; safety "an audit trail exists for human
@@ -39,6 +45,14 @@ The pins (one per scenario the fix loop had to fulfil):
   the stop (issue-43 "the final report lists the input and output tokens
   used during the run", "the final report lists the total cost of the
   run", "the usage and cost of a failed run are reported too");
+- the report stage re-reads the PR after editing its body: a verified
+  completion keeps the pointer comment (the PR body and the issue comment
+  list the same usage numbers — one ledger, one set of figures), while a
+  completion that could not be applied (the PR was already merged) makes
+  the comment self-contained; a successful run closes the source issue
+  and a failed run leaves it open (reporting "the PR description carries
+  the same usage numbers as the issue comment", "a successful run closes
+  the source issue", "a failed run leaves the source issue open");
 - the validator skips-not-fails where the parser port is absent
   (test-and-review "the suite runs on an interpreter without pytest");
 - the factory's max-loops default matches the oracle's Given (5) and the
@@ -207,6 +221,152 @@ def test_pr_body_generated_by_pi():
     prompt = _read("pi-prompts/pr-body.md")
     assert "the requirements" in prompt and "the plan" in prompt and "the review" in prompt
     assert "Reference the source issue" in prompt
+    # the body describes the issue it implements — and keeps the
+    # configuration out of the description (workflow-log material)
+    assert "describes the issue" in prompt
+    assert "resolved configuration" in prompt
+
+
+def _pr_fallback_source() -> str:
+    """The pr job's template-fallback step, reduced to its runnable python.
+    The step's `run: |` block is a bash step that launches python over a
+    `<<'EOF'` heredoc; this extracts the heredoc body (from the line that
+    opens it to the closing `EOF`) and dedents it to a source string, so
+    the same sandbox-exec idiom the report action's step uses applies."""
+    lines = _read(".github/workflows/factory.yml").splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if "Assemble the PR body" in ln and "template fallback" in ln:
+            start = i
+            break
+    assert start is not None, "the pr job's fallback step is gone"
+    # the body runs from the `run: |` line (the step content's own indent
+    # is the dedent base — the `run: |` line's would under-strip)
+    run_line = next((i for i in range(start + 1, len(lines))
+                     if lines[i].strip() == "run: |"), None)
+    assert run_line is not None, "the fallback step lost its `run: |` block"
+    body, indent = [], None
+    for cont in lines[run_line + 1:]:
+        if not cont.strip():
+            body.append("")
+            continue
+        ind = len(cont) - len(cont.lstrip(" "))
+        if indent is None:
+            indent = ind
+        body.append(cont[indent:])
+    src = body
+    her_start = None
+    for j, l in enumerate(src):
+        if "<<" in l and "EOF" in l:
+            her_start = j
+            break
+    assert her_start is not None, \
+        "the fallback step no longer runs python via a heredoc"
+    her_end = next((k for k in range(her_start + 1, len(src))
+                    if src[k].strip() == "EOF"), None)
+    assert her_end is not None, "the fallback heredoc never closes"
+    return "\n".join(src[her_start + 1:her_end])
+
+
+def test_pr_body_fallback_describes_the_issue():
+    """(pr-and-gates "the PR body describes the issue it implements") the
+    template fallback — used when the pi call produced no body —
+    describes the issue: it names the source issue's number and title
+    from the trigger's state files (a job-env relay that dropped
+    CW_ISSUE / CW_TITLE must not yield a body that reads 'issue: # —'),
+    embeds the issue's plan, lists the requirement scenarios the run
+    changed against the baseline (and only those), and carries no
+    resolved-configuration dump."""
+    import shutil
+    import subprocess
+    import tempfile
+    src = _pr_fallback_source()
+    ws = tempfile.mkdtemp(prefix="cw-pr-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-pr-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    os.makedirs(os.path.join(ws, "requirements"))
+    with open(os.path.join(ws, "requirements", "topic.feature"), "w") as f:
+        f.write("Feature: Topic\n"
+                "  Scenario: A standing scenario\n"
+                "    Given a\n    When b\n    Then c\n")
+    git_env = {**os.environ,
+               "GIT_AUTHOR_NAME": "cw-test", "GIT_AUTHOR_EMAIL": "cw@test",
+               "GIT_COMMITTER_NAME": "cw-test", "GIT_COMMITTER_EMAIL": "cw@test",
+               "HOME": ws}
+
+    def git(*a, check=True):
+        r = subprocess.run(["git", *a], cwd=ws, env=git_env,
+                           capture_output=True, text=True)
+        if check and r.returncode != 0:
+            raise AssertionError(f"git {a} failed: {r.stderr.strip()[:200]}")
+        return r
+
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-qm", "baseline")
+    base_sha = git("rev-parse", "HEAD").stdout.strip()
+    # the run's delta: the issue's plan + a new scenario in the topic file
+    os.makedirs(os.path.join(ws, "plans"))
+    with open(os.path.join(ws, "plans", "42.md"), "w") as f:
+        f.write("# Issue #42 — the test plan\n\n**Tasks**\n\n- [x] build the thing\n")
+    with open(os.path.join(ws, "requirements", "topic.feature"), "a") as f:
+        f.write("  Scenario: The changed scenario\n"
+                "    Given x\n    When y\n    Then z\n")
+    git("add", "-A")
+    git("commit", "-qm", "delta")
+    with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+        f.write("42\n")
+    with open(os.path.join(trig, "issue-title.txt"), "w") as f:
+        f.write("The test issue\n")
+    with open(os.path.join(trig, "base-sha.txt"), "w") as f:
+        f.write(base_sha + "\n")
+    out = os.path.join(rt, "cw", "pr-body.md")
+    keys = ("PATH", "RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_ISSUE",
+            "CW_TITLE", "CW_TARGET", "CW_MODEL", "CW_RUNNER",
+            "REQUIREMENTS_DIR", "PLAN_DIR")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        # the job-env relay drops the trigger's values on this runner
+        # build — the fallback reads them from the state files instead
+        "CW_ISSUE": "",
+        "CW_TITLE": "",
+        "CW_TARGET": "main",
+        "REQUIREMENTS_DIR": "requirements",
+        "PLAN_DIR": "plans",
+    })
+    argv_saved, hook = sys.argv, sys.excepthook
+    sys.argv = ["python3", out]
+    try:
+        exec(compile(src, "<factory.yml pr fallback step>", "exec"),
+             {"__name__": "cw_pr_fallback_test"})
+        body = open(out, encoding="utf-8").read()
+    finally:
+        sys.argv, sys.excepthook = argv_saved, hook
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+    # names the issue from the trigger's state files (the env was empty)
+    assert "#42" in body and "The test issue" in body, body
+    # embeds the plan — what the run set out to build
+    assert "## The plan for this issue" in body
+    assert "build the thing" in body, body
+    # lists the scenarios the run changed against the baseline, and only
+    # those (the standing scenario is not part of the delta)
+    assert "The changed scenario" in body, body
+    assert "A standing scenario" not in body, body
+    # carries no resolved-configuration dump
+    assert "## Resolved configuration" not in body, body
+    # stage 15 still owns the completion
+    assert "Stage 15" in body
 
 
 def test_report_falls_back_to_top_level_arc42():
@@ -260,15 +420,21 @@ def _report_action_source() -> str:
 
 
 def _run_report_action(run_result="success", pr_number="7", issue_number="42",
-                       ledger=None, model="Ornith-1.5-35B-A3B"):
+                       ledger=None, model="Ornith-1.5-35B-A3B",
+                       view_body="## Progress so far"):
     """Exec the report action's inline python in a sandbox: a plain temp
     workspace (no git repo, no doc dir, no PLAN.md — the arc42-activity
     path has nothing to touch), a temp RUNNER_TEMP carrying the merged
     stage state (the per-call usage ledger the report job's artifact
     downloads leave behind, plus the trigger's resolved configuration),
     and a fake `gh` on PATH that serves the PR view and captures the issue
-    comment body it is posted with — no network. Returns (the final PR
-    body, the issue comment)."""
+    comment body it is posted with — no network. The PR view the fake
+    serves is `view_body` for EVERY read (before and after the edit):
+    '## Progress so far' simulates a PR whose body never took the
+    completion (already merged / edit refused), a body carrying the
+    '## Final status' marker simulates a verified completion. Returns
+    (the final PR body, the issue comment, whether the source issue was
+    closed)."""
     import shutil
     import tempfile
     ws = tempfile.mkdtemp(prefix="cw-report-ws-")
@@ -290,6 +456,10 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
     binp = os.path.join(fake, "bin")
     os.makedirs(binp)
     comment_f = os.path.join(fake, "issue-comment.txt")
+    view_json = json.dumps(
+        {"body": view_body,
+         "head": {"sha": "f" * 40, "ref": "ai/code-weaver/7"},
+         "html_url": "https://gh.example/pr/7"})
     with open(os.path.join(binp, "gh"), "w", encoding="utf-8") as f:
         f.write("#!%s\n" % sys.executable +
                 "import json, os, sys\n"
@@ -299,11 +469,11 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
                 "    if a.startswith('body='):\n"
                 "        body = a[len('body='): ]\n"
                 "if args[:1] == ['api'] and any('pulls/' in a for a in args):\n"
-                "    print(json.dumps({'body': '## Progress so far',\n"
-                "                      'head': {'sha': 'f' * 40,\n"
-                "                                'ref': 'ai/code-weaver/7'},\n"
-                "                      'html_url': 'https://gh.example/pr/7'}))\n"
+                f"    print({view_json!r})\n"
                 "    sys.exit(0)\n"
+                "if args[:1] == ['api'] and 'state=closed' in args:\n"
+                "    open(os.environ['FAKE_GH_OUT'] + '.closed', 'w')"
+                ".write('closed')\n"
                 "if body:\n"
                 "    open(os.environ['FAKE_GH_OUT'], 'w').write(body)\n"
                 "if args[:2] == ['pr', 'edit'] and '--body-file' in args:\n"
@@ -357,6 +527,7 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
             out["pr_body"] = open(pf, encoding="utf-8").read()
         if os.path.isfile(comment_f):
             out["comment"] = open(comment_f, encoding="utf-8").read()
+        out["closed"] = os.path.isfile(comment_f + ".closed")
     finally:
         os.chdir(cwd)
         sys.excepthook = hook
@@ -371,7 +542,7 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
         shutil.rmtree(ws, ignore_errors=True)
         shutil.rmtree(rt, ignore_errors=True)
         shutil.rmtree(fake, ignore_errors=True)
-    return out["pr_body"], out["comment"]
+    return out["pr_body"], out["comment"], out["closed"]
 
 
 def test_report_lists_usage_totals_assembled_from_the_ledger():
@@ -384,7 +555,7 @@ def test_report_lists_usage_totals_assembled_from_the_ledger():
     one) into the final status report: the PR body lists the total input
     and the total output tokens across the run, and the source-issue
     comment carries the same totals."""
-    pr_body, comment = _run_report_action(
+    pr_body, comment, _closed = _run_report_action(
         ledger=["10000 2000", "5000 1500"])
     for surface in (pr_body, comment):
         assert "- **Total input tokens:** 15000" in surface, \
@@ -410,14 +581,14 @@ def test_report_cost_derives_from_usage_and_resolved_model():
     priced = (f"- **Total cost:** ${(15000 * r_in + 3500 * r_out) / 1e6:.4f} "
               f"(model `Ornith-1.5-35B-A3B` @ ${r_in:.2f}/M input, "
               f"${r_out:.2f}/M output)")
-    pr_body, comment = _run_report_action(ledger=ledger)
+    pr_body, comment, _closed = _run_report_action(ledger=ledger)
     for surface in (pr_body, comment):
         assert priced in surface, \
             ("the listed cost must be recorded usage × the resolved model's "
              f"rate, with the rate listed: {surface!r}")
     # a model with no rate entry is listed as unpriced — the usage totals
     # are reported regardless
-    pr_body, comment = _run_report_action(
+    pr_body, comment, _closed = _run_report_action(
         ledger=ledger, model="Some-Other-Runner-Model")
     unpriced = (f"- **Total cost:** unpriced "
                 f"(model `Some-Other-Runner-Model` has no rate entry — "
@@ -448,7 +619,7 @@ def test_failed_run_report_covers_the_calls_before_the_stop():
               f"${r_out:.2f}/M output)")
     # a failed run that reached the PR: the comment (and the PR body's
     # final status) carry the pre-stop usage and cost
-    pr_body, comment = _run_report_action(
+    pr_body, comment, _closed = _run_report_action(
         run_result="failure", ledger=ledger)
     for surface in (pr_body, comment):
         for line in ("- **Total input tokens:** 3000",
@@ -459,7 +630,7 @@ def test_failed_run_report_covers_the_calls_before_the_stop():
                  f"the stop: {surface!r}")
     # a run that died before the PR existed: the no-PR failure comment
     # still lists the pre-stop usage and cost
-    pr_body, comment = _run_report_action(
+    pr_body, comment, _closed = _run_report_action(
         run_result="failure", pr_number="", ledger=ledger)
     assert pr_body == "", "no PR was opened — there is no PR body to complete"
     for line in ("- **Total input tokens:** 3000",
@@ -467,6 +638,59 @@ def test_failed_run_report_covers_the_calls_before_the_stop():
                  priced):
         assert line in comment, \
             f"the no-PR failure report still lists the pre-stop usage: {comment!r}"
+
+
+def test_report_verifies_the_pr_body_completion():
+    """(reporting "the PR description carries the same usage numbers as
+    the issue comment") after editing the PR body the stage re-reads the
+    PR: where the completion is verifiably in the body, the issue comment
+    is the pointer form — 'final status is in the PR body' — and still
+    lists the usage lines, the same strings the body carries (one ledger,
+    one set of numbers on both surfaces), and the run's success closes the
+    source issue."""
+    pr_body, comment, closed = _run_report_action(
+        ledger=["10000 2000", "5000 1500"],
+        view_body="## Progress so far\n\n## Final status\n- stale\n")
+    assert "final status is in the PR body" in comment, \
+        f"a verified completion keeps the pointer comment: {comment!r}"
+    for line in ("- **Total input tokens:** 15000",
+                 "- **Total output tokens:** 3500"):
+        assert line in comment, f"the comment lists the run's usage: {comment!r}"
+        assert line in pr_body, \
+            ("the PR description carries the same numbers the comment "
+             f"posts: {pr_body!r}")
+    assert closed, "a successful run closes the source issue"
+
+
+def test_report_unverified_completion_makes_the_comment_self_contained():
+    """(reporting "the PR description carries the same usage numbers as
+    the issue comment") where the completion could not be applied to the
+    PR — the re-read shows a body without it (the PR was already merged,
+    or the edit was refused on both write paths) — the issue comment
+    carries the full final status itself: the usage lines and the stage
+    outcomes — and makes no claim that the PR body carries them."""
+    pr_body, comment, closed = _run_report_action(
+        ledger=["10000 2000", "5000 1500"])
+    assert "final status is in the PR body" not in comment, \
+        f"the comment must not claim what the PR body never got: {comment!r}"
+    assert "could not be completed" in comment
+    assert "- **Total input tokens:** 15000" in comment
+    assert "- **Total output tokens:** 3500" in comment
+    assert "### Stage outcomes" in comment
+    assert "stage 4 extract: clean" in comment
+    assert closed, "a successful run closes the source issue either way"
+
+
+def test_failed_run_leaves_the_source_issue_open():
+    """(reporting "a failed run leaves the source issue open") a failure
+    reports the stage outcomes and the pre-stop usage on the issue — but
+    never closes it: the issue stays open for a re-trigger."""
+    pr_body, comment, closed = _run_report_action(
+        run_result="failure", ledger=["3000 400"])
+    assert "run failed" in comment
+    assert "left open" in comment, \
+        f"a failed run's comment states the issue stays open: {comment!r}"
+    assert not closed, "a failed run must not close the source issue"
 
 
 def test_validator_skips_when_parser_port_absent():
