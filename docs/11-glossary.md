@@ -27,7 +27,7 @@
   that DID change scenarios with zero parseable verdicts still fails the
   stage — the oracle cannot be assumed green.
 - **Oracle** — the Gherkin requirements under `requirements/` (15 files,
-  152 scenarios), structured by topic: each file is named after the topic
+  153 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
@@ -51,7 +51,9 @@
 - **Reuse by ref** — the factory lives in this repo and is referenced by
   ref (the self-contained reusable workflow + the runtime tree its stage
   steps execute — the scripts and the pi prompt templates, in the same
-  repo); the ref selects the workflow and its runtime tree as one version
+  repo); the consumer relays that ref as the `factory-ref` input and each
+  stage job's first step clones the runtime tree from the factory repo at
+  it, so the ref selects the workflow and its runtime tree as one version
   from the factory repo, a ref bump
   selects them as one version, and targets pinned to an older ref keep
   working — an upgrade is a one-line ref bump, and every published

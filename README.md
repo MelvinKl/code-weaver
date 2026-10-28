@@ -96,13 +96,14 @@ jobs:
     # a reusable-workflow job may only carry `uses`/`with`/`secrets` — a
     # `runs-on:` here makes the file schema-invalid. Choose the runner
     # through the factory's `runner` input instead.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@5
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@9
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
+      factory-ref: 9   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
@@ -115,15 +116,30 @@ jobs:
       PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
 ```
 
+**Why the consumer relays the ref.** GitHub fetches only the called
+workflow's file — the runner never checks the factory repo into the
+target's workspace — so the called ref is not visible to the stage jobs.
+The `factory-ref` input relays it: each stage job's first step then
+clones the factory's runtime tree (the stage scripts, the shared scripts,
+the pi prompt templates) from the factory repo at exactly that ref, into
+the runner's temp dir, before the stage's checkout replaces the
+workspace with the target. A consumer that omits the input falls back to
+copying whatever `.github` / `pi-prompts` tree the workspace holds —
+reliable only on a runner whose workspace the same repo last occupied,
+and the mechanism that breaks a cross-repo run otherwise.
+
 The `GH_TOKEN` secret holds the token every factory stage authenticates with
 — it must be a token that **can read the target repo** (its user/app a member
 of the owning org; a fine-grained PAT scoped to *this* repository). Stage 1
 verifies this up front: a missing, dead or wrongly-scoped token fails within
 seconds with the exact cause in the log — not as an opaque red checkout.
 
-**Upgrading is a ref bump** in that one `uses:` line: the ref selects the
-reusable workflow — self-contained, its stage steps inlined in the workflow
-file and the runtime tree its steps execute (the scripts, the pi prompt
+**Upgrading is a ref bump** in that `uses:` line — and in the
+`factory-ref` input beside it, which carries the same ref so the stage
+jobs clone the factory's runtime tree from the factory repo at exactly
+the version the `uses:` line selects: the ref then selects the reusable
+workflow — self-contained, its stage steps inlined in the workflow file
+and the runtime tree its steps execute (the scripts, the pi prompt
 templates) shipping in the same repo — as one version from the factory
 repo; a ref bump selects the whole version.
 **Every published version is a stable ref**: a push to the factory's `main`
@@ -144,6 +160,7 @@ targets pinned to an older ref keep working.
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
+| `factory-ref` | *(empty)* | ref of the factory repo the stage jobs clone their runtime tree from — it must match the `uses:` line (one ref then selects the workflow file and the runtime tree as one version); empty falls back to the workspace's legacy tree |
 
 The **LLM backend is provided for the run** — via a GitHub secret or the
 repo file `.pi/agent/models.json`. The runner's pre-existing user-level
@@ -211,7 +228,7 @@ factory.
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 152 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 153 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -219,7 +236,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **152 Gherkin scenarios** — the oracle this
+`requirements/` holds **153 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

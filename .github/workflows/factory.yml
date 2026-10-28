@@ -16,13 +16,18 @@
 #
 # The scripts the inlined steps execute (the .github python tree,
 # the stage scripts, the pi prompt templates) ship in this same
-# repo, and each stage job's first step stashes them into
-# $RUNNER_TEMP before the stage's checkout replaces the workspace
-# with the target repo — the steps then run their scripts from the
-# stash, where the repo-relative layout keeps the scripts' imports
-# resolving. Same-repo and cross-repo runs take one identical path:
-# a target's ref bump selects the workflow and its runtime tree as
-# one version, and every published tag stays a stable ref.
+# repo. GitHub fetches only the called workflow's file — it never
+# checks the factory repo into the target's workspace, so the called
+# ref is not visible to the jobs: the consumer relays it as the
+# factory-ref input, and each stage job's first step clones the
+# factory repo at that ref into $RUNNER_TEMP (RUNNER_TEMP survives
+# every later checkout), where the steps run their scripts from the
+# clone and its repo-relative layout keeps the imports resolving: one
+# ref selects the workflow file and its runtime tree as one version,
+# on any runner, independently of what any earlier run left in the
+# workspace. An empty factory-ref (a consumer that predates the
+# input) falls back to copying whatever .github / pi-prompts tree
+# the workspace holds. Every published tag stays a stable ref.
 #
 # The stage code resolves each value as `INPUT_*`, then a `CW_*`
 # job/step env, then the stage's state file — the step env entries
@@ -83,6 +88,11 @@ on:
         description: The target's workflow file name (without .yml) — used for the idempotency query
         type: string
         default: code-weaver
+      factory-ref:
+        description: Ref of this factory repo (a release tag, or main) that the stage jobs clone their runtime tree from — it must match the ref on the consumer's uses entry, so one ref selects the workflow file and the runtime tree as one version. Empty falls back to copying whatever .github / pi-prompts tree the job's workspace holds (a consumer that predates this input).
+        type: string
+        required: false
+        default: ""
     secrets:
       GH_TOKEN:
         description: Token with contents:write + issues:write + pull-requests:write on the target repo
@@ -123,22 +133,36 @@ jobs:
       base-sha: ${{ steps.resolve.outputs.base-sha }}
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       - id: preflight
         name: Preflight — verify the GH_TOKEN secret can serve this repo
         env:
@@ -241,6 +265,7 @@ jobs:
             echo "### Code Weaver — resolved configuration (workflow log; never committed)"
             echo "- issue: #$ISSUE (event: ${{ github.event_name }})"
             echo "- runner: \`${{ inputs.runner }}\`"
+          echo "- runtime tree: the factory's own — cloned from MelvinKl/code-weaver @ \`${{ inputs.factory-ref }}\` (the consumer-relayed ref; empty = the workspace's legacy tree)"
             echo "- LLM model (which configured model): \`${{ inputs.llm-model }}\`"
             echo "- LLM backend: provided for the run (a GitHub secret or the repo file .pi/agent/models.json) — stage 2 writes it for the run"
             echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
@@ -288,22 +313,36 @@ jobs:
       CW_PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GH_TOKEN }}
@@ -355,22 +394,36 @@ jobs:
       # frozen at job start and the job-outputs relay drops values here
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -619,22 +672,36 @@ jobs:
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -732,22 +799,36 @@ jobs:
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -845,22 +926,36 @@ jobs:
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -958,22 +1053,36 @@ jobs:
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -1065,22 +1174,36 @@ jobs:
       # arrive via GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -1637,22 +1760,36 @@ jobs:
       # the stage artifacts (Read trigger / Read PR state steps)
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -1788,22 +1925,36 @@ jobs:
       CW_RUN_RESULT: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
-        # The runner has checked out THIS repo at the called ref into the
-        # workspace (that is how it obtained this workflow file); the stage
-        # checkouts below replace it with the TARGET repo, which holds no copy
-        # of the factory's runtime tree. So the tree the inlined stage steps
-        # execute (the .github scripts, the stage scripts, the pi prompt
-        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
-        # every later checkout, and the repo-relative layout is preserved, so
-        # the scripts' __file__-relative imports keep resolving. Same-repo and
-        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
-        # guessing, no action boundary, no own-action refs.
+        # GitHub fetches only the called workflow's file — the runner never
+        # checks the factory repo into the target's workspace, so the called
+        # ref is not visible to the jobs; the consumer relays it as the
+        # factory-ref input (the same ref as its uses: line). When it is set,
+        # this step clones the factory repo at that ref into $RUNNER_TEMP —
+        # RUNNER_TEMP survives every later checkout, and the clone's
+        # repo-relative layout keeps the scripts' __file__-relative imports
+        # resolving: one ref selects the workflow file and its runtime tree
+        # as one version, on any runner, independently of what any earlier
+        # run left in the workspace. An empty factory-ref (a consumer that
+        # predates the input) falls back to copying whatever .github /
+        # pi-prompts tree the workspace holds.
         run: |
-          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/cw/stash"
-          cp -r .github "$RUNNER_TEMP/cw/stash/"
-          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          REF="${{ inputs.factory-ref }}"
+          if [ -n "$REF" ]; then
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$REF" https://github.com/MelvinKl/code-weaver "$RUNNER_TEMP/cw/stash" || {
+              echo "::error::could not clone the factory runtime tree from MelvinKl/code-weaver at ref '$REF' — the factory-ref input must name a ref that exists on the factory repo (it should match the consumer's uses: line)"
+              exit 1
+            }
+            rm -rf "$RUNNER_TEMP/cw/stash/.git"
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (cloned MelvinKl/code-weaver @ $REF; .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          else
+            [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed (pass the factory-ref input so the stage jobs clone the tree from the factory repo instead)"; exit 1; }
+            rm -rf "$RUNNER_TEMP/cw/stash"
+            mkdir -p "$RUNNER_TEMP/cw/stash"
+            cp -r .github "$RUNNER_TEMP/cw/stash/"
+            if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+            echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
+          fi
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present

@@ -11,8 +11,13 @@
 # release-time rewrite of the workflow file could make consistent — a push
 # that updates a workflow file, which the publishing principal is refused.
 # So the actions are consolidated into the workflow: one file is one
-# version, and each stage job stashes the runtime tree it executes before
-# the first checkout replaces the workspace with the target repo.
+# version, and each stage job's first step provides the runtime tree it
+# executes in the runner's temp dir before the first checkout replaces
+# the workspace with the target repo. GitHub never checks the factory
+# repo into the target's workspace (it only fetches the workflow file),
+# so the consumer relays the called ref as the factory-ref input and the
+# step clones the factory repo at that ref (an empty factory-ref falls
+# back to copying whatever tree the workspace holds).
 
 Feature: Reuse by ref, never copy-paste
   As a maintainer of a target project
@@ -44,8 +49,16 @@ Feature: Reuse by ref, never copy-paste
   Scenario: The stage jobs stash the runtime tree before their first checkout
     Given a factory run on a target repo whose tree holds no copy of the factory's runtime tree
     When a stage job starts
-    Then its first step copies the called repo's .github tree and prompt templates to the runner's temp dir
+    Then its first step provides the factory's .github tree and prompt templates in the runner's temp dir before any checkout replaces the workspace
     And its stage steps run their scripts from that stashed copy
+
+  @reuse
+  Scenario: The stage jobs clone the runtime tree from the factory repo at the relayed ref
+    Given the consumer workflow passes the factory's called ref as the factory-ref input
+    When a stage job starts on a runner whose workspace holds no copy of the factory's runtime tree
+    Then its first step clones the factory repo at that ref into the runner's temp dir
+    And its stage steps run their scripts from that clone
+    And the tree they run is the factory's at the called ref — the workflow file and the runtime tree are one version
 
   @reuse
   Scenario: An upgrade is a ref bump
@@ -67,6 +80,7 @@ Feature: Reuse by ref, never copy-paste
     And the target repo's tree holds no copy of the factory's runtime tree
     When a factory run starts on that target repo
     Then every stage step runs the factory's own script from the stashed runtime tree
+    And the stashed runtime tree is the factory's, cloned from the factory repo at the ref the consumer relays
     And no step fails looking for the factory's scripts under the target's own checkout
     And the run does not crash at the first stage step
 

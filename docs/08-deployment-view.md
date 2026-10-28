@@ -21,8 +21,11 @@ the only ref it publishes). The tag points at a commit that is already on
 the remote, so the push uploads only the tag object — no new commit
 content — and the default GITHUB_TOKEN publishes it: no special token, no
 secret. The workflow at a ref is self-contained — its stage steps are
-inlined in the file and its runtime tree stashes itself at the called ref
-— so a target's ref bump selects the whole version at once; tags are
+inlined in the file, and its runtime tree is cloned by each stage job's
+first step from the factory repo at the ref the consumer relays as the
+`factory-ref` input (the same ref as the `uses:` line) — so a target's
+ref bump selects the whole version at once (the workflow file and the
+tree its steps execute come from the same commit); tags are
 immutable, so targets pinned to an older ref keep working, and bumping
 the ref is the only change a target ever makes.
 
