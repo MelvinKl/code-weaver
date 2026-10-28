@@ -96,14 +96,14 @@ jobs:
     # a reusable-workflow job may only carry `uses`/`with`/`secrets` — a
     # `runs-on:` here makes the file schema-invalid. Choose the runner
     # through the factory's `runner` input instead.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@9
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@4
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
-      factory-ref: 9   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
+      factory-ref: 4   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
