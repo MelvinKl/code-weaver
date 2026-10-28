@@ -14,8 +14,15 @@ on:
   push:
     branches: [main]
 
+# The push below authenticates with the default GITHUB_TOKEN — a token of
+# the `github-actions` GitHub App, scoped by this block (actions/checkout
+# embeds it in the remote URL; the GH_TOKEN secret is only read by the gh
+# CLI, never by git). The tag points at the commit that rewrites
+# factory.yml, i.e. a workflow-file update: a GitHub App needs `workflows`
+# write for that, on top of `contents` write for the tag ref itself.
 permissions:
   contents: write
+  workflows: write
 
 jobs:
   release:
