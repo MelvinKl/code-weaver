@@ -71,15 +71,54 @@ def pi_stage(template: str, prompt_file: str | None = None,
                             context_as_args=context_as_args)
 
 
-def run_guard(baseline: str, allow: list[str]):
+def run_guard(baseline: str, allow: list[str], deny: list[str] = ()) -> bool | None:
     """Prefer the canonical external script (one self-contained script);
-    fall back to the shared in-process implementation — same semantics."""
+    fall back to the shared in-process implementation — same semantics.
+
+    Returns the revert count the shared guard applied: 0 on a clean stage
+    (the caller logs the OK line itself, with the caller-specific wording —
+    the stages' plain whitelist calls pass allow only), the number of
+    reverted files on a violation, and None when the external script could
+    not even run (missing python / unreadable script — a broken environment
+    the caller fails on, never a green stage).
+
+    On a violation the guard's own canonical revert line
+    (::error::guard: REVERTED off-limits files: …) is echoed into the
+    stage's log first — that line is the record of what was reverted — and
+    the count parsed from it is the returned verdict.
+
+    The implementation stage passes its inverted-allow deny set
+    (deny = {requirements, plans}): the `!` marker the CLI splits on is
+    emitted only when deny is non-empty, so the other stages' calls carry
+    plain allow entries and the whitelist semantics are byte-identical to
+    the pre-inverted form (a changed file is a violation when no allow entry
+    admits it)."""
     ext = common.external_guard()
     if ext:
-        r = subprocess.run([sys.executable, ext, baseline, *allow],
-                           cwd=common.repo(), capture_output=True, text=True)
-        return common.GuardResult(ok=(r.returncode == 0), violations=[])
-    return common.guard(baseline, allow)
+        args = [sys.executable, ext, baseline, *allow]
+        if deny:
+            args += ["!", *deny]
+        r = subprocess.run(args, cwd=common.repo(), capture_output=True, text=True)
+        if r.returncode not in (0, 1):
+            return None
+        if r.returncode == 0:
+            return 0
+        # The script printed the canonical revert line to stderr
+        # (::error::guard: REVERTED off-limits files: …); echo it first so
+        # the job log carries the record, then count the reverted paths.
+        line = next((ln for ln in r.stderr.splitlines()
+                     if "::error::guard: REVERTED" in ln), "")
+        if line:
+            common.log(line.strip())
+        tail = line.split("REVERTED off-limits files:", 1)
+        n = len(tail[1].split()) if len(tail) == 2 else None
+        if n == 0:
+            return None  # an error exit without a revert line — broken
+        return n
+    r = common.guard(baseline, allow, deny)
+    if not r.ok:
+        return len(r.violations)
+    return 0
 
 
 def dir_files(d: str, at_prefix: bool = True) -> list[str]:
@@ -186,7 +225,8 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                          inject: list[str] | tuple[str, ...] = (),
                          post_ok=None, on_violation=None,
                          allow_noop: bool = True,
-                         context_as_args: bool = False) -> None:
+                         context_as_args: bool = False,
+                         deny: list[str] | tuple[str, ...] = ()) -> None:
     """generate → commit → guard → (clean: post_ok check / break;
     leak: revert + re-run) — bounded by the loop caps.
 
@@ -199,7 +239,16 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
     False the stage never treats an empty response as "the work is already
     in place" (it only ever retries, then fails clean). The per-task
     implementation loop needs False — an empty response while a task is open
-    means a wedged model, never an already-complete branch."""
+    means a wedged model, never an already-complete branch.
+
+    `deny` (default: empty — plain whitelist semantics, a violation is a
+    file no allow entry admits) adds the guard's inverted-allow form: the
+    denied set, passed as the `!` entries to the shared script, where a
+    file is a violation only when it is denied AND no allow entry admits it.
+    The implementation stage passes the protected dirs (requirements, plans)
+    — its lane is everything else: it has the job to implement the tests,
+    and a whitelist snapshotted at stage start reverts a brand-new `tests/`
+    dir every iteration (run 40735387017)."""
     baseline = stage_baseline()
     i = 0
     empty = 0
@@ -309,20 +358,38 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
         empty = 0
         try:
             common.commit_all(f"{stage}: generated (iteration {i})")
-            res = run_guard(baseline, allow)
-            if res.ok:
+            # The shared guard's verdict, normalized (run_guard): 0 = clean
+            # stage; a positive count = the guard reverted off-limits files
+            # (the revert line it printed was echoed into the log); None =
+            # the guard could not even run — a broken environment the stage
+            # fails on, never a green stage.
+            rev = run_guard(baseline, allow, deny)
+            if rev is None:
+                common.log(f"::error::{stage}: the guard could not run — "
+                           f"the environment is broken, not the stage")
+                sys.exit(1)
+            if rev == 0:
                 if post_ok is not None and post_ok() is False:
                     i += 1
                     continue
                 common.log(f"{stage}: clean — stage complete")
                 return
-            common.log(f"{stage}: guard violations → {' '.join(res.violations)}")
-            if on_violation is not None and on_violation(res.violations):
-                # the hook took ownership (e.g. implement looping back to plan)
-                i += 1
-                continue
+            common.log(f"{stage}: guard violations — {rev} file(s) reverted; "
+                       f"the offending list is in the REVERTED line above")
+            # The revert itself is committed before the loop advances:
+            # the next guard runs against the REVERTED tree (the stage's
+            # baseline is the pre-stage tip; against it, the model's next
+            # iteration starts from a clean slate of the protected set).
             common.commit_all(f"{stage}: guard reverted off-limits files")
             i += 1
+            # The implement stage's loop-back hook owns the violation here
+            # (an off-limits edit inside the requirements dir loops the
+            # stage back to planning); the hook has no file list — the
+            # revert line above is the record — so it is called for its
+            # decision and must return True to take over the iteration.
+            if on_violation is not None and on_violation([]):
+                i += 1
+                continue
         except Exception:
             import traceback
             common.log(f"::error::{stage}: stage logic crashed —\n"

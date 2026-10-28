@@ -2,12 +2,21 @@
 """The single guard script (plan §4.1) — invoked three times with different
 allowed paths.
 
-  guard-check.py <baseline-ref> <allowed-path>…
+  guard-check.py <baseline-ref> <allowed-path>… [! <denied-path>…]
 
 exit 0 → clean stage (everything changed is inside the allowed paths)
 exit 1 → violations found: the offending files were reverted exactly
 (modified files checked out from the baseline, untracked ones cleaned); the
 calling stage re-runs its generation.
+
+Plain entries admit. A `!` section marker switches to inverted-allow
+entries, which DENY: the implementation guard's lane is "everything except
+the protected set" (its call passes deny = {requirements, plans} +
+allow = {this issue's plan file, `__pycache__`}) — a changed file is a
+violation when it is denied AND no allow entry admits it (the deny set is
+matched by prefix, the allow set also admits paths that carry an allow
+entry as a component). The other stages' whitelist calls pass plain
+entries only, where a denied file is one no allow entry matches.
 
 Canonical implementation lives in .github/scripts/common.py (shared by every
 stage); this file is a thin entry point so the guard is one self-contained
@@ -42,15 +51,27 @@ def _load():
         ).stdout.splitlines()
         return sorted(set(tracked + untracked))
 
+    def guard_denied(f, allow, deny):
+        # Identical to common.guard_denied (see there for the semantics).
+        allow = [a.rstrip("/") for a in allow if a]
+        deny = [a.rstrip("/") for a in deny if a]
+        if not any(f == a or f.startswith(a + "/") or a in f.split("/")
+                   for a in allow):
+            if not deny:
+                return True
+            return any(f == d or f.startswith(d + "/") for d in deny)
+        return False
+
     @dataclasses.dataclass
     class GuardResult:
         ok: bool
         violations: list
 
-    def guard(baseline: str, allow):
+    def guard(baseline: str, allow, deny=()):
         allow = [a.rstrip("/") for a in allow if a]
+        deny = [a.rstrip("/") for a in deny if a]
         violations = [f for f in changed_files(baseline)
-                      if not any(f == a or f.startswith(a + "/") for a in allow)]
+                      if guard_denied(f, allow, deny)]
         if not violations:
             print(f"guard: OK — only {' '.join(allow) or '(baseline)'} changed", flush=True)
             return GuardResult(True, [])
@@ -80,9 +101,17 @@ def _load():
     def main_guard_cli():
         args = sys.argv[1:]
         if not args or args[0] in ("-h", "--help"):
-            print("usage: guard-check.py <baseline-ref> <allowed-path>…")
+            print("usage: guard-check.py <baseline-ref> <allowed-path>… "
+                  "[! <denied-path>…]")
             sys.exit(2)
-        r = guard(args[0], args[1:])
+        baseline = args[0]
+        tail = args[1:]
+        if "!" in tail:
+            i = tail.index("!")
+            allow, deny = tail[:i], [a for a in tail[i + 1:] if a]
+        else:
+            allow, deny = tail, []
+        r = guard(baseline, allow, deny)
         sys.exit(0 if r.ok else 1)
 
     return main_guard_cli

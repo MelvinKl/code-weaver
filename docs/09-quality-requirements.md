@@ -32,7 +32,9 @@
   contracts (the two context slices, the extraction guard shape, the
   consumer's owner/ref surface, the pi-generated PR body, the report
   fallback, the validator skip, the loop-cap defaults, the implement
-  guard's plan-file precision).
+  guard's inverted-allow shape — deny = {requirements, plans}, the
+  current issue's plan file re-allowed, the implementation's lane
+  admitted).
 - **Verdict discipline.** The review marks *every scenario of the feature
   files this run changed* (none of those skipped, none invented) — the
   delta scope: the standing oracle stays as the runs that added it judged

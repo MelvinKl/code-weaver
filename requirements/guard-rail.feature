@@ -32,7 +32,7 @@ Feature: Only-X-changed guard-rail
     Given the pipeline defines an allowed file set per check stage
     Then the requirement-check allows only requirements/
     And the plan-check allows only plans/
-    And the implement-check allows src/, tests/, docs/, plans/ and README.md
+    And the implement-check allows everything except requirements/ and the other issues' plans
     And the implement-check does not allow requirements/
 
   @guard

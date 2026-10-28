@@ -90,12 +90,12 @@ Feature: Implementation
     Then the current issue's plan file is expanded to that file as an @-argument
     And no directory is ever passed as an @-argument
 
-  Scenario: The allow set covers the repo's real layout
-    Given a repo whose code lives outside the conventional source dirs (such as .github/)
-    And the repo also has a tests/ directory
-    When the implementation guard computes its allow set
-    Then the set includes the conventional dirs and the other top-level code dirs
-    And the set also includes the current issue's plan file — the plan is a live tracker of task state
-    And the top-level documentation (README.md, PLAN.md) is allowed
+  Scenario: The implement guard runs inverted-allow
+    Given a repo the implementation must add code and tests to
+    And a `tests/` dir (or docs set, top-level files) that did not exist before the stage ran
+    When the implementation guard computes its denied set and its allow set
+    Then the denied set is the protected set — the requirements dir and the plan dir
+    And the allow set re-allows exactly the current issue's plan file and pycache at any depth
+    And everything else is admitted — the tests the implementation has the job to implement are never reverted
     And no other plan file is allowed
     And the requirements dir stays off-limits

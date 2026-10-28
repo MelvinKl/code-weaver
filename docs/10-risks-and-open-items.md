@@ -24,26 +24,28 @@
   `INPUT_*`) are contained by the `CW_*`/state-file relay — but a re-run
   is pinned to the run's commit and cannot pick up a later workflow
   fix: only the next triggered run carries a workflow change.
-- **Self-editing separation** — implement/gate allow sets exclude
+- **Self-editing separation** — the implement guard's deny set excludes
   `requirements-dir`: intra-PR test fixes are fine, requirement edits are
-  not (they loop back to the plan stage). The implement allow set excludes
-  the plan dir and re-allows only the current issue's plan file (the plan
-  is a live state tracker) and, for a repo without a `docs/` dir, the
-  top-level `PLAN.md` that plays the arc42-set role; any other issue's
-  plan file is off-limits (implement: “implementation may only edit the
-  current issue's plan”).
+  not (they loop back to the plan stage). The guard runs inverted — the
+  implementation's lane is everything except the protected set (requirements
+  and the plans dir), with exactly the current issue's plan file re-allowed
+  over it (the plan is a live state tracker); any other issue's plan file is
+  off-limits (implement: “implementation may only edit the current
+  issue's plan”). Inversion is the field-proven shape: a whitelist
+  snapshotted at stage start used to revert a brand-new `tests/` dir (or
+  `docs/` set, top-level `Makefile`) the implementation had just created,
+  every iteration (run 40735387017 on the syncer target, which started
+  without a `tests/` dir) — the implementation has the job to implement
+  the tests, and the guard's job is to protect the protected set.
 - **Open item for the owner (oracle wording tension)** — with the
-  implement guard now file-precise (plan dir excluded; only the current
-  issue's plan file re-allowed), `guard-rail.feature`'s “the allowed file
-  set is per-stage” line — “the implement-check allows src/, tests/,
-  docs/, `plans/` and README.md” — reads as the whole plan dir, while
+  implement guard now running inverted (deny = {requirements, plans}; the
+  current issue's plan file re-allowed), `guard-rail.feature`'s “the
+  allowed file set is per-stage” line — “the implement-check allows
+  everything except requirements/ and the other issues' plans” — and
   `implement.feature`'s “implementation may only edit the current
-  issue's plan” pins the tighter separation. The stricter implement pin is
-  what the guard enforces, and the guard-rail line stays satisfied (the
-  current plan file lives under `plans/`). The implement stage stays walled
-  off from the oracle (its guard reverts requirement edits and loops back to
-  planning), so reconciling the two lines is the owner's call — a
-  requirement that cannot be fulfilled is reported, not rewritten.
+  issue's plan” say the same thing: the stricter implement pin is what the
+  guard enforces. The implement stage stays walled off from the oracle
+  (its guard reverts requirement edits and loops back to planning).
 - **Extraction delta shape** — the guard keeps the delta inside the
   requirements dir; inside it, the stage pins the topic placement: a
   delta's scenarios extend the existing topic file that covers their topic

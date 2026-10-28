@@ -73,11 +73,12 @@ The pins (one per scenario the fix loop had to fulfil):
   surfaces)
   (configuration "the loop caps are configurable", "a loop cap of 0 means
   no cap");
-- the implement guard is plan-file-precise: `source_dirs()` excludes the
-  plan dir, and the constructed allow set admits the current issue's plan
-  file while rejecting any other plan file (implement "implementation may
-  only edit the current issue's plan", "the allow set covers the repo's
-  real layout");
+- the implement guard runs inverted-allow: its deny set is the protected
+  set (requirements, plans) and its allow set re-admits only the current
+  issue's plan file — another issue's plan is a violation the guard reverts
+  while the implementation's lane (code, tests, docs, new dirs) is
+  admitted (implement "implementation may only edit the current issue's
+  plan");
 - the gates stage's run query is scoped to the PR's head sha server-side
   and paginated to the end of the result set, a head with no PR-triggered
   workflow is vacuously green after the grace window, and in-progress
@@ -856,45 +857,59 @@ def test_loop_cap_defaults_match_oracle():
         assert "5,000,000" not in surface
 
 
-def test_implement_guard_allows_only_the_current_issue_plan():
+def test_implement_guard_protects_requirements_and_other_plans():
     """(implement "implementation may only edit the current issue's
-    plan", "the allow set covers the repo's real layout") the implement
-    guard's source dirs exclude the plan dir (alongside the requirements
-    dir) while keeping the repo's real code layout (`.github/` for a
-    factory repo); the stage re-allows exactly the current issue's plan
-    file, so another issue's plan file is a violation the guard reverts —
-    the stage docstring's "only that one file" claim is what the code
-    does, judged with the guard's own prefix-matching predicate."""
+    plan") the implement guard runs inverted-allow — the stage's DENY set
+    is the protected set (requirements + plans dir, the guard's `!`
+    entries) and its ALLOW set re-admits exactly the current issue's plan
+    file plus `__pycache__`: another issue's plan file and a requirements
+    file are violations the guard reverts, while everything else is the
+    implementation's lane — judged with the guard's own predicate
+    (common.guard_denied)."""
     spec = importlib.util.spec_from_file_location(
         "cw_implement_stage",
         os.path.join(ROOT, ".github", "actions", "implement-stage", "stage.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    spec_c = importlib.util.spec_from_file_location(
+        "cw_common", os.path.join(ROOT, ".github", "scripts", "common.py"))
+    common = importlib.util.module_from_spec(spec_c)
+    sys.modules["cw_common"] = common  # the @dataclass GuardResult resolves its module
+    spec_c.loader.exec_module(common)
     saved = {k: os.environ.get(k) for k in ("PLAN_DIR", "REQUIREMENTS_DIR")}
     os.environ["PLAN_DIR"] = "plans"
     os.environ["REQUIREMENTS_DIR"] = "requirements"
     cwd = os.getcwd()
     os.chdir(ROOT)
     try:
-        dirs = mod.source_dirs()
-        assert "plans" not in dirs, "the plan dir must not be a source dir"
-        assert "requirements" not in dirs, "the requirements dir stays off-limits"
-        assert ".github" in dirs, "the repo's real layout stays allowed"
-        # main()'s allow construction, replayed: only the current issue's
-        # plan file is re-allowed (and the idle-run fallback, which the
-        # stage takes only when no issue is resolved, is not this case)
+        deny = mod.protected_dirs()
+        assert "plans" in deny, "the plans dir is denied"
+        assert "requirements" in deny, "the requirements dir is denied"
+        # main()'s allow construction, replayed: the re-admissions over the
+        # deny set are the current issue's plan file + pycache at any depth
         current = mod.current_plan_path("20", "plans")
         assert current == "plans/20.md"
         assert os.path.isfile(current), "this repo carries its own issue-20 plan"
-        allow = list(dirs)
-        if current and current not in allow:
+        allow = ["__pycache__"]
+        if current:
             allow.append(current)
-        admitted = lambda f: any(f == a or f.startswith(a + "/")
-                                 for a in allow)
-        assert admitted(current), "the current issue's plan file must be admitted"
-        assert not admitted("plans/7.md"), \
+        assert common.guard_denied(current, allow, deny) is False, \
+            "the current issue's plan file must be admitted over the deny"
+        assert common.guard_denied("plans/7.md", allow, deny), \
             "another issue's plan file must be off-limits"
-        assert not admitted("requirements/trigger.feature")
+        assert common.guard_denied("requirements/trigger.feature", allow, deny), \
+            "the requirements dir stays off-limits"
+        # the implementation's lane: everything else is admitted — the code
+        # dirs, the tests the implementation has the job to implement
+        # (including a `tests/` dir that did not exist at stage start), the
+        # arc42 set, the README, and pycache the suite runs generate at any
+        # depth (run 40735387017's iterations reverted these)
+        for f in ("src/app.py", "tests/run.py", "tests/test_sync.py",
+                  "tests/__pycache__/test_sync.cpython-313.pyc",
+                  "docs/07-runtime-view.md", "README.md", "Makefile",
+                  ".github/workflows/sync.yml"):
+            assert not common.guard_denied(f, allow, deny), \
+                f"{f} is the implementation's lane and must be admitted"
     finally:
         os.chdir(cwd)
         for k, v in saved.items():

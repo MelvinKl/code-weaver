@@ -23,8 +23,12 @@ Key mechanisms:
 - **The guard idiom** — one shared "only X changed" check
   (`.github/scripts/guard-check.py` / `common.guard`) with three call
   sites (requirement-check, plan-check, implement-check), each with its
-  own allowed path set. A leaking stage is reverted to its baseline and
-  re-run, bounded by the loop caps.
+  own file set: the two earlier checks run the guard as a whitelist (only
+  their dir may change), the implement-check runs it INVERTED — the
+  implementation's lane is everything EXCEPT the protected set (requirements
+  and the plans dir), with exactly the current issue's plan file re-allowed
+  over it; a leaking stage is reverted to its baseline and re-run, bounded
+  by the loop caps.
 - **Bounded loops.** Guard re-run, review-fix and gate-fix loops stop when
   their problems are resolved or when they reach the `MAX_LOOPS` iteration
   cap (0 = no cap) — no token budget is one of the loops' stopping

@@ -459,23 +459,56 @@ def changed_files(baseline: str) -> list[str]:
     return sorted(set(tracked + untracked))
 
 
+def guard_denied(f: str, allow: list[str], deny: list[str]) -> bool:
+    """The shared admit/deny predicate of one guard call: a changed file is
+    denied when it is off-limits AND not explicitly allowed.
+
+    - `allow` — the stage's allowed paths (plain entries). An allow entry
+      admits exactly: the entry as a file, everything under it as a
+      directory prefix, and every path that CARRIES the entry as one of its
+      path components (the implementation guard's `__pycache__` entry
+      re-admits pycache at any depth this way — its call's deny set is only
+      {requirements, plans}, so the component match is what keeps the
+      suite's compiled byproducts out of the revert list).
+    - `deny` — the inverted-allow marker (`"!" + path` in the CLI): the
+      entry denies itself and everything under it. The implementation
+      stage's lane is "everything EXCEPT the protected set" — its guard
+      call passes deny = {requirements, plans} + allow = {this issue's plan
+      file}, so a file is a violation only when it is protected AND no
+      allow entry admits it. A deny entry without any allow entry denies
+      everything, so the stages' ordinary whitelist calls (allow only,
+      deny empty) are unchanged."""
+    allow = [a.rstrip("/") for a in allow if a]
+    deny = [a.rstrip("/") for a in deny if a]
+    if not any(f == a or f.startswith(a + "/") or a in f.split("/")
+               for a in allow):
+        if not deny:
+            return True  # whitelist semantics: not allowed → off-limits
+        return any(f == d or f.startswith(d + "/") for d in deny)
+    return False
+
+
 @dataclasses.dataclass
 class GuardResult:
     ok: bool
     violations: list[str]
 
 
-def guard(baseline: str, allow: list[str] | tuple[str, ...]) -> GuardResult:
+def guard(baseline: str, allow: list[str] | tuple[str, ...],
+          deny: list[str] | tuple[str, ...] = ()) -> GuardResult:
     """The one shared guard idiom (plan §4.1): everything in the baseline
-    diff that is not under an allowed prefix is reverted exactly (modified
+    diff that is not admitted (guard_denied) is reverted exactly (modified
     files checked out from the baseline, untracked ones cleaned), and the
     result is returned so the stage can re-run its generation. Invoked three
     times by the three check stages with different allowed paths — one script
-    (guard-check.py), three calls."""
+    (guard-check.py), three calls; the implementation call passes the
+    inverted-allow deny set (its lane is everything except the protected
+    dirs), the others their plain allow sets."""
     allow = [a.rstrip("/") for a in allow if a]
+    deny = [a.rstrip("/") for a in deny if a]
     violations = []
     for f in changed_files(baseline):
-        if any(f == a or f.startswith(a + "/") for a in allow):
+        if not guard_denied(f, allow, deny):
             continue
         violations.append(f)
     if not violations:
@@ -590,14 +623,28 @@ def external_guard() -> str | None:
 
 
 def main_guard_cli() -> None:
-    """guard-check.py entry point:  guard-check.py <baseline-ref> <allowed>…
-    exit 0 = clean stage, 1 = violations reverted (caller re-runs the stage)."""
+    """guard-check.py entry point:
+        guard-check.py <baseline-ref> <allowed-path>… [! <denied-path>…]
+    exit 0 = clean stage, 1 = violations reverted (caller re-runs the
+    stage). Plain entries admit (whitelist semantics); a `!` section marker
+    switches to inverted-allow entries, which deny (the implementation
+    guard's protected set) — a file is a violation when it is denied AND no
+    allow entry admits it (see guard_denied)."""
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
-        print("usage: guard-check.py <baseline-ref> <allowed-path>…")
+        print("usage: guard-check.py <baseline-ref> <allowed-path>… "
+              "[! <denied-path>…]")
         sys.exit(2)
-    baseline, allow = args[0], args[1:]
-    r = guard(baseline, allow)
+    baseline = args[0]
+    tail = args[1:]
+    if "!" in tail:
+        # the marker splits the tail: the plain entries before it admit, the
+        # entries after it deny (the implementation guard's protected set)
+        i = tail.index("!")
+        allow, deny = tail[:i], [a for a in tail[i + 1:] if a]
+    else:
+        allow, deny = tail, []
+    r = guard(baseline, allow, deny)
     sys.exit(0 if r.ok else 1)
 
 

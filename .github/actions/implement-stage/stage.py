@@ -5,20 +5,36 @@ The plan file `PLAN_DIR/<issue_number>.md` (see plan-stage) is a Jira-ticket
 state tracker: a checklist of tasks, each open (`- [ ]`) or done (`- [x]`).
 Each invocation of this stage works on the NEXT OPEN task — implements it and
 marks it done — and the per-task loop below calls again until every task is
-done (or a cap is hit). The guard's allow set therefore includes only THIS
-issue's plan file, never another issue's plan: the implementation must never
-edit a plan that does not belong to the current issue.
+done (or a cap is hit).
 
-The guard deliberately EXCLUDES the requirements dir (and the plans dir):
-if implementation edits a requirement, the guard reverts the file and the
-stage loops back to the plan stage (regenerating the plan against the
-unchanged requirement) before implementing again — "a requirement edited
-during implementation loops back to planning". The plans dir is excluded
-because the plan is a live state tracker of THIS issue's tasks: only the
-current issue's plan file is editable — main() re-allows exactly that one
-file (mirroring plan_stage_allow), and any other plan file is a violation
-the guard reverts (implement: "implementation may only edit the current
-issue's plan", "the allow set covers the repo's real layout").
+The guard runs INVERTED-ALLOW (the guard's `!` denied-set marker): the
+implementation's lane is everything EXCEPT the protected set — requirements
+and the plans dir — so the allow entries carry two jobs:
+
+  - the current issue's plan file: it is the one file inside the denied
+    plans dir the implementation may edit (a live state tracker — it flips
+    its own task checkboxes as it works); everything else under plans/ is
+    still a violation the guard reverts (implement: "implementation may
+    only edit the current issue's plan");
+  - `__pycache__`: component-matched, so pycache generated at any depth is
+    admitted back over its deny. The implementation legitimately RUNS the
+    suite (the implement template's verification step) and the guard must
+    not revert the compiled byproducts of that run (run 40735387017's
+    iteration 2 flagged exactly these).
+
+Everything else is admitted by default — and deliberately: the guard must
+never re-litigate WHERE the implementation puts its work. The old form
+whitelisted the top-level dirs that existed when the stage STARTED, and a
+repo whose `tests/` dir (or `docs/` set, or top-level `Makefile`) did not
+exist yet had every iteration's work reverted out of the tree — the stage
+then spent its whole loop budget re-creating files the guard deleted
+(run 40735387017: the syncer target started with no tests dir, and its
+implementation ping-ponged `tests/` for the entire cap). The implementation
+has the job to implement the tests — and to create whatever new dirs and
+files the work needs — so the guard's job is to protect the protected set
+(requirements: an edit there loops back to the plan stage; the other
+issues' plans: a violation the guard reverts), not to guess which of the
+tree's pre-existing directories the work belongs in.
 """
 from __future__ import annotations
 
@@ -39,22 +55,25 @@ import stages
 OPEN_TASK_RE = re.compile(r"^\s*-\s*\[\s*\]\s*")
 
 
+def protected_dirs() -> list[str]:
+    """The dirs the implementation's guard DENIES (the inverted-allow deny
+    set, passed as the `!` entries): the requirements dir (the Gherkin
+    oracle — an edit there loops back to the plan stage) and the plans dir
+    (only the current issue's plan file is re-allowed over it — main() adds
+    that one file to the allow set; every other plan is a violation the
+    guard reverts)."""
+    out = [common.env_dir("REQUIREMENTS_DIR"), common.env_dir("PLAN_DIR")]
+    return [d for d in out if d]
+
+
 def source_dirs() -> list[str]:
-    """The code dirs the implementation may touch.
+    """The top-level dirs of the tree, minus the protected set and the
+    VCS/dependency noise — the repo's real layout.
 
-    Every top-level directory except the protected ones (requirements and
-    plans) and the VCS/dependency noise. The conventional source dirs
-    (src, tests, lib, app, packages, services, internal) are included
-    wherever they exist — and so are the repo's other code locations:
-    a factory repo keeps its own source under .github/, and having a
-    tests/ dir must not make the guard conclude the implementation
-    lives only there. Hidden dirs are excluded except .github, where
-    the factory's own workflows and actions live.
-
-    The plan is a live state tracker of THIS issue's tasks, not code, so it
-    is not a source dir here — main() adds the current issue's plan file to
-    the allow set explicitly (and ONLY that one file — never another
-    issue's plan)."""
+    The guard call itself no longer uses these (the inverted-allow allow
+    set is main()'s re-admissions, and every other dir is admitted by
+    default): the stage keeps the function for its layout view, and this
+    repo's contract tests pin its protected-dir exclusions."""
     protected = {common.env_dir("REQUIREMENTS_DIR"), common.env_dir("PLAN_DIR")}
     noise = {".git", "node_modules", "__pycache__", ".venv", ".tox", ".mypy_cache"}
     return [e for e in sorted(os.listdir("."))
@@ -100,9 +119,23 @@ def has_open_task(path: str) -> bool:
 def plan_loop_back(violations: list[str]) -> bool | None:
     """The one violation class that loops back to planning: an edit inside
     the requirements dir. (The current issue's plan is in the allow set — a
-    plan edit is never a violation here.)"""
+    plan edit is never a violation here.)
+
+    The shared guard's external form prints its revert list but does not
+    return it (run_guard hands the stage a count, not files), so on that
+    path `violations` arrives empty and the hook re-derives the decision key
+    itself: while the requirements dir still differs from the stage
+    baseline, an implementation edit there is the standing loop-back trigger
+    and the plan regenerates before the implementation runs again. The
+    in-process fallback does hand the list over, where the filter at the top
+    is the same decision."""
     req = common.env_dir("REQUIREMENTS_DIR")
+    if not req:
+        return None
     protected = [v for v in violations if stages.under(v, req)]
+    if not protected:
+        changed = common.changed_files(stages.stage_baseline())
+        protected = [f for f in changed if stages.under(f, req)]
     if not protected:
         return None  # ordinary leak — the shared revert+re-run path handles it
     plan_dir = common.env_dir("PLAN_DIR")
@@ -130,23 +163,19 @@ def main() -> None:
     plan_dir = common.env_dir("PLAN_DIR")
     issue = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
     current = current_plan_path(issue, plan_dir)
-
-    allow = source_dirs()
-    # source_dirs() excludes the plans dir: the ONLY plan file editable is
-    # this issue's — never another issue's plan — so re-allow exactly it.
-    if current and current not in allow:
+    # The inverted-allow call: DENY = the protected set (requirements,
+    # plans) — everything else is the implementation's lane (code, tests,
+    # the arc42 docs, README, Makefile, new dirs…); ALLOW = the one file
+    # inside the denied plans dir the implementation edits (its live state
+    # tracker) + `__pycache__` (component-matched: the suite runs the
+    # implementation makes, the guard does not revert their byproducts).
+    deny = protected_dirs()
+    allow = ["__pycache__"]
+    if current:
         allow.append(current)
-    elif plan_dir:
-        # no issue resolved (idle run) — fall back to the whole plan dir
-        if plan_dir not in allow:
-            allow.append(plan_dir)
-    if "README.md" not in allow:
-        allow.append("README.md")
-    # A repo with no docs/ dir documents itself in its top-level planning
-    # markdown (`PLAN.md`): that file is the arc42 set the implementation
-    # keeps complete, like README.md, so it joins the allow set.
-    if os.path.isfile("PLAN.md") and "PLAN.md" not in allow:
-        allow.append("PLAN.md")
+    common.log(f"stage 8 implementation: guard denies {' '.join(deny)}; "
+               f"everything else is admitted (code, tests, docs, README, new "
+               f"dirs) — re-allowed over the deny: {' '.join(allow)}")
     context = stages.project_context()  # referenced by path, not injected
     # ONLY this issue's current plan file is handed to pi in full: it is the
     # live state tracker this stage both reads and updates, and the plan is
@@ -173,6 +202,7 @@ def main() -> None:
             stage="stage 8 implementation",
             template="implement",
             allow=allow,
+            deny=deny,
             context=context,
             prompt_file=build_target(issue, plan_dir),
             on_violation=plan_loop_back,

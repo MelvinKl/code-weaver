@@ -45,9 +45,14 @@ this repo's reusable workflow takes over:
 7. **plan check** — same guard idiom;
 8. **implement** — code, generated tests, the arc42 docs kept complete, README
    current;
-9. **implement check** — same guard (its allow set covers the current
-   issue's plan file — the plan is a live state tracker: finished tasks
-   are marked done — but never another issue's plan); a requirement edited
+9. **implement check** — same guard, run INVERTED: the implementation's
+   lane is everything EXCEPT the protected set (requirements and plans) —
+   it has the job to implement the tests, and the guard must not re-litigate
+   where the implementation creates its new code or test dirs (a whitelist
+   snapshotted at stage start used to revert a brand-new `tests/` dir every
+   iteration); inside the denied sets, exactly the current issue's plan file
+   is re-allowed (the plan is a live state tracker: finished tasks are
+   marked done) — never another issue's plan; a requirement edited
    here **loops back to the plan stage**;
 10. **test-and-review** — the target's test suite (`make test`) runs every
     Gherkin scenario as an acceptance test; pi marks each scenario of the
