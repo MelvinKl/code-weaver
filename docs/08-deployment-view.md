@@ -14,19 +14,17 @@ required one) plus the four optional harness-provider secrets
 value never appears in a `with:` input or a committed file.
 
 **Upgrades are a ref bump.** `release.yml` fires on the main branch's
-advance: from the advance's head it cuts a throwaway release branch,
-rewrites the reusable workflow's own action references to the next single
-increasing number it is about to tag, commits the rewrite, tags that
-commit and publishes only the tag as a GitHub release without any
-maintainer action (a push to main would re-trigger the release workflow —
-the tag is the only ref it publishes). The versions the flow publishes
-from this change on are self-consistent — the workflow at a ref
-references its composite actions at that same ref, so a target's ref bump
-selects the workflow and its actions as one version — and the tags cut
-before the change keep their relative refs, still stable pinnable refs for
-targets whose tree carries a copy of the actions; tags are immutable, so
-targets pinned to an older ref keep working, and bumping the ref is the
-only change a target ever makes.
+advance: it tags the advance's head with the next single increasing
+number and publishes that tag as a GitHub release without any maintainer
+action (a push to main would re-trigger the release workflow — the tag is
+the only ref it publishes). The tag points at a commit that is already on
+the remote, so the push uploads only the tag object — no new commit
+content — and the default GITHUB_TOKEN publishes it: no special token, no
+secret. The workflow at a ref is self-contained — its stage steps are
+inlined in the file and its runtime tree stashes itself at the called ref
+— so a target's ref bump selects the whole version at once; tags are
+immutable, so targets pinned to an older ref keep working, and bumping
+the ref is the only change a target ever makes.
 
 **The runner environment.** No pre-installed or pre-configured pi is a
 pre-requisite of a runner labelled for the factory — the setup stage

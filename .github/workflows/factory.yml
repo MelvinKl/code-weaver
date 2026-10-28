@@ -1,34 +1,42 @@
 # Code Weaver — the factory (reusable workflow, consumed BY REF)
 #
 # A target repo invokes this file with `uses: <owner>/code-weaver/
-# .github/workflows/factory.yml@<ref>` from its own short workflow and passes
-# inputs. The composite actions and pi prompt templates ship in the same
-# repo, and every stage job references its own composite actions fully
-# qualified — by this repo's owner, repo and path, all pinned to one shared
-# version tag (MelvinKl/code-weaver/.github/actions/<name>@<version>): a
-# relative action path in a called reusable workflow resolves against the
-# CALLING repo's checkout, so a target whose tree holds no copy of the
-# factory's actions would fail at the first composite-action step ("Can't
-# find 'action.yml'"). An upgrade is a ref bump in the target's one-line
-# invocation; every published tag stays a stable ref.
+# .github/workflows/factory.yml@<ref>` from its own short workflow
+# and passes inputs. The workflow is SELF-CONTAINED: every stage's
+# steps live in this file (15 logical stages over 9 jobs — read the
+# `name:` of each stage step). There are no composite actions to
+# reference: an own-action `uses:` would have to be a fully
+# qualified owner/repo/path ref pinned to a ref that only a
+# release-time rewrite of this file could make consistent (a
+# workflow-file update the publishing principal is refused), and a
+# relative path would resolve against the CALLING repo's checkout —
+# where a target holds no copy of the factory's scripts. The stage
+# steps below are the former action definitions, inlined at their
+# former splice sites.
 #
-# Step `with:` mappings use the `runner.temp` context, never `env.RUNNER_TEMP`:
-# in a step's input expressions the well-known env var evaluates empty (the
-# upload then silently finds no files and every later download fails), while
-# `runner.temp` is the documented, always-populated mirror of the same dir.
+# The scripts the inlined steps execute (the .github python tree,
+# the stage scripts, the pi prompt templates) ship in this same
+# repo, and each stage job's first step stashes them into
+# $RUNNER_TEMP before the stage's checkout replaces the workspace
+# with the target repo — the steps then run their scripts from the
+# stash, where the repo-relative layout keeps the scripts' imports
+# resolving. Same-repo and cross-repo runs take one identical path:
+# a target's ref bump selects the workflow and its runtime tree as
+# one version, and every published tag stays a stable ref.
 #
-# On this runner build (v2.338, .NET) a composite action's `with:` values are
-# never materialized as INPUT_* env for its inner steps — probe v4 showed even
-# literal values arriving unbound — so every stage job ALSO passes its stage
-# values in the job (or step) `env:` block as CW_<name>; the stage code
-# resolves each input as INPUT_<name> falling back to CW_<name>. The `with:`
-# blocks stay for portability to a runner that binds them correctly.
+# The stage code resolves each value as `INPUT_*`, then a `CW_*`
+# job/step env, then the stage's state file — the step env entries
+# the inlined steps declare relay the values exactly as the former
+# composite-action boundary did, so the resolution chain is
+# unchanged.
 #
-# 15 logical stages → the jobs below. `pi` is not a pre-requisite of the
-# runner environment — stage 2 installs pi for the run and configures it
-# from the run's provided harness (the models, settings, MCP and
-# extension-env providers ride the workflow's secrets: block), and fails
-# explicitly where it cannot.
+# The steps use `${{ runner.temp }}`, not `env.RUNNER_TEMP` (this
+# runner build does not materialize `env.*` inside step `run:`
+# bodies — the state dir would land under the literal string
+# `env.RUNNER_TEMP`), and `gh` must run in the job's own env: a
+# nested shell with only `GH_TOKEN` set inherits dangling
+# `GIT_CONFIG_KEY_i` entries and dies with
+# `unknown value GIT_CONFIG_COUNT`.
 name: Code Weaver factory
 
 on:
@@ -114,6 +122,23 @@ jobs:
       base-ref: ${{ steps.resolve.outputs.base-ref }}
       base-sha: ${{ steps.resolve.outputs.base-sha }}
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       - id: preflight
         name: Preflight — verify the GH_TOKEN secret can serve this repo
         env:
@@ -262,25 +287,46 @@ jobs:
       CW_PI_MCP: ${{ secrets.PI_MCP }}
       CW_PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GH_TOKEN }}
-      - name: Stage 2 — install pi for the run, configure it from the provided harness
-        uses: MelvinKl/code-weaver/.github/actions/setup-pi@4
-        with:
-          llm-model: ${{ inputs.llm-model }}
-          pi-models: ${{ secrets.PI_MODELS }}
-          pi-settings: ${{ secrets.PI_SETTINGS }}
-          pi-mcp: ${{ secrets.PI_MCP }}
-          pi-extension-env: ${{ secrets.PI_EXTENSION_ENV }}
-        # step-level env: this runner build does not propagate job-level
-        # values into a composite action's inner steps (and never
-        # binds with: to INPUT_* either); a step's own env: does reach them
+      - id: verify
+        name: Stage 2 — install pi for the run, configure it from the provided harness
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the target.
+        # (the step-level env below relays the stage's values;
+         #  inlined, that relay is an ordinary step env — the stage's
+         #  code resolves each value as INPUT_*, then CW_* env, then
+         #  its state file, exactly as across the old boundary.)
         env:
-          CW_PI_MODELS: ${{ inputs.pi-models }}
-          CW_PI_SETTINGS: ${{ inputs.pi-settings }}
-          CW_PI_MCP: ${{ inputs.pi-mcp }}
-          CW_PI_EXTENSION_ENV: ${{ inputs.pi-extension-env }}
+          LLM_MODEL: ${{ inputs.llm-model }}
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/setup-pi/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Stage summary
         if: always()
         run: |
@@ -308,6 +354,23 @@ jobs:
       # the trigger artifact (the Read trigger state step) — job-level env is
       # frozen at job start and the job-outputs relay drops values here
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -354,23 +417,163 @@ jobs:
           ref: ${{ steps.state.outputs.base-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - name: Stage 3 — cut the AI branch, record the baseline
-        if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/baseline@4
-        # step-level env: this runner build does not propagate job-level
-        # GITHUB_ENV values into a composite action's inner steps (and never
-        # binds with: to INPUT_* either); a step's own env: does reach them
-        env:
-          CW_BASE_REF: ${{ env.CW_BASE_REF }}
-          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
-          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
+        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
+        working-directory: ${{ github.workspace }}
+        run: |
+          try:
+              import os, subprocess, sys
+              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "baseline")
+              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+              if os.path.isdir(scripts):
+                  sys.path.insert(0, scripts)
+              try:
+                  from common import state_dir, state_file, log
+              except ImportError:
+                  def state_dir():
+                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                      os.makedirs(d, exist_ok=True)
+                      return d
+                  def state_file(n):
+                      return os.path.join(state_dir(), n)
+                  def log(m):
+                      print(m, flush=True)
 
-        with:
-          # env-based (not needs.-based): step-level `env` sees the GITHUB_ENV
-          # values the state step wrote; the job-outputs relay drops values
-          # per-job on this runner. A healthy runner binds these to INPUT_*,
-          # and the action's resolver prefers CW_* env either way.
-          base-ref: ${{ env.CW_BASE_REF }}
-          ai-branch: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
+              # a crashed stage must leave a persistent diagnosis (the job log dies
+              # with the run; a ghost run's logs are unreachable from the API) —
+              # the full traceback goes to the runner's diag dir + one line to the
+              # stage-fail-reason state file the summary/upload steps carry on
+              def _cw_persist(stage, dump, value):
+                  # one writer for both paths (the explicit try/except wrap and the
+                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                  # state file (carried on by the summary/upload steps), and the
+                  # runner's durable diag log (the job log dies with the run)
+                  if globals().get("_cw_persisted"):
+                      return
+                  globals()["_cw_persisted"] = True
+                  try:
+                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                      os.makedirs(d, exist_ok=True)
+                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                          f.write(f"stage {stage} FAILED — {value}\n")
+                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                  except Exception:
+                      print(f"::error::stage {stage} failed — {value}")
+
+              def _cw_on_uncaught(t, v, tb):
+                  import traceback as _tb
+                  # the hook receives (type, value, traceback) from the interpreter —
+                  # sys.exc_info() is already cleared by the time it runs, so the
+                  # arguments are the source of truth; format_exc() is the fallback
+                  if tb is not None:
+                      dump = "".join(_tb.format_exception(t, v, tb))
+                  else:
+                      dump = _tb.format_exc()
+                      if not dump.strip() or dump.strip() == "NoneType: None":
+                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                  _cw_persist("3 baseline", dump, v)
+                  raise SystemExit(1)
+              sys.excepthook = _cw_on_uncaught
+              def _cw_in(name):
+                  # INPUT_<name> (a healthy runner's action-input binding) or
+                  # CW_<name> (the job/step env the factory sets — on this
+                  # runner build, composite actions' with: values never reach
+                  # the inner steps as INPUT_* at all; see probe v4)
+                  n = name.upper().replace("-", "_")
+                  for k in (f"INPUT_{n}", f"CW_{n}"):
+                      v = os.environ.get(k)
+                      if v:
+                          return v
+                  # state files — this runner build's composite-action inner
+                  # steps also miss the job-level GITHUB_ENV values, so the
+                  # files the triggering stage wrote into the artifact are
+                  # the authoritative source
+                  import pathlib
+                  for d in ("trigger", "pr"):
+                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                      if f.is_file():
+                          v = f.read_text().strip()
+                          if v:
+                              return v
+                  # a value that ends in a separator is a mangled derivation
+                  # (e.g. an empty issue number in 'ai/code-weaver/') — treat
+                  # it as unbound rather than creating a broken ref
+                  for k in (f"INPUT_{n}", f"CW_{n}"):
+                      v = os.environ.get(k) or ""
+                      if v and v.endswith(("/", ".", "_")):
+                          raise SystemExit(
+                              f"::error::input '{name}' value {v!r} is a "
+                              f"mangled derivation (empty component)")
+                  raise SystemExit(
+                      f"::error::input '{name}' unbound (no INPUT_{n}, "
+                      f"no CW_{n}, no state file)")
+              base_ref = _cw_in("base-ref")
+              ai_branch = _cw_in("ai-branch")
+              repo = os.environ["GITHUB_WORKSPACE"]
+
+              def g(*args, check=True):
+                  r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                                     text=True)
+                  if check and r.returncode != 0:
+                      # surface git's own diagnosis (a bare check=True traceback
+                      # hides it in e.stderr) before the uncaught-exception hook
+                      # persists everything
+                      print(f"::error::git {' '.join(args)} failed (exit {r.returncode}): "
+                            f"{r.stderr.strip()[:400]}")
+                      raise subprocess.CalledProcessError(r.returncode, ["git", *args],
+                                                          output=r.stdout, stderr=r.stderr)
+                  return r
+
+              # baseline ref = head of the target branch
+              g("fetch", "--no-recurse-submodules", "origin", base_ref)
+              base_sha = g("rev-parse", f"origin/{base_ref}").stdout.strip()
+
+              # A NEW run for an issue whose AI branch already exists (the
+              # owner's re-trigger after a failed/aborted run) REUSES that
+              # branch: every stage runs again, in place, from the branch's
+              # current state (the idempotent re-run contract — generated
+              # files are updated in place; the guard measures against the
+              # baseline ref below, so the accumulated work is what it sees).
+              # Only an absent branch is cut fresh from the target — re-cutting
+              # would discard the previous run's committed work.
+              g("fetch", "--no-recurse-submodules", "origin", ai_branch, check=False)
+              if g("rev-parse", f"origin/{ai_branch}", check=False).returncode == 0:
+                  resume_sha = g("rev-parse", f"origin/{ai_branch}").stdout.strip()
+                  g("checkout", "-B", ai_branch, f"origin/{ai_branch}")
+                  log(f"baseline: reusing existing {ai_branch} at {resume_sha} "
+                      f"(previous run's work); baseline ref = head of "
+                      f"{base_ref} {base_sha}")
+              else:
+                  g("checkout", "-B", ai_branch, base_sha)
+                  log(f"baseline: {ai_branch} cut at {base_sha} (head of "
+                      f"{base_ref}); fresh cut")
+              g("config", "user.name", "Code Weaver")
+              g("config", "user.email", "code-weaver@users.noreply.github.com")
+
+              # the issue's change set, snapshotted as state (empty at a fresh cut —
+              # it grows as stages write, and anchors every guard check)
+              state = state_dir()
+              with open(state_file("baseline.sha"), "w") as f:
+                  f.write(base_sha + "\n")
+              diff = g("diff", base_sha).stdout
+              with open(state_file("baseline.diff"), "w") as f:
+                  f.write(diff)
+
+              log(f"baseline: {ai_branch} cut at {base_sha} (head of {base_ref}); "
+                  f"baseline diff {len(diff)} bytes → state (not the repo tree)")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"baseline-ref={base_sha}\n")
+                  f.write(f"ai-branch={ai_branch}\n")
+          except SystemExit:
+              raise
+          except BaseException as e:
+              # explicit wrap: inside this handler the exception
+              # context is alive, so the persisted traceback is always
+              # complete; the excepthook below is the backstop
+              import traceback as _tb
+              _cw_persist("3 baseline", _tb.format_exc(), e)
+              raise
       - name: Push the AI branch (a crashed run resumes cleanly)
         run: |
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" \
@@ -415,6 +618,23 @@ jobs:
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -465,19 +685,25 @@ jobs:
           name: cw-baseline
           path: ${{ runner.temp }}/cw
       - name: Stage 4 — extract the delta requirements (Gherkin)
+        # The guard judges THIS stage's work only: earlier stages' committed
+        # outputs must not look like off-limits changes against the trigger's
+        # base sha.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+      - name: Requirement-extraction loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/extract-stage@4
-        # step-level env: this runner build does not propagate job-level
-        # GITHUB_ENV values into a composite action's inner steps (and never
-        # binds with: to INPUT_* either); a step's own env: does reach them
-        env:
-          AI_BRANCH: ${{ env.AI_BRANCH }}
-          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
-          BASELINE_REF: ${{ env.BASELINE_REF }}
-          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
-          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
-          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
-
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the target.
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/extract-stage/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v7
@@ -505,6 +731,23 @@ jobs:
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -555,19 +798,25 @@ jobs:
           name: cw-extract
           path: ${{ runner.temp }}/cw
       - name: Stage 6 — plan every requirement change (markdown)
+        # The guard judges THIS stage's work only: earlier stages' committed
+        # outputs must not look like off-limits changes against the trigger's
+        # base sha.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+      - name: Plan loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/plan-stage@4
-        # step-level env: this runner build does not propagate job-level
-        # GITHUB_ENV values into a composite action's inner steps (and never
-        # binds with: to INPUT_* either); a step's own env: does reach them
-        env:
-          AI_BRANCH: ${{ env.AI_BRANCH }}
-          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
-          BASELINE_REF: ${{ env.BASELINE_REF }}
-          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
-          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
-          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
-
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the target.
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/plan-stage/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v7
@@ -595,6 +844,23 @@ jobs:
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -645,19 +911,25 @@ jobs:
           name: cw-plan
           path: ${{ runner.temp }}/cw
       - name: Stage 8 — implement the plans (code, tests, arc42, README)
+        # The guard judges THIS stage's work only: earlier stages' committed
+        # outputs must not look like off-limits changes against the trigger's
+        # base sha.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+      - name: Implementation loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/implement-stage@4
-        # step-level env: this runner build does not propagate job-level
-        # GITHUB_ENV values into a composite action's inner steps (and never
-        # binds with: to INPUT_* either); a step's own env: does reach them
-        env:
-          AI_BRANCH: ${{ env.AI_BRANCH }}
-          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
-          BASELINE_REF: ${{ env.BASELINE_REF }}
-          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
-          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
-          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
-
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the target.
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/implement-stage/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v7
@@ -685,6 +957,23 @@ jobs:
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -735,19 +1024,25 @@ jobs:
           name: cw-implement
           path: ${{ runner.temp }}/cw
       - name: Stage 10-11 — run the oracle, review, fix (bounded loop)
+        # The guard judges THIS stage's work only: earlier stages' committed
+        # outputs must not look like off-limits changes against the trigger's
+        # base sha.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+      - name: Test & review loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/review-stage@4
-        # step-level env: this runner build does not propagate job-level
-        # GITHUB_ENV values into a composite action's inner steps (and never
-        # binds with: to INPUT_* either); a step's own env: does reach them
-        env:
-          AI_BRANCH: ${{ env.AI_BRANCH }}
-          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
-          BASELINE_REF: ${{ env.BASELINE_REF }}
-          CW_AI_BRANCH: ${{ env.CW_AI_BRANCH }}
-          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
-          CW_BASE_SHA: ${{ env.CW_BASE_SHA }}
-
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the target.
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/review-stage/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Push the AI branch
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
       - uses: actions/upload-artifact@v7
@@ -769,6 +1064,23 @@ jobs:
       # CW_HEAD / CW_TITLE / CW_ISSUE_NUMBER / AI_BRANCH / ISSUE_NUMBER
       # arrive via GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -892,24 +1204,126 @@ jobs:
           REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
           PLAN_DIR: ${{ inputs.plan-dir }}
       - id: gen-body
-        name: Generate the PR body with pi (from the requirements, the plan and the review)
-        if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/pi-run@4
-        # a failed pi call must not block the PR — the template fallback
-        # below assembles the body instead
-        continue-on-error: true
-        # step-level env (not job-level): this runner build does not propagate
-        # job-level GITHUB_ENV values into a composite action's inner steps
         env:
           CW_MODEL: ${{ inputs.llm-model }}
           CW_TEMPLATE: pr-body
           CW_PROMPT_FILE: ${{ runner.temp }}/cw/pr-prompt.md
           CW_CONTEXT: ${{ steps.prepare-body.outputs.context }}
-        with:
-          model: ${{ inputs.llm-model }}
-          template: pr-body
-          prompt-file: ${{ runner.temp }}/cw/pr-prompt.md
-          context: ${{ steps.prepare-body.outputs.context }}
+        name: Generate the PR body with pi (from the requirements, the plan and the review)
+        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
+        working-directory: ${{ github.workspace }}
+        run: |
+          try:
+              import os, sys
+              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "pi-run")
+              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+              if os.path.isdir(scripts):
+                  sys.path.insert(0, scripts)
+              # a crashed stage must leave a persistent diagnosis (the job log dies
+              # with the run; a ghost run's logs are unreachable from the API) —
+              # the full traceback goes to the runner's diag dir + one line to the
+              # stage-fail-reason state file the summary/upload steps carry on
+              def _cw_persist(stage, dump, value):
+                  # one writer for both paths (the explicit try/except wrap and the
+                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                  # state file (carried on by the summary/upload steps), and the
+                  # runner's durable diag log (the job log dies with the run)
+                  if globals().get("_cw_persisted"):
+                      return
+                  globals()["_cw_persisted"] = True
+                  try:
+                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                      os.makedirs(d, exist_ok=True)
+                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                          f.write(f"stage {stage} FAILED — {value}\n")
+                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                  except Exception:
+                      print(f"::error::stage {stage} failed — {value}")
+
+              def _cw_on_uncaught(t, v, tb):
+                  import traceback as _tb
+                  # the hook receives (type, value, traceback) from the interpreter —
+                  # sys.exc_info() is already cleared by the time it runs, so the
+                  # arguments are the source of truth; format_exc() is the fallback
+                  if tb is not None:
+                      dump = "".join(_tb.format_exception(t, v, tb))
+                  else:
+                      dump = _tb.format_exc()
+                      if not dump.strip() or dump.strip() == "NoneType: None":
+                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                  _cw_persist("pi-run (LLM stages)", dump, v)
+                  raise SystemExit(1)
+              sys.excepthook = _cw_on_uncaught
+              from common import pi_invoke, state_file
+              def _cw_in(name):
+                  # INPUT_<name> (a healthy runner's action-input binding) or
+                  # CW_<name> (the job/step env the factory sets — on this
+                  # runner build, composite actions' with: values never reach
+                  # the inner steps as INPUT_* at all; see probe v4)
+                  n = name.upper().replace("-", "_")
+                  for k in (f"INPUT_{n}", f"CW_{n}"):
+                      v = os.environ.get(k)
+                      if v:
+                          return v
+                  # state files — this runner build's composite-action inner
+                  # steps also miss the job-level GITHUB_ENV values, so the
+                  # files the triggering stage wrote into the artifact are
+                  # the authoritative source
+                  import pathlib
+                  for d in ("trigger", "pr"):
+                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                      if f.is_file():
+                          v = f.read_text().strip()
+                          if v:
+                              return v
+                  raise SystemExit(
+                      f"::error::input '{name}' unbound (no INPUT_{n}, "
+                      f"no CW_{n}, no state file)")
+              def _cw_in_opt(name):
+                  n = name.upper().replace("-", "_")
+                  for k in (f"INPUT_{n}", f"CW_{n}"):
+                      v = os.environ.get(k)
+                      if v:
+                          return v
+                  import pathlib
+                  for d in ("trigger", "pr"):
+                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                      if f.is_file():
+                          v = f.read_text().strip()
+                          if v:
+                              return v
+                  return None
+
+              prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")
+              template = _cw_in("template")
+              sp = os.path.join(prompts, template + ".md")
+              if not os.path.exists(sp):
+                  print(f"::error::unknown pi prompt template '{template}' (have: "
+                        f"{sorted(os.path.basename(p) for p in os.listdir(prompts)) if os.path.isdir(prompts) else 'none'})")
+                  sys.exit(1)
+              r = pi_invoke(
+                  model=_cw_in("model"),
+                  system_prompt_file=sp,
+                  prompt_file=_cw_in_opt("prompt-file"),
+                  context=(_cw_in_opt("context") or "").split(),
+                  timeout=int(_cw_in_opt("timeout") or 1800),
+              )
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"pi-exit-code={r.returncode}\n")
+                  f.write(f"pi-out-file={state_file('last-pi.out')}\n")
+              if r.returncode != 0:
+                  sys.exit(1)
+          except SystemExit:
+              raise
+          except BaseException as e:
+              # explicit wrap: inside this handler the exception
+              # context is alive, so the persisted traceback is always
+              # complete; the excepthook below is the backstop
+              import traceback as _tb
+              _cw_persist("pi-run (LLM stages)", _tb.format_exc(), e)
+              raise
       - name: Assemble the PR body (template fallback — only when pi produced none; stage 15 completes it)
         run: |
           if [ -s "$RUNNER_TEMP/cw/pr-body.md" ]; then
@@ -1039,26 +1453,162 @@ jobs:
           REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
           PLAN_DIR: ${{ inputs.plan-dir }}
       - id: open-pr
-        name: Stage 12 — push & open the PR
-        if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/pr-open@4
-        # step-level env: runner.temp is not a permitted context in a called
-        # workflow's job-level env: ("Unrecognized named-value: 'runner'")
-        # but is fine in a step's env:/with:
         env:
-          CW_HEAD: ${{ env.CW_AI_BRANCH }}
-          CW_BASE: ${{ env.CW_BASE_REF }}
-          CW_TITLE: ${{ env.CW_ISSUE_TITLE }}
-          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
           CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
-        with:
-          # env-based (not needs.-based): the state step's GITHUB_ENV values;
-          # see the baseline job's comment on the relay
-          head: ai/code-weaver/${{ env.CW_ISSUE_NUMBER }}
-          base: ${{ inputs.target-branch }}
-          title: "🏭 code-weaver: ${{ env.CW_ISSUE_TITLE }}"
-          body-file: ${{ runner.temp }}/cw/pr-body.md
-          issue-number: ${{ env.CW_ISSUE_NUMBER }}
+        name: Stage 12 — push & open the PR
+        # The guard judges THIS stage's work only: earlier stages' committed
+        # outputs must not look like off-limits changes against the trigger's
+        # base sha.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+      - id: open
+        env:
+          CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
+        name: Push the AI branch and open (or update) the PR
+        if: ${{ env.CW_STARTED == 'true' }}
+        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
+        working-directory: ${{ github.workspace }}
+        run: |
+          try:
+              import os, sys, json
+              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "pr-open")
+              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+              if os.path.isdir(scripts):
+                  sys.path.insert(0, scripts)
+              try:
+                  import common
+              except ImportError:
+                  common = None
+
+              # a crashed stage must leave a persistent diagnosis (the job log dies
+              # with the run; a ghost run's logs are unreachable from the API) —
+              # the full traceback goes to the runner's diag dir + one line to the
+              # stage-fail-reason state file the summary/upload steps carry on
+              def _cw_persist(stage, dump, value):
+                  # one writer for both paths (the explicit try/except wrap and the
+                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                  # state file (carried on by the summary/upload steps), and the
+                  # runner's durable diag log (the job log dies with the run)
+                  if globals().get("_cw_persisted"):
+                      return
+                  globals()["_cw_persisted"] = True
+                  try:
+                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                      os.makedirs(d, exist_ok=True)
+                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                          f.write(f"stage {stage} FAILED — {value}\n")
+                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                  except Exception:
+                      print(f"::error::stage {stage} failed — {value}")
+
+              def _cw_on_uncaught(t, v, tb):
+                  import traceback as _tb
+                  # the hook receives (type, value, traceback) from the interpreter —
+                  # sys.exc_info() is already cleared by the time it runs, so the
+                  # arguments are the source of truth; format_exc() is the fallback
+                  if tb is not None:
+                      dump = "".join(_tb.format_exception(t, v, tb))
+                  else:
+                      dump = _tb.format_exc()
+                      if not dump.strip() or dump.strip() == "NoneType: None":
+                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                  _cw_persist("12 pr-open", dump, v)
+                  raise SystemExit(1)
+              sys.excepthook = _cw_on_uncaught
+              def _cw_in(name):
+                  # INPUT_<name> (a healthy runner's action-input binding) or
+                  # CW_<name> (the job/step env the factory sets — on this
+                  # runner build, composite actions' with: values never reach
+                  # the inner steps as INPUT_* at all; see probe v4)
+                  n = name.upper().replace("-", "_")
+                  for k in (f"INPUT_{n}", f"CW_{n}"):
+                      v = os.environ.get(k)
+                      if v:
+                          return v
+                  # state files — this runner build's composite-action inner
+                  # steps also miss the job-level GITHUB_ENV values, so the
+                  # files the triggering stage wrote into the artifact are
+                  # the authoritative source
+                  import pathlib
+                  for d in ("trigger", "pr"):
+                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                      if f.is_file():
+                          v = f.read_text().strip()
+                          if v:
+                              return v
+                  raise SystemExit(
+                      f"::error::input '{name}' unbound (no INPUT_{n}, "
+                      f"no CW_{n}, no state file)")
+              head, base = _cw_in("head"), _cw_in("base")
+              title, body_file, issue = (_cw_in("title"),
+                                         _cw_in("body-file"),
+                                         _cw_in("issue-number"))
+              repo = os.environ["GITHUB_WORKSPACE"]
+              token = os.environ.get("GH_TOKEN", "")
+
+              if common:
+                  common.push_branch(head)
+              else:
+                  # minimal push without the shared script (degenerate checkout) —
+                  # token rides in the push URL only; the origin remote is untouched
+                  import subprocess
+                  subprocess.run(
+                      ["git", "push", "--force",
+                       f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}",
+                       head],
+                      cwd=repo, check=True,
+                      env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
+
+              def gh(*a):
+                  import subprocess
+                  return subprocess.run(["gh", *a], cwd=repo, capture_output=True,
+                                        text=True, env={**os.environ, "GH_TOKEN": token})
+
+              # a PR from this head already exists? update it, don't duplicate
+              view = gh("pr", "view", head, "--json", "number,url")
+              if view.returncode == 0 and view.stdout.strip():
+                  pr = json.loads(view.stdout)
+                  gh("pr", "edit", str(pr["number"]), "--body-file", body_file)
+                  number, url = str(pr["number"]), pr["url"]
+              else:
+                  cr = gh("pr", "create", "--base", base, "--head", head,
+                          "--title", title, "--body-file", body_file)
+                  if cr.returncode != 0:
+                      print(f"::error::pr create failed: {cr.stderr.strip()[:300]}")
+                      sys.exit(1)
+                  view = gh("pr", "view", head, "--json", "number,url")
+                  pr = json.loads(view.stdout)
+                  number, url = str(pr["number"]), pr["url"]
+
+              if common:
+                  common.log(f"stage 12: PR #{number} open — {url} (ai-branch {head} → {base})")
+              gh("issue", "comment", issue,
+                 "--body", f"🏭 **code-weaver** — pull request open: {url}\n\n"
+                           f"Base: `{base}` — head: `{head}`. The PR body carries the "
+                           f"final status report (stage 15 completes it). Merging is a human decision.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"pr-number={number}\npr-url={url}\n")
+              # state files — the gates & report jobs read the PR identity from
+              # the artifact (the job-outputs relay is not their value channel)
+              st = os.path.join(os.environ.get("RUNNER_TEMP", ""),
+                                "cw", "state", "pr")
+              os.makedirs(st, exist_ok=True)
+              open(os.path.join(st, "pr-number.txt"), "w").write(str(number))
+              open(os.path.join(st, "pr-url.txt"), "w").write(url)
+          except SystemExit:
+              raise
+          except BaseException as e:
+              # explicit wrap: inside this handler the exception
+              # context is alive, so the persisted traceback is always
+              # complete; the excepthook below is the backstop
+              import traceback as _tb
+              _cw_persist("12 pr-open", _tb.format_exc(), e)
+              raise
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -1066,8 +1616,8 @@ jobs:
           path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
     outputs:
-      pr-number: ${{ steps.open-pr.outputs.pr-number }}
-      pr-url: ${{ steps.open-pr.outputs.pr-url }}
+      pr-number: ${{ steps.open.outputs.pr-number }}
+      pr-url: ${{ steps.open.outputs.pr-url }}
 
   # ── stages 13+14 ───────────────────────────────────────────────────────
   gates:
@@ -1086,6 +1636,23 @@ jobs:
       # ISSUE_NUMBER / AI_BRANCH / CW_PR_NUMBER arrive via GITHUB_ENV from
       # the stage artifacts (Read trigger / Read PR state steps)
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -1168,15 +1735,29 @@ jobs:
           fi
           echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
       - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
-        if: ${{ env.CW_STARTED == 'true' }}
-        uses: MelvinKl/code-weaver/.github/actions/gates-stage@4
-        # step-level env (not job-level): steps.head.outputs is only known
-        # after that step ran, and job env is materialized at job start
         env:
           CW_HEAD_SHA: ${{ steps.head.outputs.head-sha }}
-          CW_PR_NUMBER: ${{ env.CW_PR_NUMBER }}
-        with:
-          head-sha: ${{ steps.head.outputs.head-sha }}
+        # The guard judges THIS stage's work only: earlier stages' committed
+        # outputs must not look like off-limits changes against the trigger's
+        # base sha.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+      - name: Gate loop — all PR-triggered workflows green (bounded; never merges)
+        env:
+          CW_HEAD_SHA: ${{ steps.head.outputs.head-sha }}
+        if: ${{ env.CW_STARTED == 'true' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the target.
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/gates-stage/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Push the AI branch (post-fix state)
         if: ${{ success() || failure() }}
         run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}" || true
@@ -1206,6 +1787,23 @@ jobs:
       # where they do)
       CW_RUN_RESULT: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
     steps:
+      - name: Stash the factory runtime tree (before any checkout replaces the workspace)
+        # The runner has checked out THIS repo at the called ref into the
+        # workspace (that is how it obtained this workflow file); the stage
+        # checkouts below replace it with the TARGET repo, which holds no copy
+        # of the factory's runtime tree. So the tree the inlined stage steps
+        # execute (the .github scripts, the stage scripts, the pi prompt
+        # templates) is copied to $RUNNER_TEMP first — RUNNER_TEMP survives
+        # every later checkout, and the repo-relative layout is preserved, so
+        # the scripts' __file__-relative imports keep resolving. Same-repo and
+        # cross-repo runs take this one identical path: no GITHUB_ACTION_PATH
+        # guessing, no action boundary, no own-action refs.
+        run: |
+          [ -d .github ] || { echo "::error::no .github at the workspace root — the called-repo checkout the runner should have made is missing; the factory runtime tree cannot be stashed"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/cw/stash"
+          cp -r .github "$RUNNER_TEMP/cw/stash/"
+          if [ -d pi-prompts ]; then cp -r pi-prompts "$RUNNER_TEMP/cw/stash/"; fi
+          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (.github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files)"
       # Value source — the trigger's resolved config rides the ARTIFACT:
       # the job-outputs relay has been observed dropping a value for one
       # downstream job while the next job received it (issue-number present
@@ -1300,20 +1898,377 @@ jobs:
           [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
           echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
       - name: Stage 15 — PR body = final status; issue comment; arc42 activity
-        uses: MelvinKl/code-weaver/.github/actions/report@4
-        # step-level env: this runner build does not propagate job-level
-        # GITHUB_ENV values into a composite action's inner steps (and never
-        # binds with: to INPUT_* either); a step's own env: does reach them
-        env:
-          CW_PR_NUMBER: ${{ env.CW_PR_NUMBER }}
-          CW_ISSUE_NUMBER: ${{ env.CW_ISSUE_NUMBER }}
-        with:
-          # no ternary here — a `?` in a reusable workflow's expressions makes the
-          # file invalid ("Unexpected symbol: '?'"); the parenthesized &&/|| chain
-          # with string literals expresses the same if-else
-          run-result: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
-          pr-number: ${{ env.CW_PR_NUMBER }}
-          issue-number: ${{ env.CW_ISSUE_NUMBER }}
+        # The guard judges THIS stage's work only: earlier stages' committed
+        # outputs must not look like off-limits changes against the trigger's
+        # base sha.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+      - name: Write the final status report (PR body + issue comment + arc42 activity)
+        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
+        working-directory: ${{ github.workspace }}
+        run: |
+          try:
+              import os, sys, glob, json, datetime
+              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "report")
+              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
+              if os.path.isdir(scripts):
+                  sys.path.insert(0, scripts)
+              try:
+                  import common
+              except ImportError:
+                  def state_dir():
+                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                      os.makedirs(d, exist_ok=True)
+                      return d
+                  def state_file(n):
+                      return os.path.join(state_dir(), n)
+                  def log(m):
+                      print(m, flush=True)
+                  def gh_api(p, accept="application/vnd.github+json", data=None):
+                      import subprocess
+                      env = {**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
+                      args = ["gh", "api", "-H", f"Accept: {accept}"]
+                      if data is not None:
+                          args += ["-f", f"body={data}"]
+                      args.append(p)
+                      r = subprocess.run(args, capture_output=True, text=True, env=env)
+                      if r.returncode != 0:
+                          raise RuntimeError(r.stderr.strip()[:300])
+                      return r.stdout
+                  def push_branch(branch, force=True):
+                      import subprocess
+                      token = os.environ.get("GH_TOKEN", "")
+                      subprocess.run(["git", "push", "--force",
+                                      f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}", branch],
+                                     cwd=os.environ["GITHUB_WORKSPACE"], check=True,
+                                     env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
+
+              # a crashed stage must leave a persistent diagnosis (the job log dies
+              # with the run; a ghost run's logs are unreachable from the API) —
+              # the full traceback goes to the runner's diag dir + one line to the
+              # stage-fail-reason state file the summary/upload steps carry on
+              def _cw_persist(stage, dump, value):
+                  # one writer for both paths (the explicit try/except wrap and the
+                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
+                  # state file (carried on by the summary/upload steps), and the
+                  # runner's durable diag log (the job log dies with the run)
+                  if globals().get("_cw_persisted"):
+                      return
+                  globals()["_cw_persisted"] = True
+                  try:
+                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                      os.makedirs(d, exist_ok=True)
+                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                          f.write(f"stage {stage} FAILED — {value}\n")
+                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
+                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
+                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
+                  except Exception:
+                      print(f"::error::stage {stage} failed — {value}")
+
+              def _cw_on_uncaught(t, v, tb):
+                  import traceback as _tb
+                  # the hook receives (type, value, traceback) from the interpreter —
+                  # sys.exc_info() is already cleared by the time it runs, so the
+                  # arguments are the source of truth; format_exc() is the fallback
+                  if tb is not None:
+                      dump = "".join(_tb.format_exception(t, v, tb))
+                  else:
+                      dump = _tb.format_exc()
+                      if not dump.strip() or dump.strip() == "NoneType: None":
+                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
+                  _cw_persist("15 report", dump, v)
+                  raise SystemExit(1)
+              sys.excepthook = _cw_on_uncaught
+              def _cw_in(name):
+                  # INPUT_<name> (a healthy runner's action-input binding) or
+                  # CW_<name> (the job/step env the factory sets — on this
+                  # runner build, composite actions' with: values never reach
+                  # the inner steps as INPUT_* at all; see probe v4)
+                  n = name.upper().replace("-", "_")
+                  for k in (f"INPUT_{n}", f"CW_{n}"):
+                      v = os.environ.get(k)
+                      if v:
+                          return v
+                  # state files — this runner build's composite-action inner
+                  # steps also miss the job-level GITHUB_ENV values, so the
+                  # files the triggering stage wrote into the artifact are
+                  # the authoritative source
+                  import pathlib
+                  for d in ("trigger", "pr"):
+                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                      if f.is_file():
+                          v = f.read_text().strip()
+                          if v:
+                              return v
+                  raise SystemExit(
+                      f"::error::input '{name}' unbound (no INPUT_{n}, "
+                      f"no CW_{n}, no state file)")
+              def _cw_in_opt(name):
+                  n = name.upper().replace("-", "_")
+                  for k in (f"INPUT_{n}", f"CW_{n}"):
+                      v = os.environ.get(k)
+                      if v:
+                          return v
+                  import pathlib
+                  for d in ("trigger", "pr"):
+                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
+                      if f.is_file():
+                          v = f.read_text().strip()
+                          if v:
+                              return v
+                  return None
+              repo = os.environ["GITHUB_WORKSPACE"]
+              result = _cw_in("run-result")
+              pr = (_cw_in_opt("pr-number") or "").strip()
+              issue = _cw_in("issue-number")
+              now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+              # merge every stage's summary line (the jobs downloaded their
+              # cw-* state artifacts into the state dir before calling us)
+              stage_lines = []
+              for f in sorted(glob.glob(os.path.join(state_dir(), "**", "stage-summary.txt"), recursive=True)):
+                  for line in open(f):
+                      if line.strip() and line.strip() not in stage_lines:
+                          stage_lines.append(line.strip())
+              stage_table = "\n".join(f"- {l}" for l in stage_lines) or "- (no stage summaries captured)"
+              # run usage & cost for the final status report — assembled from
+              # the per-call usage records in the state dir: one tokens.txt
+              # line per pi call carrying the call's input and output token
+              # counts (the shared pi-call plumbing appends a record as each
+              # call finishes, and the record travels with the run's state
+              # artifacts like every other stage value). Each stage's artifact
+              # carries the cumulative ledger, and the report job downloads the
+              # stages' artifacts in pipeline order — the ledger surviving the
+              # downloads is the complete one: it covers every pi call the run
+              # made, and a stage that never ran (its artifact never uploaded)
+              # contributes nothing
+              tot_in = tot_out = 0
+              have_usage = False
+              led = state_file("tokens.txt")
+              if os.path.isfile(led):
+                  for line in open(led, encoding="utf-8", errors="replace"):
+                      p = line.split()
+                      if len(p) != 2:
+                          continue
+                      try:
+                          i, o = int(p[0]), int(p[1])
+                      except ValueError:
+                          continue
+                      tot_in += i
+                      tot_out += o
+                      have_usage = True
+              # the total cost is derived from the recorded usage, keyed on the
+              # run's resolved model — the llm-model setting, the only
+              # documented adjustable LLM setting; its resolved value rides the
+              # trigger's resolved-config state, which the report job downloads
+              # first — via a small per-model rate table, with the rate listed
+              # in the report so the listed cost is auditable and consistent
+              # with the recorded usage; a model with no rate entry is listed
+              # as unpriced
+              model = ""
+              cfg = state_file("resolved-config.txt")
+              if os.path.isfile(cfg):
+                  for line in open(cfg, encoding="utf-8", errors="replace"):
+                      if line.startswith("- LLM model"):
+                          p = line.split("`")
+                          if len(p) >= 2:
+                              model = p[1].strip()
+                          break
+              # USD per 1M tokens: (input, output) — the table covers only
+              # known models; the owner extends it for the runner's others
+              COST_RATES = {"Ornith-1.5-35B-A3B": (0.10, 0.20)}
+              if not have_usage:
+                  usage_lines = ("- **Total input tokens:** 0\n"
+                                 "- **Total output tokens:** 0\n"
+                                 "- **Total cost:** $0.00 (no pi call recorded usage)")
+              elif model not in COST_RATES:
+                  usage_lines = (f"- **Total input tokens:** {tot_in}\n"
+                                 f"- **Total output tokens:** {tot_out}\n"
+                                 f"- **Total cost:** unpriced (model `{model}` "
+                                 "has no rate entry — the owner extends the report's rate table)")
+              else:
+                  r_in, r_out = COST_RATES[model]
+                  usage_lines = (f"- **Total input tokens:** {tot_in}\n"
+                                 f"- **Total output tokens:** {tot_out}\n"
+                                 f"- **Total cost:** ${(tot_in * r_in + tot_out * r_out) / 1e6:.4f} "
+                                 f"(model `{model}` @ ${r_in:.2f}/M input, ${r_out:.2f}/M output)")
+
+              if pr:
+                  view = json.loads(gh_api(
+                      f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}"))
+                  body = view.get("body") or ""
+                  head = view["head"]["sha"]
+                  final = (body.split("\n## Final status")[0]
+                           + "\n## Final status\n"
+                           + f"- **Run result:** {result}\n- **Completed:** {now}\n"
+                           + f"- **AI branch:** `{view['head']['ref']}` @ `{head[:12]}`\n"
+                           + f"- **Source issue:** #{issue}\n"
+                           + usage_lines + "\n"
+                           + "### Stage outcomes\n" + stage_table + "\n"
+                           + "\n_Merging this PR is a human decision — the factory never merges._\n")
+                  import subprocess
+                  with open(state_file("final-pr-body.md"), "w") as f:
+                      f.write(final)
+                  subprocess.run(["gh", "pr", "edit", pr, "--body-file", state_file("final-pr-body.md")],
+                                 cwd=repo, env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")},
+                                 check=False)
+                  # the completion must be VERIFIED on the PR before the
+                  # comment claims 'final status is in the PR body': gh pr edit
+                  # is a GraphQL mutation a PR that was merged in the meantime
+                  # refuses — and check=False would swallow that, leaving an
+                  # issue comment claiming the description carries the final
+                  # status it never got (the PR description would then disagree
+                  # with the usage numbers the issue comment posts). Re-read the
+                  # PR: its body must carry the completion.
+                  def _body_landed():
+                      try:
+                          again = json.loads(gh_api(
+                              f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}"))
+                      except Exception as e:
+                          log(f"stage 15: could not re-read PR #{pr} after the edit: "
+                              f"{str(e).strip()[:120]}")
+                          return False
+                      return "\n## Final status" in (again.get("body") or "")
+                  completed = _body_landed()
+                  if not completed:
+                      # the REST edit is a different write path than the GraphQL
+                      # mutation — a merged PR's description can still be edited
+                      # over REST; try it, then verify again. If it still does
+                      # not land, the comment below is self-contained.
+                      log(f"stage 15: PR #{pr} body did not take the completion — "
+                          f"trying the REST edit")
+                      subprocess.run(["gh", "api", "-X", "PATCH",
+                                      f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}",
+                                      "-f", f"body={final}"],
+                                     cwd=repo, capture_output=True, text=True,
+                                     env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")})
+                      completed = _body_landed()
+                  # the arc42 docs get the AI-activity section (docs changes are
+                  # within the implementation allow-set — this commit is the
+                  # report stage's own, made after the guards have run)
+                  doc_dir = (os.environ.get("DOC_DIR") or "").strip().rstrip("/")
+                  entry = (f"\n### {now} — code-weaver run for issue #{issue}\n"
+                           f"- result: {result}\n- PR: {pr}\n"
+                           + usage_lines + "\n"
+                           + "- stages:\n"
+                           + "\n".join(f"  - {l}" for l in stage_lines) + "\n")
+                  touched = False
+                  # arc42 activity commits only land on the AI branch — if the run
+                  # died before the branch existed, the checkout is at the base ref
+                  # and the target tree must stay untouched
+                  on_ai_branch = subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                                                capture_output=True, text=True).stdout.strip() \
+                      == os.environ.get("AI_BRANCH", "")
+                  if on_ai_branch:
+                      if doc_dir and os.path.isdir(doc_dir):
+                          arc42_files = sorted(glob.glob(
+                              os.path.join(doc_dir, "**", "*.md"), recursive=True))
+                      elif os.path.isfile("PLAN.md"):
+                          # a repo without a doc dir documents itself in its
+                          # top-level arc42 markdown — fall back to it so the
+                          # AI-activity section still lands on the arc42 set
+                          arc42_files = [os.path.join(repo, "PLAN.md")]
+                      else:
+                          arc42_files = []
+                      for md in arc42_files:
+                          text = open(md).read()
+                          marker = "## AI activity (code-weaver)"
+                          if marker in text:
+                              text = text.rstrip("\n") + entry
+                          elif text:
+                              text = text.rstrip("\n") + f"\n\n{marker}\n" + entry
+                          else:
+                              text = f"{marker}\n" + entry
+                          open(md, "w").write(text)
+                          touched = True
+                          break  # the first arc42 file carries the activity log
+                  if touched:
+                      subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+                      st = subprocess.run(["git", "status", "--porcelain"], cwd=repo,
+                                          capture_output=True, text=True)
+                      if st.stdout.strip():
+                          subprocess.run(["git", "commit", "-q", "-m", "report: AI-activity recorded"],
+                                         cwd=repo, check=True)
+                          push_branch(os.environ.get("AI_BRANCH", ""))
+                  url = view.get("html_url", "")
+                  ok = result == "success"
+                  # a successful run closes the issue it was working on: the
+                  # work is done, the PR is the remaining human gate, and a
+                  # closed issue stays out of the trigger's lane. A failed run
+                  # leaves the issue open for a re-trigger. The close is
+                  # best-effort — a refusal (e.g. a token without the scope)
+                  # must not sink the report that already landed
+                  closed = None
+                  if ok:
+                      r = subprocess.run(["gh", "api", "-X", "PATCH",
+                                          f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}",
+                                          "-f", "state=closed",
+                                          "-f", "state_reason=completed"],
+                                         capture_output=True, text=True,
+                                         env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")})
+                      closed = r.returncode == 0
+                      if not closed:
+                          log(f"::warning::stage 15: could not close issue #{issue}: "
+                              f"{r.stderr.strip()[:120]}")
+                  close_note = ("closed — the run succeeded" if closed is True else
+                                "close refused — the run succeeded, but the issue "
+                                "stays open (see the workflow log)" if closed is False else
+                                "left open — re-trigger to retry")
+                  if ok and completed:
+                      data = ("✅ **code-weaver run finished** — final status is in the PR body.\n"
+                              f"- result: **{result}**\n- completed: {now}\n"
+                              f"- pull request: {url}\n- source: #{issue} ({close_note})\n"
+                              f"{usage_lines}\n")
+                  elif ok:
+                      # the completion could not be applied to the description
+                      # (the PR was already merged, or the edit was refused on
+                      # both write paths): the comment then carries the full
+                      # final status itself — the same usage numbers and stage
+                      # outcomes the PR body was to get — and makes no claim
+                      # that the PR body carries them
+                      data = ("✅ **code-weaver run finished** — the PR body could not be "
+                              "completed (the PR was already merged or the edit was "
+                              "refused), so this comment carries the full final status.\n"
+                              f"- result: **{result}**\n- completed: {now}\n"
+                              f"- pull request: {url}\n- source: #{issue} ({close_note})\n"
+                              + usage_lines + "\n"
+                              + "### Stage outcomes\n" + stage_table + "\n")
+                  else:
+                      data = (f"❌ **code-weaver run failed** — the pull request is incomplete.\n"
+                              f"- result: **{result}**\n- completed: {now}\n"
+                              f"- pull request: {url}\n- source: #{issue} ({close_note})\n"
+                              f"- stage outcomes:\n{stage_table}\n"
+                              f"{usage_lines}\n")
+                  gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
+                         data=data)
+                  log(f"stage 15: PR #{pr} body completion "
+                      f"{'verified on the PR' if completed else 'NOT applied — the issue comment is self-contained'}; "
+                      f"issue #{issue} {'closed' if closed else 'left open'}; "
+                      f"arc42 activity {'recorded' if touched else 'n/a'}")
+              else:
+                  gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
+                         data=("❌ **code-weaver run failed** before a pull request could "
+                               "be opened.\n"
+                               f"- result: **{result}**\n- completed: {now}\n"
+                               f"- stage outcomes:\n{stage_table}\n"
+                               f"{usage_lines}\n"
+                               "- full logs: the workflow run's artifacts (the repo tree "
+                               "is never used for report files).\n"))
+                  log(f"stage 15: no PR — failure reported on issue #{issue} "
+                      f"(stage outcomes: {len(stage_lines)} line(s))")
+          except SystemExit:
+              raise
+          except BaseException as e:
+              # explicit wrap: inside this handler the exception
+              # context is alive, so the persisted traceback is always
+              # complete; the excepthook below is the backstop
+              import traceback as _tb
+              _cw_persist("15 report", _tb.format_exc(), e)
+              raise
       - uses: actions/upload-artifact@v7
         if: always()
         with:

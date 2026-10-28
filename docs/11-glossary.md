@@ -1,7 +1,7 @@
 # 11. Glossary
 
-- **Factory** — the 15-stage pipeline (`factory.yml` + the composite
-  actions), consumed by ref.
+- **Factory** — the 15-stage pipeline (`factory.yml`, self-contained —
+  its stage steps are inlined in the workflow file), consumed by ref.
 - **Stage** — one logical unit of the factory (15 of them; 9 GitHub
   jobs, several bundling consecutive stages).
 - **Consumer workflow** — the target repo's short
@@ -49,9 +49,10 @@
   the report stage appends to the first arc42 file (chapter 1 in this
   repo) after each run.
 - **Reuse by ref** — the factory lives in this repo and is referenced by
-  ref (reusable workflow + composite actions + prompt templates); the
-  ref selects the reusable workflow, its composite actions and its pi
-  prompt templates as one version from the factory repo, a ref bump
+  ref (the self-contained reusable workflow + the runtime tree its stage
+  steps execute — the scripts and the pi prompt templates, in the same
+  repo); the ref selects the workflow and its runtime tree as one version
+  from the factory repo, a ref bump
   selects them as one version, and targets pinned to an older ref keep
   working — an upgrade is a one-line ref bump, and every published
   version — an older `vX.Y.Z` tag or a new single-number tag — is a

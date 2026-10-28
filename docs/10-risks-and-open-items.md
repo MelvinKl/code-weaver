@@ -119,8 +119,10 @@
   the run's total cost from the recorded usage, keyed on the run's
   resolved `llm-model` setting (the only documented adjustable LLM
   setting; its resolved value rides the trigger's resolved-config state
-  the report job downloads), via a small per-model rate table in
-  `.github/actions/report/action.yml`; the table covers only known models,
+  the report job downloads), via a small per-model rate table in the
+  report stage's inlined step (the stage's steps live in `factory.yml`;
+  its script at `.github/actions/report/`); the table covers only known
+  models,
   and a target's model with no rate entry is listed as *unpriced* in the
   report (the usage totals are listed regardless) — the owner extends the
   table when a new model joins the runner's configured set.

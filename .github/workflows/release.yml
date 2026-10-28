@@ -1,37 +1,34 @@
 # Code Weaver — release machinery (reuse-by-ref)
 #
 # A push to main publishes a GitHub release: the ref every target pins.
-# Every version the flow publishes is self-consistent: before the tag, the
-# flow rewrites the reusable workflow's own action references to the tag it
-# is about to create, on a throwaway release branch — and publishes only
-# the tag (never a branch: a push to main would re-trigger this workflow
-# and cascade the next release). Tags are immutable — workflows on a target
-# that pinned an older ref keep working; upgrading is a one-line ref bump
-# in the target's workflow.
+# The tag points at main's HEAD — the commit the push just delivered,
+# which is already on the remote — so the tag push uploads only the tag
+# object: no new commit content, no workflow-file update in the push, and
+# the default GITHUB_TOKEN (the `github-actions` GitHub App, scoped by the
+# permissions block below) can publish it. No special token, no secret:
+# the flow needs `contents: write` for the tag ref and the release
+# object, and nothing else. (The App can never be granted the `workflows`
+# permission — that is not a scope available to it — so the flow must
+# never push a commit that updates a workflow file; it never does.)
+#
+# The published version is one file: factory.yml is self-contained — its
+# stage steps are inlined and each stage job stashes the runtime tree it
+# executes from the called repo at the called ref — so the tag needs no
+# pre-tag rewrite of own-action refs (there are no own-action refs left
+# to rewrite). Tags are immutable: a target that pinned an older ref keeps
+# working; upgrading is a one-line ref bump in the target's workflow.
 name: code-weaver release
 
 on:
   push:
     branches: [main]
-  # Manual trigger: re-run from the Actions UI (or `gh workflow run`) once
-  # the GH_TOKEN secret is fixed — no new main push required. Cuts the next
-  # version from main's current HEAD, exactly like a push would.
+  # Manual trigger: re-run from the Actions UI (or `gh workflow run`) —
+  # cuts the next version from main's current HEAD, exactly like a push
+  # would.
   workflow_dispatch:
 
-# The GITHUB_TOKEN is the token of the `github-actions` GitHub App, scoped
-# by this block — here read-only: it serves only checkout and ls-remote.
-# It can never be granted the `workflows` permission (that is not a scope
-# available to it: docs, "Granting additional permissions"), yet this
-# flow's tag push uploads a commit that updates
-# .github/workflows/factory.yml — a workflow-file update such an App is
-# refused for, whatever the block says. So the push authenticates with the
-# GH_TOKEN secret instead, embedded in the push URL exactly like the
-# factory's stage pushes (the GH_TOKEN env var is only read by the gh CLI
-# — never by git). That principal must carry workflows write (classic PAT:
-# the `repo` scope; fine-grained PAT: the Workflows permission) plus
-# releases write for `gh release create`.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
@@ -39,38 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Publish the release
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          # Preflight — verify the GH_TOKEN secret can serve this repo.
-          # The push authenticates with the secret, so a misconfigured
-          # secret must fail here, first, and name the exact cause:
-          #   empty  → the secret was never set on this repo
-          #   401    → the token is invalid, expired or was revoked
-          #   403    → the token authenticates but has NO access to this
-          #            repo (a fine-grained PAT is scoped to different
-          #            repositories, or its entry for this repo grants no
-          #            permission) — the reply body is printed below.
-          # (Same hygiene as the factory's preflight: an opaque 403 with
-          # empty logs used to cost a full debugging round-trip.)
-          set -uo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::GH_TOKEN secret is empty — set a GH_TOKEN secret on $GITHUB_REPOSITORY that can read it"
-            exit 1
-          fi
-          HTTP=$(curl -s -o /tmp/cw-release-preflight.json -w '%{http_code}' --max-time 30 \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY") || {
-            echo "::error::GitHub API unreachable from this runner — check the runner's internet egress"
-            exit 1
-          }
-          case "$HTTP" in
-            200) echo "GH_TOKEN verified: authenticates and can read $GITHUB_REPOSITORY" ;;
-            401) echo "::error::GH_TOKEN was rejected by GitHub (401) — the token is invalid, expired or was revoked"; exit 1 ;;
-            403) echo "::error::GH_TOKEN authenticates but has NO access to $GITHUB_REPOSITORY (403) — GitHub says:"; cat /tmp/cw-release-preflight.json; echo; exit 1 ;;
-            *)   echo "::error::unexpected HTTP $HTTP from the GitHub API:"; cat /tmp/cw-release-preflight.json; echo; exit 1 ;;
-          esac
           # The tag is the next single increasing number: the number after
           # the highest published version of the new scheme (no published
           # number yet → 1). The shared-plumbing helper
@@ -85,66 +51,17 @@ jobs:
           PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
           RANGEFROM=${PREV:-$(git rev-list --max-parents=0 HEAD)}
           # The release notes' "changed since" list is computed against
-          # main's HEAD before the rewrite commit below, so the mechanical
-          # ref rewrite stays out of it — the notes list real main changes.
+          # main's HEAD, so the notes list real main changes.
           CHANGES=$(git diff --stat "$RANGEFROM" HEAD -- .github pi-prompts requirements | tail -n +2)
 
-          # ── the self-consistent version ────────────────────────────────
-          # The reusable workflow references its own composite actions by
-          # owner, repo and path (MelvinKl/code-weaver/.github/actions/
-          # <name>), pinned to a version ref. A target's ref bump must
-          # select the workflow and its actions as one version — so before
-          # the tag, rewrite every own-action ref in factory.yml to $NEXT.
-          # The rewrite commits to a throwaway release branch and the tag
-          # is cut from that rewritten commit; the tag is the only ref the
-          # flow publishes (a push to main would re-trigger this workflow
-          # and cascade the next release).
-          git checkout -B "code-weaver/release-$NEXT"
-          git config user.name "code-weaver release"
-          git config user.email "code-weaver-release@users.noreply.github.com"
-          python3 - "$NEXT" <<'EOF'
-          import re, sys
-          new_ref = sys.argv[1]
-          path = ".github/workflows/factory.yml"
-          lines = open(path, encoding="utf-8").read().splitlines()
-          prefix = "MelvinKl/code-weaver/.github/actions/"
-          # Only the factory's own action uses: lines (owner, repo and
-          # path) — never a third-party ref: actions/checkout and the
-          # artifact actions pin third-party repos' own versions.
-          pat = re.compile(r"^(\s*uses:\s*" + re.escape(prefix)
-                           + r"[A-Za-z0-9_-]+)(?:@[^@\s]+)?\s*$")
-          rewritten = 0
-          for i, line in enumerate(lines):
-              m = pat.match(line)
-              if m and m.group(1) + "@" + new_ref != line:
-                  lines[i] = m.group(1) + "@" + new_ref
-                  rewritten += 1
-          open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-          print("self-consistent version %s: rewrote %d own-action refs in factory.yml to @%s"
-                % (new_ref, rewritten, new_ref))
-          EOF
-          if git diff --quiet; then
-            echo "factory.yml already pins its own action refs to $NEXT — the rewrite committed nothing"
-          else
-            git add .github/workflows/factory.yml
-            git commit -m "code-weaver $NEXT: pin the factory's own action refs to $NEXT"
-          fi
-
+          # The tag points at main's HEAD — the commit this push delivered,
+          # already on the remote. The push uploads only the tag object
+          # (no new commit content), so the default GITHUB_TOKEN publishes
+          # it with `contents: write` — no special token, no secret. A
+          # branch is never pushed (a push to main would re-trigger this
+          # workflow and cascade the next release) — the tag is the only
+          # ref the flow publishes.
           git tag "$NEXT" HEAD
-          # Push via the GH_TOKEN secret: the tag points at the commit that
-          # rewrites factory.yml, a workflow-file update the default
-          # GITHUB_TOKEN's App is refused for. On failure, git prints only
-          # the status code — so probe the receive-pack endpoint with the
-          # same token and surface GitHub's actual reply body (a fine-
-          # grained PAT missing the Workflows permission is refused with
-          # "Write access to repository not granted.").
-          if ! git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "refs/tags/$NEXT"; then
-            HTTP=$(curl -s -o /tmp/cw-release-push.json -w '%{http_code}' \
-              -H "Authorization: token $GH_TOKEN" \
-              "https://github.com/${GITHUB_REPOSITORY}/info/refs?service=git-receive-pack")
-            echo "::error::tag push failed; diagnostic GET info/refs?service=git-receive-pack → HTTP $HTTP:"
-            cat /tmp/cw-release-push.json; echo
-            exit 1
-          fi
+          git push origin "refs/tags/$NEXT"
           NOTES=$(printf '## %s\n\nChanged since %s:\n\n`%s`\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `@%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$NEXT" "${PREV:-the first commit}" "$CHANGES" "$NEXT")
           gh release create "$NEXT" --title "code-weaver $NEXT" --notes "$NOTES"

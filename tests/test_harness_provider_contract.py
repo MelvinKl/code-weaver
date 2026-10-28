@@ -11,10 +11,7 @@ workflow's secrets block"; safety "Secrets are never plain inputs"):
   configuration), PI_EXTENSION_ENV (the extension's .env-style
   environment variables) — as optional entries of its workflow_call
   `secrets:` block; GH_TOKEN stays the only `required: true` one;
-- the setup-pi job delivers them to the setup-pi action through the
-  factory's documented `with:` + `CW_<name>` env relay idiom (an empty
-  secret value arrives empty and the stage treats it as an absent
-  provider);
+- the setup-pi job delivers them to its inlined setup-pi stage through the job's `CW_<name>` env: after the consolidation the stage step is an ordinary job step (no composite boundary between), so the job env reaches the stage's script directly and the stage code's INPUT_*/CW_*/state-file chain resolves each provider from there (an empty secret value arrives empty and the stage treats it as an absent provider)
 - no provider value appears in a `with:` input of the factory or in any
   committed file — a secret name may be referenced (as a `secrets.`
   expression, a secrets-block entry or a `CW_`/`INPUT_` env var), its
@@ -115,34 +112,29 @@ def _setup_pi_job(factory: str) -> str:
     return factory[start:end]
 
 
-def test_setup_pi_job_passes_the_providers_to_the_action():
+def test_setup_pi_job_carries_the_providers_to_the_stage():
     """(configuration "The pi harness secrets ride the reusable workflow's
-    secrets block") the setup-pi job delivers the four providers to the
-    setup-pi action through both channels of the factory's documented relay
-    idiom — the step's `with:` entries (bound to INPUT_* on a healthy
-    runner) and the `CW_<name>` env (job-level for the stage code, and
-    step-level, where it reaches the action's inner steps on this runner
-    build) — and the action declares the matching inputs."""
+    secrets block") the setup-pi job delivers the four providers to its
+    inlined setup-pi stage through the job's `CW_<name>` env: after the
+    consolidation the stage step is an ordinary job step (the composite
+    boundary the `with:` relay used to cross is gone), so the job env
+    reaches the stage's script directly and the stage code's
+    INPUT_*/CW_*/state-file chain resolves each provider from there; the
+    inlined step runs its script from the runtime tree the job stashed
+    from the called repo at the called ref."""
     job = _setup_pi_job(_read(FACTORY))
-    action = _read(".github/actions/setup-pi/action.yml")
-    # the step names the action fully qualified by owner, repo and path
-    # (reuse-by-ref "the factory's workflow names its own actions by
-    # owner, repo and path": a relative path would resolve against the
-    # calling repo's checkout) — pinned to the published version ref the
-    # release flow cuts
-    assert re.search(
-        r"uses: MelvinKl/code-weaver/\.github/actions/setup-pi@[\w.-]+", job), \
-        "the setup-pi job lost its setup-pi action step"
-    for name, input_name in PROVIDERS:
-        assert f"          {input_name}: ${{{{ secrets.{name} }}}}" in job, \
-            f"the setup-pi job's with: must pass {name} to the setup-pi action"
+    # the inlined stage step (the former composite action's steps, spliced
+    # at the former site) runs its script from the stash
+    assert "Stage 2 — install pi for the run, configure it from the provided harness" in job, \
+        "the setup-pi job lost its inlined setup-pi stage step"
+    assert "cw/stash/.github/actions/setup-pi/stage.py" in job, \
+        "the inlined setup-pi step no longer runs its script from the stashed runtime tree"
+    factory = _read(FACTORY)
+    for name, _input_name in PROVIDERS:
         assert f"      CW_{name}: ${{{{ secrets.{name} }}}}" in job, \
             f"the job's env must carry CW_{name} from the secret"
-        assert f"          CW_{name}: ${{{{ inputs.{input_name} }}}}" in job, \
-            f"the action step's env must relay CW_{name} to the inner steps"
-        assert f"  {input_name}:" in action, \
-            f"the setup-pi action must declare the {input_name} input the factory passes"
-
+        assert f"  {name}:" in _workflow_call_secrets_block(factory), \
+            f"the factory's secrets block must declare {name} for the job env to read"
 
 def test_no_provider_value_in_with_inputs_or_committed_files():
     """(configuration "The pi harness secrets ride the reusable workflow's

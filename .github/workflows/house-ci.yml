@@ -34,7 +34,7 @@ jobs:
             "git+https://github.com/cucumber/gherkin.git#subdirectory=python"
       - name: Python compiles
         run: find .github -name '*.py' -print0 | xargs -0 python3 -m py_compile
-      - name: YAML parses (workflows + actions)
+      - name: YAML parses (workflows)
         run: |
           /tmp/cw-ci/bin/python - <<'EOF'
           import pathlib, sys, yaml

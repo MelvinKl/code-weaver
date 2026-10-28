@@ -22,12 +22,15 @@ The pins (one per scenario the fix loop had to fulfil):
   same owner, the same path and the same tag in lock-step
   (reuse-by-ref "the factory is invoked as a reusable workflow",
   "every published version is a stable ref");
-- the factory's own workflow references every one of its own composite
-  actions fully qualified — by the factory's owner, repo and path, all
-  pinned to one shared version tag, with no relative own-action ref
-  remaining (reuse-by-ref "the factory's workflow names its own actions by
-  owner, repo and path"; the in-file half of "a published version is
-  self-consistent in its action references");
+- the factory workflow is self-contained: every stage's steps are inlined
+  in the workflow file — no own-action `uses:` reference remains (an
+  own-action ref would have to be fully qualified and pinned to a ref the
+  release flow could only make consistent by rewriting a workflow file,
+  which it must never do; a relative path would resolve against the
+  calling repo's checkout) — and every stage job's first step stashes the
+  called repo's runtime tree before the first checkout, the stage steps
+  running their scripts from that stash (reuse-by-ref "the factory
+  workflow is self-contained", "a published version is self-contained");
 - the pr job generates the PR body with pi from the requirements, the
   review-stage's verdict oracle is delta-scoped (test-and-review: pi judges
   only the scenarios of the feature files this run changed — the accumulated
@@ -223,51 +226,47 @@ def test_consumer_workflow_pins_owner_and_version_tag():
             f"the README example must wire {name} in its secrets: block — same form as the deployed workflow"
 
 
-def test_factory_workflow_names_own_actions_by_full_ref():
-    """(reuse-by-ref "the factory's workflow names its own actions by
-    owner, repo and path") every step of the reusable workflow that invokes
-    one of the factory's own composite actions names it fully qualified —
-    MelvinKl/code-weaver/.github/actions/<name>@<ref>: owner, repo, path,
-    ref — and no own-action reference is a relative path (a relative path
-    in a called reusable workflow resolves against the calling repo's
-    checkout, which a target may hold no copy of the factory's actions in —
-    the run would crash at the first composite-action step); and every
-    own-action reference in the file shares one ref — the in-file half of
-    "a published version is self-consistent in its action references" (the
-    workflow and its actions are one version)."""
+def test_factory_workflow_is_self_contained():
+    """(reuse-by-ref "the factory workflow is self-contained"; the
+    successor of "the factory's workflow names its own actions by owner,
+    repo and path" and the in-file half of "a published version is
+    self-consistent") no `uses:` reference to the factory's own actions
+    remains — an own-action ref would have to be fully qualified
+    (MelvinKl/code-weaver/.github/actions/<name>@<ref>) and pinned to a
+    ref the release flow could only make consistent by rewriting a
+    workflow file before the tag (a push that updates a workflow file —
+    the github-actions App behind the publishing token is refused it,
+    `workflows` not being a permission available to it), and a relative
+    path would resolve against the calling repo's checkout, where a
+    target holds no copy of the factory's scripts. The stage steps are
+    inlined instead: every stage job carries the former action's steps at
+    its former splice site, runs their scripts from the runtime tree the
+    job's first step stashed into $RUNNER_TEMP, and no stage job is
+    without that stash step."""
     text = _read(".github/workflows/factory.yml")
-    own_refs = {}
-    for ln in text.splitlines():
-        m = re.search(r"uses:\s*(\S+)", ln)
-        if not m:
-            continue
-        value = m.group(1)
-        pm = re.search(r"(\.github/actions/[\w-]+)/?", value)
-        if pm is None:
-            continue  # a third-party action — owner-qualified against another repo
-        name = pm.group(1).rpartition("/")[2]
-        fm = re.fullmatch(r"MelvinKl/code-weaver/" + re.escape(pm.group(1))
-                          + r"@([\w.-]+)", value)
-        assert fm, (
-            f"own action {name!r} is referenced {value!r} — every own-action "
-            "reference must be fully qualified: the factory's owner, repo "
-            "and path, pinned to a version ref (a relative path would "
-            "resolve against the calling repo's checkout)")
-        own_refs[name] = fm.group(1)
-    assert set(own_refs) == {
-        "setup-pi", "baseline", "extract-stage", "plan-stage",
-        "implement-stage", "review-stage", "pi-run", "pr-open",
-        "gates-stage", "report"}, (
-        f"the workflow's own composite-action references are "
-        f"{sorted(own_refs)} — every stage job's composite action must "
-        "be named")
-    assert len(set(own_refs.values())) == 1, (
-        "every own-action reference in the workflow shares one ref — the "
-        f"workflow and its actions are one version: {own_refs}")
-    assert "./.github/actions" not in text, (
-        "a relative ./.github/actions reference remains in the workflow — "
-        "in a called reusable workflow it resolves against the calling "
-        "repo's checkout")
+    own_refs = [ln.strip() for ln in text.splitlines()
+                if re.search(r"\buses:\s*MelvinKl/code-weaver/\.github/actions/",
+                             ln)]
+    assert not own_refs, (
+        f"factory.yml still references its own actions {own_refs!r} — the "
+        "stage steps are inlined in the workflow; an own-action ref would "
+        "need a pre-tag rewrite the release flow must never push")
+    stashes = len(re.findall(r"Stash the factory runtime tree", text))
+    job_keys = ("trigger", "setup-pi", "baseline", "extract", "plan",
+                "implement", "review", "pr", "gates", "report")
+    jobs = sum(1 for k in job_keys if re.search(rf"(?m)^  {k}:\s*$", text))
+    assert stashes == jobs == len(job_keys), (
+        f"{stashes} stash steps for {jobs} stage jobs — every stage job's "
+        "first step must stash the called repo's runtime tree before its "
+        "first checkout")
+    for name in ("setup-pi", "baseline", "extract-stage", "plan-stage",
+                 "implement-stage", "review-stage", "pi-run", "pr-open",
+                 "gates-stage", "report"):
+        contig = f"cw/stash/.github/actions/{name}"
+        split = f'".github", "actions", "{name}"'
+        assert contig in text or split in text, (
+            f"the {name} stage does not run its script from the stashed "
+            "runtime tree")
 
 
 def test_review_stage_judges_only_changed_feature_files():
@@ -458,7 +457,7 @@ def test_report_falls_back_to_top_level_arc42():
     trail exists for human review") the report stage appends the
     AI-activity section to the arc42 markdown under the doc dir — and
     falls back to the top-level PLAN.md where a target has no doc dir."""
-    action = _read(".github/actions/report/action.yml")
+    action = _read(".github/workflows/factory.yml")
     assert '## AI activity (code-weaver)' in action
     assert 'elif os.path.isfile("PLAN.md")' in action
     docs = os.path.join(ROOT, "docs")
@@ -469,28 +468,32 @@ def test_report_falls_back_to_top_level_arc42():
 
 
 def _report_action_source() -> str:
-    """The report action's inline python — its `run: |` block (the step's
-    whole body), dedented to a runnable source. The tests exec it against
-    a sandboxed state dir: the assembled report is a function of the state
-    dir's contents (the per-call usage ledger, the trigger's resolved
-    configuration) and the action's inputs, so no live workflow is needed.
-    """
-    lines = _read(".github/actions/report/action.yml").splitlines()
+    """The report stage's inline python — its `run: |` block (the step's
+    whole body), dedented to a runnable source. The stage's steps are
+    inlined in the workflow (the former action file is gone), so the block
+    is read off the report job's inlined status-report step. The tests exec
+    it against a sandboxed state dir: the assembled report is a function of
+    the state dir's contents (the per-call usage ledger, the trigger's
+    resolved configuration) and the step's env, so no live workflow is
+    needed."""
+    lines = _read(".github/workflows/factory.yml").splitlines()
+    lines = lines[lines.index(next(ln for ln in lines
+                                   if ln.startswith("  report:"))):]
     step = None
     for i, ln in enumerate(lines):
         if "Write the final status report" in ln:
             step = i
             break
-    assert step is not None, "the report action's status-report step is gone"
+    assert step is not None, "the report stage's status-report step is gone"
     for i in range(step, len(lines)):
-        if lines[i].rstrip() == "      run: |":
+        if lines[i].lstrip() == "run: |":
             body, indent = [], None
             for cont in lines[i + 1:]:
                 if not cont.strip():
                     body.append("")
                     continue
                 ind = len(cont) - len(cont.lstrip(" "))
-                if ind < 8:
+                if ind <= 8:
                     break
                 if indent is None:
                     indent = ind
@@ -500,7 +503,7 @@ def _report_action_source() -> str:
                 "the step's run block is no longer the status-report python"
             return src
     raise AssertionError(
-        "no `run: |` block on the report action's status-report step")
+        "no `run: |` block on the report stage's status-report step")
 
 
 def _run_report_action(run_result="success", pr_number="7", issue_number="42",

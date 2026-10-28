@@ -122,8 +122,10 @@ verifies this up front: a missing, dead or wrongly-scoped token fails within
 seconds with the exact cause in the log — not as an opaque red checkout.
 
 **Upgrading is a ref bump** in that one `uses:` line: the ref selects the
-reusable workflow, its composite actions and its pi prompt templates as one
-version from the factory repo — a ref bump selects them as one version.
+reusable workflow — self-contained, its stage steps inlined in the workflow
+file and the runtime tree its steps execute (the scripts, the pi prompt
+templates) shipping in the same repo — as one version from the factory
+repo; a ref bump selects the whole version.
 **Every published version is a stable ref**: a push to the factory's `main`
 branch publishes the next single increasing number as a GitHub release;
 targets pinned to an older ref keep working.
@@ -187,14 +189,15 @@ factory.
 ```
 .github/
   workflows/
-    factory.yml        the 15-stage pipeline as one reusable workflow
+    factory.yml        the 15-stage pipeline as one self-contained reusable workflow (the stage steps inlined in the file; no composite actions)
     house-ci.yml       this repo's own gate (uv; compile+YAML+oracle+pytest)
-    release.yml        push to main → next single increasing number → GitHub release (the ref targets pin)
+    release.yml        push to main → next single increasing number → GitHub release (the ref targets pin; the default GITHUB_TOKEN publishes the tag on main's HEAD — no special token)
   actions/
+    <stage>/           the stage's python script — the stage's STEPS are inlined in factory.yml (the workflow is self-contained: no composite actions to reference, no own-action ref for the release to rewrite); each dir holds the script its inlined stage step runs
     setup-pi/          stage 2 — install pi for the run + write the provided harness + backend/model checks
     pi-run/            one headless `pi --print` run (the stage primitive)
     baseline/          stage 3 — branch ai/code-weaver/<issue> + baseline ref
-    guard-check/       THE one shared "only X changed" guard script
+    guard-check/       THE one shared "only X changed" guard script (the stages call it in-process)
     extract-stage/     stages 4+5 — extraction + requirement check
     plan-stage/        stages 6+7 — planning + plan check
     implement-stage/   stages 8+9 — implementation + implement check

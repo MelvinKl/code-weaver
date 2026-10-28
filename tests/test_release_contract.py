@@ -21,11 +21,11 @@ computation itself, unit-tested against the helper; "The release flow
 no longer carries the semver scheme") and in the adjusted
 `reuse-by-ref` scenario "Every published version is a stable ref" (whose
 And line — workflows pinned to an older ref keep working — is unchanged:
-both tag series stay immutable, pinnable refs) and in the new
-`reuse-by-ref` scenario "A published version is self-consistent in its
-action references" (before tagging, the flow rewrites the reusable
-workflow's own action refs to the tag it is about to create, on a
-throwaway release branch it never pushes).
+both tag series stay immutable, pinnable refs) and in the reworked
+`reuse-by-ref` scenario "A published version is self-contained" (the
+workflow's stage steps are inlined and its runtime tree stashes at the
+called ref — the tag needs no pre-tag rewrite: the version a target pins
+is one file).
 
 
 Plain-stdlib by design (no third-party imports): the stage-10 driver
@@ -242,128 +242,54 @@ def test_workflow_creates_a_github_release_from_the_tag():
         "tag — a target could not pin the new version")
 
 
-def test_workflow_publishes_with_the_secret_token():
+def test_release_publishes_with_the_default_token():
     """(scenario "A change on main automatically releases a new version"
-    — the publication half, enabled by the token it pushes with) the
-    publication authenticates with the GH_TOKEN secret, never with the
-    default GITHUB_TOKEN: the tag's commit updates
-    .github/workflows/factory.yml — a workflow-file update — and the
-    github-actions App behind the GITHUB_TOKEN can never be granted the
-    workflows permission for it (that is not a scope available to it:
-    a workflow claiming so in its permissions block is rejected as
-    invalid, and its runs die at 0s). The block therefore scopes the
-    GITHUB_TOKEN read-only (it serves only checkout and ls-remote), the
-    tag push embeds the secret in its URL (the way the factory's stage
-    pushes do), and the step's env maps GH_TOKEN to the secret so the gh
-    CLI (release creation) uses it too. That principal must carry the
-    permissions the publication needs: workflows write (the tag's
-    factory.yml update), contents write (the tag ref), releases write
-    (gh release create)."""
+    — the publication half) the flow publishes the tag and the release
+    with the default GITHUB_TOKEN — no special token, no secret: the tag
+    points at main's HEAD (a commit the push already delivered to the
+    remote), so the tag push uploads only the tag object — no new commit
+    content, no workflow-file update in the push. The github-actions App
+    behind the GITHUB_TOKEN can never be granted the `workflows`
+    permission (that is not a scope available to it, and a workflow
+    claiming it in its permissions block is rejected as invalid — a run
+    dies at 0s) — so the flow must never push a commit that updates a
+    workflow file, and it never does. The permissions block grants only
+    what publication needs: `contents: write` (the tag ref and the
+    release object)."""
     text = _read(RELEASE_WORKFLOW)
-    assert "contents: read" in text, (
-        "release.yml's permissions block no longer scopes the default "
-        "GITHUB_TOKEN to read-only — that token serves only checkout and "
-        "ls-remote; the publication authenticates with the GH_TOKEN "
-        "secret")
+    assert re.search(r"(?m)^  contents: write", text), (
+        "release.yml's permissions block no longer grants contents: write "
+        "— publishing the tag ref and the release object needs it")
     assert not re.search(r"(?m)^  workflows:", text), (
         "release.yml's permissions block claims the workflows scope — it "
         "is not available to the GITHUB_TOKEN's App, and a workflow "
         "claiming it is rejected as invalid (a run dies at 0s)")
-    assert 'GH_TOKEN: ${{ secrets.GH_TOKEN }}' in text, (
-        "release.yml's step env no longer maps GH_TOKEN to the secret — "
-        "the gh CLI (release creation) reads that env var")
-    assert re.search(r'x-access-token:\$\{GH_TOKEN\}@github\.com', text), (
-        "the tag push no longer embeds the GH_TOKEN secret in its URL — "
-        "the default GITHUB_TOKEN's App is refused the workflow-file "
-        "update the tag's commit carries")
+    assert not re.search(r"\bGH_TOKEN\b", text), (
+        "release.yml references a special GH_TOKEN — the tokenless flow "
+        "publishes the tag with the default GITHUB_TOKEN (no secret)")
+    assert 'git push origin "refs/tags/$NEXT"' in text, (
+        "the tag push no longer goes out the checkout's origin remote "
+        "with the embedded GITHUB_TOKEN — the push URL must not embed a "
+        "special token")
 
 
-def test_release_rewrites_the_factory_action_refs_to_the_published_tag():
-    """(the new `reuse-by-ref` scenario "A published version is self-
-    consistent in its action references") the release flow publishes a
-    self-consistent version: before the tag it cuts a throwaway release
-    branch from main's HEAD, rewrites the reusable workflow's own-action
-    refs — the `MelvinKl/code-weaver/.github/actions/…` `uses:` lines of
-    `factory.yml`, never a third-party ref — to the computed `$NEXT`,
-    commits the rewrite, and tags and releases from that rewritten commit,
-    so a target's ref bump selects the workflow and its actions as one
-    version. The tag is the only ref the flow publishes — a push to main
-    would re-trigger the release workflow and cascade the next release.
-    Line-based pin (a whole-document parse is wrong for a workflow's event
-    map); the file's existing pins (main-advance trigger, no tag trigger,
-    no semver literal, `git tag "$NEXT"`, `gh release create "$NEXT"`,
-    the GH_TOKEN-secret-embedded tag push) stay intact."""
-    lines = _read(RELEASE_WORKFLOW).splitlines()
-
-    def _first(pred):
-        for i, line in enumerate(lines):
-            if pred(line):
-                return i
-        return None
-
-    branch_i = _first(
-        lambda l: re.search(r"git checkout -B \S", l) is not None)
-    assert branch_i is not None, (
-        "release.yml cuts no throwaway release branch — the rewritten "
-        "commit has nowhere to live, and a push to main would re-trigger "
-        "the release workflow and cascade the next release")
-    assert "$NEXT" in lines[branch_i], (
-        "the throwaway release branch is not named per release — it must "
-        "carry $NEXT, a fresh branch per published version")
-    tag_i = _first(lambda l: re.match(r'git tag "\$NEXT"', l.strip())
-                   is not None)
-    assert tag_i is not None, (
-        "release.yml lost the tag creation from the computed $NEXT")
-    assert branch_i < tag_i, (
-        "the throwaway branch is cut after the tag — the tag must sit on "
-        "the rewritten commit, not on main's untouched HEAD")
-
-    rewrite = "\n".join(lines[branch_i:tag_i])
-    assert "MelvinKl/code-weaver/.github/actions/" in rewrite, (
-        "the pre-tag rewrite does not target the factory's own action "
-        "`uses:` lines (owner, repo and path) — the published version "
-        "would not reference its composite actions at its own ref")
-    assert "factory.yml" in rewrite, (
-        "the pre-tag rewrite does not name the reusable workflow "
-        "(factory.yml) as the file it rewrites")
-    assert 'python3 - "$NEXT"' in rewrite, (
-        "the rewrite is not fed the computed $NEXT — the own-action refs "
-        "would not move to the tag the flow is about to create")
-    commit_i = _first(lambda l: re.search(r"\bgit commit\b", l.strip())
-                      is not None)
-    assert commit_i is not None and branch_i < commit_i < tag_i, (
-        "the rewrite is not committed between the branch cut and the tag — "
-        "the tag must mark the rewritten commit")
-    assert lines[tag_i].strip() == 'git tag "$NEXT" HEAD', (
-        "the tag does not mark HEAD of the throwaway release branch "
-        "(the rewritten commit) — %r" % lines[tag_i].strip())
-    pushes = [l.strip() for l in lines if re.search(r"\bgit push\b", l)]
-    assert pushes, (
-        "release.yml pushes no ref — the tag must be published")
-    for p in pushes:
-        assert re.search(
-            r'git push "https://x-access-token:\$\{GH_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}" "refs/tags/\$NEXT"',
-            p), (
-            f"release.yml's push {p!r} does not publish refs/tags/$NEXT "
-            "via the GH_TOKEN secret — the tag is the only ref it "
-            "publishes (a branch push, to main above all, would "
-            "re-trigger the release workflow)")
-    release_i = _first(lambda l: 'gh release create "$NEXT"' in l)
-    assert release_i is not None and tag_i < release_i, (
-        "the GitHub release is not created from the tag the flow just cut "
-        "on the rewritten commit")
-
-
-# --- the documented surfaces -------------------------------------------------
-#
-# The documentation surfaces of the new release flow: the README and the
-# arc42 set must describe the mechanism the workflow now carries (the main
-# branch's advance publishes the next single increasing number as a GitHub
-# release), and no surface may still state the retired mechanism. These
-# pins follow the established doc-pinning practice: `test_trigger_contract
-# .py` pins the README's consumption example, and
-# `test_stage_contract.py::test_loop_cap_defaults_match_oracle` pins a doc
-# surface against the workflow's input.
+def test_release_tags_main_head_not_a_throwaway_branch():
+    """(the same scenario — the publication-side invariant that makes the
+    tokenless flow possible) the tag points at main's HEAD — the commit
+    this push delivered, already on the remote. The flow cuts no
+    throwaway branch: the retired design rewrote the reusable
+    workflow's own action refs on a throwaway release branch and tagged
+    that rewritten commit — its push uploaded a new commit updating a
+    workflow file, the one push the publishing principal is refused. The
+    rewrite is gone with the consolidation (factory.yml is
+    self-contained — its stage steps are inlined) — so the tag is cut
+    from main's HEAD itself, and the push uploads only the tag object."""
+    text = _read(RELEASE_WORKFLOW)
+    assert "git checkout -B" not in text, (
+        "release.yml still cuts a throwaway release branch — the tag "
+        "points at main's HEAD; there is no pre-tag commit to cut")
+    assert re.search(r'git tag "\$NEXT" HEAD', text), (
+        "release.yml no longer tags HEAD with the computed number")
 
 
 def _doc_surfaces():

@@ -561,20 +561,20 @@ def git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
 
 
 def action_path() -> str:
-    """Directory of the running composite action inside the code-weaver
-    checkout — sibling actions/scripts resolve from here.
+    """Directory of the running stage inside the factory runtime tree —
+    sibling actions/scripts resolve from here.
 
-    On this runner build GITHUB_ACTION_PATH is unset inside composite
-    action inner steps (same bug family as the missing INPUT_* binding),
-    so the actions directory is anchored from this file's own location:
-    common.py lives at <repo>/.github/scripts/common.py."""
-    p = os.environ.get("GITHUB_ACTION_PATH")
-    if p:
-        # This runner build points it at the action dir with a "/./"
-        # segment and a trailing slash; raw dirname() arithmetic eats the
-        # trailing slash as a level and lands one dir too deep, so
-        # normalize before any caller walks up from here.
-        return os.path.normpath(p)
+    The tree is anchored from this file's own location: common.py lives
+    at <tree>/.github/scripts/common.py. In the factory the stage scripts
+    run from the stash (each stage job's first step copies the called
+    repo's .github tree into $RUNNER_TEMP before any checkout replaces
+    the workspace with the target repo), so this file's location IS the
+    stashed tree's scripts dir; a dev/standalone invocation of a stage
+    script runs it from the checkout itself and the same anchor resolves
+    there. GITHUB_ACTION_PATH is deliberately not consulted: the workflow
+    has no composite-action boundary left for it to point at, and a
+    healthy runner would point it at the target repo's (absent) action
+    dir."""
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return os.path.join(repo_root, ".github", "actions", "stage")
 

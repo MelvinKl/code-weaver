@@ -1,13 +1,18 @@
 # requirements/reuse-by-ref.feature
 # The crux: factory code lives in the code-weaver repo and is referenced by ref —
-# reusable workflow, JS action as npm package, composite action.
+# the reusable workflow (self-contained: its stage steps are inlined in the
+# workflow file) and the runtime tree its steps execute, in the same repo.
 # Update = a one-line ref bump in the target repo, never copy-paste.
 # Issue 60 delta — the reusable workflow's own composite-action references
-# are relative paths, which the runner resolves against the CALLING repo's
+# were relative paths, which the runner resolves against the CALLING repo's
 # checkout: a target whose tree holds no copy of the factory's actions
-# crashes at the first such step ("Can't find 'action.yml' ..."), so the
-# documented consumption must name the factory's actions by owner, repo and
-# path, and every published version must be self-consistent in its refs.
+# crashes at the first such step ("Can't find 'action.yml' ..."). Fully
+# qualifying the refs would pin the workflow to action refs that only a
+# release-time rewrite of the workflow file could make consistent — a push
+# that updates a workflow file, which the publishing principal is refused.
+# So the actions are consolidated into the workflow: one file is one
+# version, and each stage job stashes the runtime tree it executes before
+# the first checkout replaces the workspace with the target repo.
 
 Feature: Reuse by ref, never copy-paste
   As a maintainer of a target project
@@ -29,11 +34,18 @@ Feature: Reuse by ref, never copy-paste
     And it contains none of the pipeline logic itself
 
   @reuse
-  Scenario: Composite actions are referenced by owner, repo and path
-    Given the target consumes the factory as a reusable workflow
-    When the consumer writes its uses: line
-    Then it names the factory by owner, repo, path and ref
-    And the factory's own workflow steps reference its composite actions by owner, repo and path — pinned to that same ref
+  Scenario: The factory workflow is self-contained
+    Given the factory's reusable workflow
+    When its stage jobs are read
+    Then every stage's steps live in the workflow file itself
+    And no step references the factory's actions as separate files
+
+  @reuse
+  Scenario: The stage jobs stash the runtime tree before their first checkout
+    Given a factory run on a target repo whose tree holds no copy of the factory's runtime tree
+    When a stage job starts
+    Then its first step copies the called repo's .github tree and prompt templates to the runner's temp dir
+    And its stage steps run their scripts from that stashed copy
 
   @reuse
   Scenario: An upgrade is a ref bump
@@ -50,33 +62,26 @@ Feature: Reuse by ref, never copy-paste
     And workflows pinned to an older ref keep working
 
   @reuse @issue-60
-  Scenario: The factory's workflow names its own actions by owner, repo and path
-    Given the factory's reusable workflow invokes its composite actions in its stage jobs
-    When every step's uses reference in the workflow is read
-    Then each composite action is named by the factory's owner, repo and path
-    And no reference is a relative path — a relative path in a reusable workflow resolves against the calling repo's checkout
-
-  @reuse @issue-60
   Scenario: The README's consumption pattern works on a target repo
     Given a target repo whose consumer workflow is written exactly as the README documents it
-    And the target repo's tree holds no copy of the factory's composite actions
+    And the target repo's tree holds no copy of the factory's runtime tree
     When a factory run starts on that target repo
-    Then every stage job's composite action step loads the factory's action definition
-    And no step fails with a missing action file under the target's own checkout
-    And the run does not crash at the first stage that invokes a composite action
+    Then every stage step runs the factory's own script from the stashed runtime tree
+    And no step fails looking for the factory's scripts under the target's own checkout
+    And the run does not crash at the first stage step
 
   @reuse @issue-60
-  Scenario: A published version is self-consistent in its action references
+  Scenario: A published version is self-contained
     Given the factory's reusable workflow at a published version ref
-    And the workflow's steps reference the factory's composite actions
+    And the workflow's stage steps inlined and its runtime tree in the same repo
     When a target invokes the workflow at that version ref
-    Then every composite action in the run loads from the same version ref as the workflow
-    And a target's ref bump selects the workflow and its actions as one version
+    Then the whole version — the workflow's stage steps and the runtime tree they execute — is selected by that one ref
+    And a target's ref bump upgrades the factory atomically, with no separate ref to keep in step
 
-  Scenario: Composite action steps declare their shell explicitly
+  Scenario: Stage steps declare their shell explicitly
     Given a reusable-workflow factory consumed by this repo's ref
-    And the factory's stage actions are composite actions whose steps run scripts
-    When a stage action defines a step with a run: but no shell:
-    Then the runner's action loader rejects the action (required property missing)
-    And the stage step fails before any of its processes start
-    And every composite step in the factory declares its shell explicitly
+    And the factory's stage steps are inlined workflow steps whose run blocks run scripts
+    When a stage step defines a run: but no shell:
+    Then the step relies on the runner's default shell instead of the one the script was written against
+    And the stage fails before any of its processes start
+    And every stage step in the factory declares its shell explicitly
