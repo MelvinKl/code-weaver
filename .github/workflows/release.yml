@@ -14,15 +14,20 @@ on:
   push:
     branches: [main]
 
-# The push below authenticates with the default GITHUB_TOKEN — a token of
-# the `github-actions` GitHub App, scoped by this block (actions/checkout
-# embeds it in the remote URL; the GH_TOKEN secret is only read by the gh
-# CLI, never by git). The tag points at the commit that rewrites
-# factory.yml, i.e. a workflow-file update: a GitHub App needs `workflows`
-# write for that, on top of `contents` write for the tag ref itself.
+# The GITHUB_TOKEN is the token of the `github-actions` GitHub App, scoped
+# by this block — here read-only: it serves only checkout and ls-remote.
+# It can never be granted the `workflows` permission (that is not a scope
+# available to it: docs, "Granting additional permissions"), yet this
+# flow's tag push uploads a commit that updates
+# .github/workflows/factory.yml — a workflow-file update such an App is
+# refused for, whatever the block says. So the push authenticates with the
+# GH_TOKEN secret instead, embedded in the push URL exactly like the
+# factory's stage pushes (the GH_TOKEN env var is only read by the gh CLI
+# — never by git). That principal must carry workflows write (classic PAT:
+# the `repo` scope; fine-grained PAT: the Workflows permission) plus
+# releases write for `gh release create`.
 permissions:
-  contents: write
-  workflows: write
+  contents: read
 
 jobs:
   release:
@@ -93,6 +98,9 @@ jobs:
           fi
 
           git tag "$NEXT" HEAD
-          git push origin "refs/tags/$NEXT"
+          # Push via the GH_TOKEN secret: the tag points at the commit that
+          # rewrites factory.yml, a workflow-file update the default
+          # GITHUB_TOKEN's App is refused for.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "refs/tags/$NEXT"
           NOTES=$(printf '## %s\n\nChanged since %s:\n\n`%s`\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `@%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$NEXT" "${PREV:-the first commit}" "$CHANGES" "$NEXT")
           gh release create "$NEXT" --title "code-weaver $NEXT" --notes "$NOTES"
