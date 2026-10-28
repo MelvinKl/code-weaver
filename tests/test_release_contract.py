@@ -242,15 +242,40 @@ def test_workflow_creates_a_github_release_from_the_tag():
         "tag — a target could not pin the new version")
 
 
-def test_workflow_keeps_contents_write():
+def test_workflow_publishes_with_the_secret_token():
     """(scenario "A change on main automatically releases a new version"
-    — the publication half, enabled by its permissions) the workflow
-    keeps the `contents: write` permission that makes creating the tag
-    and the release possible."""
+    — the publication half, enabled by the token it pushes with) the
+    publication authenticates with the GH_TOKEN secret, never with the
+    default GITHUB_TOKEN: the tag's commit updates
+    .github/workflows/factory.yml — a workflow-file update — and the
+    github-actions App behind the GITHUB_TOKEN can never be granted the
+    workflows permission for it (that is not a scope available to it:
+    a workflow claiming so in its permissions block is rejected as
+    invalid, and its runs die at 0s). The block therefore scopes the
+    GITHUB_TOKEN read-only (it serves only checkout and ls-remote), the
+    tag push embeds the secret in its URL (the way the factory's stage
+    pushes do), and the step's env maps GH_TOKEN to the secret so the gh
+    CLI (release creation) uses it too. That principal must carry the
+    permissions the publication needs: workflows write (the tag's
+    factory.yml update), contents write (the tag ref), releases write
+    (gh release create)."""
     text = _read(RELEASE_WORKFLOW)
-    assert "contents: write" in text, (
-        "release.yml lost the contents: write permission — creating the "
-        "tag and the release needs it")
+    assert "contents: read" in text, (
+        "release.yml's permissions block no longer scopes the default "
+        "GITHUB_TOKEN to read-only — that token serves only checkout and "
+        "ls-remote; the publication authenticates with the GH_TOKEN "
+        "secret")
+    assert not re.search(r"(?m)^  workflows:", text), (
+        "release.yml's permissions block claims the workflows scope — it "
+        "is not available to the GITHUB_TOKEN's App, and a workflow "
+        "claiming it is rejected as invalid (a run dies at 0s)")
+    assert 'GH_TOKEN: ${{ secrets.GH_TOKEN }}' in text, (
+        "release.yml's step env no longer maps GH_TOKEN to the secret — "
+        "the gh CLI (release creation) reads that env var")
+    assert re.search(r'x-access-token:\$\{GH_TOKEN\}@github\.com', text), (
+        "the tag push no longer embeds the GH_TOKEN secret in its URL — "
+        "the default GITHUB_TOKEN's App is refused the workflow-file "
+        "update the tag's commit carries")
 
 
 def test_release_rewrites_the_factory_action_refs_to_the_published_tag():
@@ -267,7 +292,7 @@ def test_release_rewrites_the_factory_action_refs_to_the_published_tag():
     Line-based pin (a whole-document parse is wrong for a workflow's event
     map); the file's existing pins (main-advance trigger, no tag trigger,
     no semver literal, `git tag "$NEXT"`, `gh release create "$NEXT"`,
-    `contents: write`) stay intact."""
+    the GH_TOKEN-secret-embedded tag push) stay intact."""
     lines = _read(RELEASE_WORKFLOW).splitlines()
 
     def _first(pred):
@@ -316,10 +341,13 @@ def test_release_rewrites_the_factory_action_refs_to_the_published_tag():
     assert pushes, (
         "release.yml pushes no ref — the tag must be published")
     for p in pushes:
-        assert p == 'git push origin "refs/tags/$NEXT"', (
-            f"release.yml pushes {p!r} — a branch push (to main above all) "
-            "would re-trigger the release workflow; the tag is the only "
-            "ref it publishes")
+        assert re.search(
+            r'git push "https://x-access-token:\$\{GH_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}" "refs/tags/\$NEXT"',
+            p), (
+            f"release.yml's push {p!r} does not publish refs/tags/$NEXT "
+            "via the GH_TOKEN secret — the tag is the only ref it "
+            "publishes (a branch push, to main above all, would "
+            "re-trigger the release workflow)")
     release_i = _first(lambda l: 'gh release create "$NEXT"' in l)
     assert release_i is not None and tag_i < release_i, (
         "the GitHub release is not created from the tag the flow just cut "
