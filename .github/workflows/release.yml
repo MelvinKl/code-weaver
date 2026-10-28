@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Publish the release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # The tag is the next single increasing number: the number after
           # the highest published version of the new scheme (no published
