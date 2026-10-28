@@ -17,6 +17,12 @@
 # pre-tag rewrite of own-action refs (there are no own-action refs left
 # to rewrite). Tags are immutable: a target that pinned an older ref keeps
 # working; upgrading is a one-line ref bump in the target's workflow.
+#
+# One machinery note: the `gh` CLI refuses to run inside a GitHub Actions
+# job unless `GH_TOKEN` is set in the step env (it does not fall back to
+# `GITHUB_TOKEN` — run 40674136956's exit 4). The Publish step maps it to
+# the `github.token` context, which IS that same default token: the
+# principal is unchanged, no secret is read, the flow stays tokenless.
 name: code-weaver release
 
 on:
@@ -36,6 +42,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Publish the release
+        env:
+          # the gh CLI refuses to run in an Actions job unless GH_TOKEN is
+          # set (no GITHUB_TOKEN fallback); the github.token context is the
+          # same default token that pushes the tag — still no secret
+          GH_TOKEN: ${{ github.token }}
         run: |
           # The tag is the next single increasing number: the number after
           # the highest published version of the new scheme (no published

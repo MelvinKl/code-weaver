@@ -264,9 +264,14 @@ def test_release_publishes_with_the_default_token():
         "release.yml's permissions block claims the workflows scope — it "
         "is not available to the GITHUB_TOKEN's App, and a workflow "
         "claiming it is rejected as invalid (a run dies at 0s)")
-    assert not re.search(r"\bGH_TOKEN\b", text), (
-        "release.yml references a special GH_TOKEN — the tokenless flow "
-        "publishes the tag with the default GITHUB_TOKEN (no secret)")
+    assert "secrets.GH_TOKEN" not in text, (
+        "release.yml reads a special GH_TOKEN secret — the tokenless flow "
+        "publishes the tag with the default GITHUB_TOKEN")
+    assert "GH_TOKEN: ${{ github.token }}" in text, (
+        "the Publish step's env does not map GH_TOKEN to the github.token "
+        "context — the gh CLI refuses to run in an Actions job unless "
+        "GH_TOKEN is set (no GITHUB_TOKEN fallback); the context is the "
+        "same default token that pushes the tag")
     assert 'git push origin "refs/tags/$NEXT"' in text, (
         "the tag push no longer goes out the checkout's origin remote "
         "with the embedded GITHUB_TOKEN — the push URL must not embed a "
