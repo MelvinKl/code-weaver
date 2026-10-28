@@ -11,7 +11,7 @@ the harness-provider secrets:
 ```yaml
 jobs:
   factory:
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@v0.1.0
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@5
     with: { issue-number: …, ai-requirements-label: ai-requirements,
             target-branch: main, llm-model: …, runner: … }
     secrets: { GH_TOKEN: ${{ secrets.GH_TOKEN }}, … }

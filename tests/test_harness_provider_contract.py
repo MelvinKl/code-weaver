@@ -125,7 +125,13 @@ def test_setup_pi_job_passes_the_providers_to_the_action():
     build) — and the action declares the matching inputs."""
     job = _setup_pi_job(_read(FACTORY))
     action = _read(".github/actions/setup-pi/action.yml")
-    assert "uses: ./.github/actions/setup-pi/" in job, \
+    # the step names the action fully qualified by owner, repo and path
+    # (reuse-by-ref "the factory's workflow names its own actions by
+    # owner, repo and path": a relative path would resolve against the
+    # calling repo's checkout) — pinned to the published version ref the
+    # release flow cuts
+    assert re.search(
+        r"uses: MelvinKl/code-weaver/\.github/actions/setup-pi@[\w.-]+", job), \
         "the setup-pi job lost its setup-pi action step"
     for name, input_name in PROVIDERS:
         assert f"          {input_name}: ${{{{ secrets.{name} }}}}" in job, \

@@ -2,9 +2,15 @@
 #
 # A target repo invokes this file with `uses: <owner>/code-weaver/
 # .github/workflows/factory.yml@<ref>` from its own short workflow and passes
-# inputs. The composite actions and pi prompt templates ship in the same repo
-# and are referenced from here — an upgrade is a ref bump in the target's
-# one-line invocation; every published tag stays a stable ref.
+# inputs. The composite actions and pi prompt templates ship in the same
+# repo, and every stage job references its own composite actions fully
+# qualified — by this repo's owner, repo and path, all pinned to one shared
+# version tag (MelvinKl/code-weaver/.github/actions/<name>@<version>): a
+# relative action path in a called reusable workflow resolves against the
+# CALLING repo's checkout, so a target whose tree holds no copy of the
+# factory's actions would fail at the first composite-action step ("Can't
+# find 'action.yml'"). An upgrade is a ref bump in the target's one-line
+# invocation; every published tag stays a stable ref.
 #
 # Step `with:` mappings use the `runner.temp` context, never `env.RUNNER_TEMP`:
 # in a step's input expressions the well-known env var evaluates empty (the
@@ -260,7 +266,7 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
       - name: Stage 2 — install pi for the run, configure it from the provided harness
-        uses: ./.github/actions/setup-pi/
+        uses: MelvinKl/code-weaver/.github/actions/setup-pi@4
         with:
           llm-model: ${{ inputs.llm-model }}
           pi-models: ${{ secrets.PI_MODELS }}
@@ -349,7 +355,7 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
       - name: Stage 3 — cut the AI branch, record the baseline
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/baseline/
+        uses: MelvinKl/code-weaver/.github/actions/baseline@4
         # step-level env: this runner build does not propagate job-level
         # GITHUB_ENV values into a composite action's inner steps (and never
         # binds with: to INPUT_* either); a step's own env: does reach them
@@ -460,7 +466,7 @@ jobs:
           path: ${{ runner.temp }}/cw
       - name: Stage 4 — extract the delta requirements (Gherkin)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/extract-stage/
+        uses: MelvinKl/code-weaver/.github/actions/extract-stage@4
         # step-level env: this runner build does not propagate job-level
         # GITHUB_ENV values into a composite action's inner steps (and never
         # binds with: to INPUT_* either); a step's own env: does reach them
@@ -550,7 +556,7 @@ jobs:
           path: ${{ runner.temp }}/cw
       - name: Stage 6 — plan every requirement change (markdown)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/plan-stage/
+        uses: MelvinKl/code-weaver/.github/actions/plan-stage@4
         # step-level env: this runner build does not propagate job-level
         # GITHUB_ENV values into a composite action's inner steps (and never
         # binds with: to INPUT_* either); a step's own env: does reach them
@@ -640,7 +646,7 @@ jobs:
           path: ${{ runner.temp }}/cw
       - name: Stage 8 — implement the plans (code, tests, arc42, README)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/implement-stage/
+        uses: MelvinKl/code-weaver/.github/actions/implement-stage@4
         # step-level env: this runner build does not propagate job-level
         # GITHUB_ENV values into a composite action's inner steps (and never
         # binds with: to INPUT_* either); a step's own env: does reach them
@@ -730,7 +736,7 @@ jobs:
           path: ${{ runner.temp }}/cw
       - name: Stage 10-11 — run the oracle, review, fix (bounded loop)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/review-stage/
+        uses: MelvinKl/code-weaver/.github/actions/review-stage@4
         # step-level env: this runner build does not propagate job-level
         # GITHUB_ENV values into a composite action's inner steps (and never
         # binds with: to INPUT_* either); a step's own env: does reach them
@@ -888,7 +894,7 @@ jobs:
       - id: gen-body
         name: Generate the PR body with pi (from the requirements, the plan and the review)
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/pi-run/
+        uses: MelvinKl/code-weaver/.github/actions/pi-run@4
         # a failed pi call must not block the PR — the template fallback
         # below assembles the body instead
         continue-on-error: true
@@ -1035,7 +1041,7 @@ jobs:
       - id: open-pr
         name: Stage 12 — push & open the PR
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/pr-open/
+        uses: MelvinKl/code-weaver/.github/actions/pr-open@4
         # step-level env: runner.temp is not a permitted context in a called
         # workflow's job-level env: ("Unrecognized named-value: 'runner'")
         # but is fine in a step's env:/with:
@@ -1163,7 +1169,7 @@ jobs:
           echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
       - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
         if: ${{ env.CW_STARTED == 'true' }}
-        uses: ./.github/actions/gates-stage/
+        uses: MelvinKl/code-weaver/.github/actions/gates-stage@4
         # step-level env (not job-level): steps.head.outputs is only known
         # after that step ran, and job env is materialized at job start
         env:
@@ -1294,7 +1300,7 @@ jobs:
           [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
           echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
       - name: Stage 15 — PR body = final status; issue comment; arc42 activity
-        uses: ./.github/actions/report/
+        uses: MelvinKl/code-weaver/.github/actions/report@4
         # step-level env: this runner build does not propagate job-level
         # GITHUB_ENV values into a composite action's inner steps (and never
         # binds with: to INPUT_* either); a step's own env: does reach them

@@ -1,8 +1,13 @@
 # Code Weaver — release machinery (reuse-by-ref)
 #
 # A push to main publishes a GitHub release: the ref every target pins.
-# Tags are immutable — workflows on a target that pinned an older ref keep
-# working; upgrading is a one-line ref bump in the target's workflow.
+# Every version the flow publishes is self-consistent: before the tag, the
+# flow rewrites the reusable workflow's own action references to the tag it
+# is about to create, on a throwaway release branch — and publishes only
+# the tag (never a branch: a push to main would re-trigger this workflow
+# and cascade the next release). Tags are immutable — workflows on a target
+# that pinned an older ref keep working; upgrading is a one-line ref bump
+# in the target's workflow.
 name: code-weaver release
 
 on:
@@ -34,7 +39,52 @@ jobs:
           NEXT=$(printf '%s\n' "$TAGS" | python3 .github/scripts/release-number.py)
           PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
           RANGEFROM=${PREV:-$(git rev-list --max-parents=0 HEAD)}
+          # The release notes' "changed since" list is computed against
+          # main's HEAD before the rewrite commit below, so the mechanical
+          # ref rewrite stays out of it — the notes list real main changes.
           CHANGES=$(git diff --stat "$RANGEFROM" HEAD -- .github pi-prompts requirements | tail -n +2)
+
+          # ── the self-consistent version ────────────────────────────────
+          # The reusable workflow references its own composite actions by
+          # owner, repo and path (MelvinKl/code-weaver/.github/actions/
+          # <name>), pinned to a version ref. A target's ref bump must
+          # select the workflow and its actions as one version — so before
+          # the tag, rewrite every own-action ref in factory.yml to $NEXT.
+          # The rewrite commits to a throwaway release branch and the tag
+          # is cut from that rewritten commit; the tag is the only ref the
+          # flow publishes (a push to main would re-trigger this workflow
+          # and cascade the next release).
+          git checkout -B "code-weaver/release-$NEXT"
+          git config user.name "code-weaver release"
+          git config user.email "code-weaver-release@users.noreply.github.com"
+          python3 - "$NEXT" <<'EOF'
+          import re, sys
+          new_ref = sys.argv[1]
+          path = ".github/workflows/factory.yml"
+          lines = open(path, encoding="utf-8").read().splitlines()
+          prefix = "MelvinKl/code-weaver/.github/actions/"
+          # Only the factory's own action uses: lines (owner, repo and
+          # path) — never a third-party ref: actions/checkout and the
+          # artifact actions pin third-party repos' own versions.
+          pat = re.compile(r"^(\s*uses:\s*" + re.escape(prefix)
+                           + r"[A-Za-z0-9_-]+)(?:@[^@\s]+)?\s*$")
+          rewritten = 0
+          for i, line in enumerate(lines):
+              m = pat.match(line)
+              if m and m.group(1) + "@" + new_ref != line:
+                  lines[i] = m.group(1) + "@" + new_ref
+                  rewritten += 1
+          open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+          print("self-consistent version %s: rewrote %d own-action refs in factory.yml to @%s"
+                % (new_ref, rewritten, new_ref))
+          EOF
+          if git diff --quiet; then
+            echo "factory.yml already pins its own action refs to $NEXT — the rewrite committed nothing"
+          else
+            git add .github/workflows/factory.yml
+            git commit -m "code-weaver $NEXT: pin the factory's own action refs to $NEXT"
+          fi
+
           git tag "$NEXT" HEAD
           git push origin "refs/tags/$NEXT"
           NOTES=$(printf '## %s\n\nChanged since %s:\n\n`%s`\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `@%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$NEXT" "${PREV:-the first commit}" "$CHANGES" "$NEXT")

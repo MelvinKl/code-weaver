@@ -96,7 +96,7 @@ jobs:
     # a reusable-workflow job may only carry `uses`/`with`/`secrets` — a
     # `runs-on:` here makes the file schema-invalid. Choose the runner
     # through the factory's `runner` input instead.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@v0.1.0
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@5
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
@@ -121,11 +121,12 @@ of the owning org; a fine-grained PAT scoped to *this* repository). Stage 1
 verifies this up front: a missing, dead or wrongly-scoped token fails within
 seconds with the exact cause in the log — not as an opaque red checkout.
 
-**Upgrading is a ref bump** in that one `uses:` line — a reusable workflow
-(plus the composite actions and pi prompt templates it references, all from
-this repo). **Every published version is a stable ref**: a push to the
-factory's `main` branch publishes the next single increasing number as a
-GitHub release; targets pinned to an older ref keep working.
+**Upgrading is a ref bump** in that one `uses:` line: the ref selects the
+reusable workflow, its composite actions and its pi prompt templates as one
+version from the factory repo — a ref bump selects them as one version.
+**Every published version is a stable ref**: a push to the factory's `main`
+branch publishes the next single increasing number as a GitHub release;
+targets pinned to an older ref keep working.
 
 ## Inputs
 
@@ -207,7 +208,7 @@ factory.
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 149 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 152 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -215,7 +216,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **149 Gherkin scenarios** — the oracle this
+`requirements/` holds **152 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

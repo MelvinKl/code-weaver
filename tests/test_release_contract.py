@@ -21,7 +21,12 @@ computation itself, unit-tested against the helper; "The release flow
 no longer carries the semver scheme") and in the adjusted
 `reuse-by-ref` scenario "Every published version is a stable ref" (whose
 And line — workflows pinned to an older ref keep working — is unchanged:
-both tag series stay immutable, pinnable refs).
+both tag series stay immutable, pinnable refs) and in the new
+`reuse-by-ref` scenario "A published version is self-consistent in its
+action references" (before tagging, the flow rewrites the reusable
+workflow's own action refs to the tag it is about to create, on a
+throwaway release branch it never pushes).
+
 
 Plain-stdlib by design (no third-party imports): the stage-10 driver
 (`make test` → `python3 tests/run.py`) is a stdlib-only plain-python
@@ -246,6 +251,79 @@ def test_workflow_keeps_contents_write():
     assert "contents: write" in text, (
         "release.yml lost the contents: write permission — creating the "
         "tag and the release needs it")
+
+
+def test_release_rewrites_the_factory_action_refs_to_the_published_tag():
+    """(the new `reuse-by-ref` scenario "A published version is self-
+    consistent in its action references") the release flow publishes a
+    self-consistent version: before the tag it cuts a throwaway release
+    branch from main's HEAD, rewrites the reusable workflow's own-action
+    refs — the `MelvinKl/code-weaver/.github/actions/…` `uses:` lines of
+    `factory.yml`, never a third-party ref — to the computed `$NEXT`,
+    commits the rewrite, and tags and releases from that rewritten commit,
+    so a target's ref bump selects the workflow and its actions as one
+    version. The tag is the only ref the flow publishes — a push to main
+    would re-trigger the release workflow and cascade the next release.
+    Line-based pin (a whole-document parse is wrong for a workflow's event
+    map); the file's existing pins (main-advance trigger, no tag trigger,
+    no semver literal, `git tag "$NEXT"`, `gh release create "$NEXT"`,
+    `contents: write`) stay intact."""
+    lines = _read(RELEASE_WORKFLOW).splitlines()
+
+    def _first(pred):
+        for i, line in enumerate(lines):
+            if pred(line):
+                return i
+        return None
+
+    branch_i = _first(
+        lambda l: re.search(r"git checkout -B \S", l) is not None)
+    assert branch_i is not None, (
+        "release.yml cuts no throwaway release branch — the rewritten "
+        "commit has nowhere to live, and a push to main would re-trigger "
+        "the release workflow and cascade the next release")
+    assert "$NEXT" in lines[branch_i], (
+        "the throwaway release branch is not named per release — it must "
+        "carry $NEXT, a fresh branch per published version")
+    tag_i = _first(lambda l: re.match(r'git tag "\$NEXT"', l.strip())
+                   is not None)
+    assert tag_i is not None, (
+        "release.yml lost the tag creation from the computed $NEXT")
+    assert branch_i < tag_i, (
+        "the throwaway branch is cut after the tag — the tag must sit on "
+        "the rewritten commit, not on main's untouched HEAD")
+
+    rewrite = "\n".join(lines[branch_i:tag_i])
+    assert "MelvinKl/code-weaver/.github/actions/" in rewrite, (
+        "the pre-tag rewrite does not target the factory's own action "
+        "`uses:` lines (owner, repo and path) — the published version "
+        "would not reference its composite actions at its own ref")
+    assert "factory.yml" in rewrite, (
+        "the pre-tag rewrite does not name the reusable workflow "
+        "(factory.yml) as the file it rewrites")
+    assert 'python3 - "$NEXT"' in rewrite, (
+        "the rewrite is not fed the computed $NEXT — the own-action refs "
+        "would not move to the tag the flow is about to create")
+    commit_i = _first(lambda l: re.search(r"\bgit commit\b", l.strip())
+                      is not None)
+    assert commit_i is not None and branch_i < commit_i < tag_i, (
+        "the rewrite is not committed between the branch cut and the tag — "
+        "the tag must mark the rewritten commit")
+    assert lines[tag_i].strip() == 'git tag "$NEXT" HEAD', (
+        "the tag does not mark HEAD of the throwaway release branch "
+        "(the rewritten commit) — %r" % lines[tag_i].strip())
+    pushes = [l.strip() for l in lines if re.search(r"\bgit push\b", l)]
+    assert pushes, (
+        "release.yml pushes no ref — the tag must be published")
+    for p in pushes:
+        assert p == 'git push origin "refs/tags/$NEXT"', (
+            f"release.yml pushes {p!r} — a branch push (to main above all) "
+            "would re-trigger the release workflow; the tag is the only "
+            "ref it publishes")
+    release_i = _first(lambda l: 'gh release create "$NEXT"' in l)
+    assert release_i is not None and tag_i < release_i, (
+        "the GitHub release is not created from the tag the flow just cut "
+        "on the rewritten commit")
 
 
 # --- the documented surfaces -------------------------------------------------

@@ -18,7 +18,7 @@ jobs:
     # and configures pi for the run).
     # the oracle pins the owner and a VERSION TAG (a moving branch ref is not
     # a stable ref)
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@1
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@5
     with:
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}

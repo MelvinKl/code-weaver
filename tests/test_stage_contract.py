@@ -16,9 +16,18 @@ The pins (one per scenario the fix loop had to fulfil):
   (requirement-extraction "extraction places the delta by topic") — and
   tolerates arc42 structure variance (safety "the factory tolerates arc42
   structure variance");
-- the consumer workflow and the README pin the oracle's owner and a
-  version tag (reuse-by-ref "the factory is invoked as a reusable
-  workflow");
+- the consumer workflow and the README pin the oracle's owner at a
+  version tag — a single increasing number, the current scheme (the
+  retired semver ref shape is gone) — and the two surfaces declare the
+  same owner, the same path and the same tag in lock-step
+  (reuse-by-ref "the factory is invoked as a reusable workflow",
+  "every published version is a stable ref");
+- the factory's own workflow references every one of its own composite
+  actions fully qualified — by the factory's owner, repo and path, all
+  pinned to one shared version tag, with no relative own-action ref
+  remaining (reuse-by-ref "the factory's workflow names its own actions by
+  owner, repo and path"; the in-file half of "a published version is
+  self-consistent in its action references");
 - the pr job generates the PR body with pi from the requirements, the
   review-stage's verdict oracle is delta-scoped (test-and-review: pi judges
   only the scenarios of the feature files this run changed — the accumulated
@@ -170,29 +179,35 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     """(reuse-by-ref "the factory is invoked as a reusable workflow") the
     consumer workflow uses the oracle's owner at a version tag — a moving
     branch ref is not a stable ref — and passes issue-number + the factory
-    settings via with: and GH_TOKEN via secrets:; the README's example
-    agrees on the owner and the ref. The expected outcome extends to the
-    run's pi harness providers (configuration "The pi harness secrets ride
-    the reusable workflow's secrets block"): the same three surfaces — the
-    factory's secrets: block, the deployed consumer workflow, the README
-    example — carry the four provider secret entries in the same form,
-    while the owner/tag pin stays unchanged."""
+    settings via with: and GH_TOKEN via secrets:. The ref is a single
+    increasing number: the current scheme's tag shape (the retired
+    semver ref shape is gone — reuse-by-ref "every published version is
+    a stable ref": "its tag is a single increasing version number"). The
+    expected outcome extends to the run's pi harness providers
+    (configuration "The pi harness secrets ride the reusable workflow's
+    secrets block"): the same three surfaces — the factory's secrets:
+    block, the deployed consumer workflow, the README example — carry the
+    four provider secret entries in the same form, while the owner, path
+    and ref pin stays unchanged — the lock-step chapter 8 states (both
+    the deployed consumer workflow and the README's example declare the
+    same owner, path and tag)."""
     text = _read(".github/workflows/code-weaver.yml")
     m = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", text)
     assert m, "no uses: line naming the factory"
     owner, path, ref = m.groups()
     assert owner == "MelvinKl", f"oracle pins the MelvinKl owner, found {owner}"
     assert path.rstrip() == ".github/workflows/factory.yml"
-    # a published version tag of either scheme — the older `vX.Y.Z` tags
-    # and the new single-increasing-number tags (the release machinery
-    # publishes both as stable refs, and workflows pinned to either keep
-    # working — a moving branch ref is not a stable ref)
-    assert re.fullmatch(r"v\d+\.\d+\.\d+|\d+", ref), f"@{ref} is not a version tag"
+    assert re.fullmatch(r"\d+", ref), (
+        f"@{ref} is not a single increasing version number — the current "
+        "scheme's tag shape (the retired semver ref shape is gone)")
     assert "with:" in text and "GH_TOKEN" in text and "secrets:" in text
-    # the README's consumption example agrees on the owner and the ref
+    # the deployed consumer workflow and the README's consumption example
+    # declare the same owner, the same path and the same tag (lock-step)
     readme = _read("README.md")
     rm = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", readme)
-    assert rm and rm.groups()[:2] == (owner, path), "README example drifted from the deployed workflow"
+    assert rm and rm.groups()[:3] == (owner, path, ref), (
+        "the README's example drifted from the deployed workflow — the "
+        "lock-step spans the full owner, path and ref")
     # the extension: all three consumer surfaces carry the four harness
     # provider secret entries in the same form — the factory declares them
     # in its workflow_call secrets: block, the deployed workflow and the
@@ -206,6 +221,53 @@ def test_consumer_workflow_pins_owner_and_version_tag():
             f"the deployed consumer workflow must wire {name} in its secrets: block"
         assert line in readme, \
             f"the README example must wire {name} in its secrets: block — same form as the deployed workflow"
+
+
+def test_factory_workflow_names_own_actions_by_full_ref():
+    """(reuse-by-ref "the factory's workflow names its own actions by
+    owner, repo and path") every step of the reusable workflow that invokes
+    one of the factory's own composite actions names it fully qualified —
+    MelvinKl/code-weaver/.github/actions/<name>@<ref>: owner, repo, path,
+    ref — and no own-action reference is a relative path (a relative path
+    in a called reusable workflow resolves against the calling repo's
+    checkout, which a target may hold no copy of the factory's actions in —
+    the run would crash at the first composite-action step); and every
+    own-action reference in the file shares one ref — the in-file half of
+    "a published version is self-consistent in its action references" (the
+    workflow and its actions are one version)."""
+    text = _read(".github/workflows/factory.yml")
+    own_refs = {}
+    for ln in text.splitlines():
+        m = re.search(r"uses:\s*(\S+)", ln)
+        if not m:
+            continue
+        value = m.group(1)
+        pm = re.search(r"(\.github/actions/[\w-]+)/?", value)
+        if pm is None:
+            continue  # a third-party action — owner-qualified against another repo
+        name = pm.group(1).rpartition("/")[2]
+        fm = re.fullmatch(r"MelvinKl/code-weaver/" + re.escape(pm.group(1))
+                          + r"@([\w.-]+)", value)
+        assert fm, (
+            f"own action {name!r} is referenced {value!r} — every own-action "
+            "reference must be fully qualified: the factory's owner, repo "
+            "and path, pinned to a version ref (a relative path would "
+            "resolve against the calling repo's checkout)")
+        own_refs[name] = fm.group(1)
+    assert set(own_refs) == {
+        "setup-pi", "baseline", "extract-stage", "plan-stage",
+        "implement-stage", "review-stage", "pi-run", "pr-open",
+        "gates-stage", "report"}, (
+        f"the workflow's own composite-action references are "
+        f"{sorted(own_refs)} — every stage job's composite action must "
+        "be named")
+    assert len(set(own_refs.values())) == 1, (
+        "every own-action reference in the workflow shares one ref — the "
+        f"workflow and its actions are one version: {own_refs}")
+    assert "./.github/actions" not in text, (
+        "a relative ./.github/actions reference remains in the workflow — "
+        "in a called reusable workflow it resolves against the calling "
+        "repo's checkout")
 
 
 def test_review_stage_judges_only_changed_feature_files():
