@@ -2069,6 +2069,21 @@ jobs:
                   sys.path.insert(0, scripts)
               try:
                   import common
+                  # import path — the shared module resolved from the stashed
+                  # runtime tree: bind the body's five bare-name plumbing calls
+                  # (the state dir, the state file, the log, the gh api, the
+                  # branch push) to the shared module's definitions, so the
+                  # body's bare-name calls resolve on that path and the step
+                  # completes its report instead of dying with an
+                  # undefined-name error before any of its report work; a
+                  # runner where the module does not resolve falls through to
+                  # the ImportError branch below, whose local fallback
+                  # definitions bind the same names
+                  state_dir = common.state_dir
+                  state_file = common.state_file
+                  log = common.log
+                  gh_api = common.gh_api
+                  push_branch = common.push_branch
               except ImportError:
                   def state_dir():
                       d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")

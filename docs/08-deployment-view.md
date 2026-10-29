@@ -3,7 +3,7 @@
 **Consume it by ref.** The target repo carries the short consumer
 workflow (chapter 4). It pins the factory by **owner, repo, path and a
 version tag** — `uses:
-MelvinKl/code-weaver/.github/workflows/factory.yml@5`. The oracle
+MelvinKl/code-weaver/.github/workflows/factory.yml@7`. The oracle
 pins that owner and a version tag: a moving branch ref (`@main`) is not a
 stable ref, so both the deployed consumer workflow and the README's
 consumption example declare the same owner and the same tag (the
@@ -27,7 +27,17 @@ first step from the factory repo at the ref the consumer relays as the
 ref bump selects the whole version at once (the workflow file and the
 tree its steps execute come from the same commit); tags are
 immutable, so targets pinned to an older ref keep working, and bumping
-the ref is the only change a target ever makes.
+the ref is the only change a target ever makes. Stage 15 keeps those
+pinned targets working with its own dual-path plumbing (chapter 6):
+where the pinned ref's runtime tree resolves no shared module (a ref
+that predates the module, or the legacy workspace-copy tree), the report
+step's `import common` fails and its `ImportError` branch runs the body
+on the local fallback definitions; on a healthy runner where the
+stashed tree resolves the module, the same names bind to the shared
+module's definitions instead. The two paths are behaviourally
+equivalent for the report's output — one ledger, one set of numbers on
+both the PR body and the issue comment — so a pinned target's report is
+complete, not degraded.
 
 **The runner environment.** No pre-installed or pre-configured pi is a
 pre-requisite of a runner labelled for the factory — the setup stage

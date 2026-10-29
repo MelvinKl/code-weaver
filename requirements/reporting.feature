@@ -63,3 +63,19 @@ Feature: Reporting
     Then the missing artifacts are downloaded with continue-on-error
     And the stage summary lists only the stages that actually ran
     And the run still concludes failure from the failed stage
+
+  @report
+  Scenario: The report step's plumbing is bound on a runner where the shared module imports
+    Given the report stage's step is inlined in the factory workflow
+    And the step calls its plumbing (the state dir, the state file, the log, the gh api, the branch push) by bare name
+    When the shared module the step imports resolves from the runtime tree
+    Then the step's plumbing names are bound for the step's body
+    And the step does not fail with an undefined-name error before any of its report work has run
+
+  @report
+  Scenario: The report step's fallback plumbing stays effective where the shared module cannot import
+    Given the report stage's step is inlined in the factory workflow
+    And the shared module the step imports does not resolve from the runtime tree
+    When the step runs in that environment
+    Then the step's body runs on its local fallback definitions
+    And the step completes its report as on the import path

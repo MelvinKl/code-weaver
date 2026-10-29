@@ -101,14 +101,14 @@ jobs:
     # a reusable-workflow job may only carry `uses`/`with`/`secrets` — a
     # `runs-on:` here makes the file schema-invalid. Choose the runner
     # through the factory's `runner` input instead.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@4
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@7
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
-      factory-ref: 4   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
+      factory-ref: 7   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
@@ -233,7 +233,7 @@ factory.
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 153 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 155 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -241,7 +241,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **153 Gherkin scenarios** — the oracle this
+`requirements/` holds **155 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

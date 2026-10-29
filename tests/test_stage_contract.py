@@ -509,7 +509,8 @@ def _report_action_source() -> str:
 
 def _run_report_action(run_result="success", pr_number="7", issue_number="42",
                        ledger=None, model="Ornith-1.5-35B-A3B",
-                       view_body="## Progress so far"):
+                       view_body="## Progress so far",
+                       shared_module="fallback"):
     """Exec the report action's inline python in a sandbox: a plain temp
     workspace (no git repo, no doc dir, no PLAN.md — the arc42-activity
     path has nothing to touch), a temp RUNNER_TEMP carrying the merged
@@ -522,7 +523,22 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
     completion (already merged / edit refused), a body carrying the
     '## Final status' marker simulates a verified completion. Returns
     (the final PR body, the issue comment, whether the source issue was
-    closed)."""
+    closed).
+
+    `shared_module` parameterises the step's `import common` resolution:
+    the default "fallback" is the forced-fallback setup every standing
+    test in this file relies on — the scripts dir scrubbed from sys.path
+    and the `common` module popped from sys.modules, so the import fails
+    and the body runs on the step's local fallback definitions (the path
+    this runner build takes in production); "import" instead stashes a
+    copy of the repo's .github tree into the sandbox's
+    $RUNNER_TEMP/cw/stash — the tree the report job's first step stashes
+    before its first checkout — so the step's own scripts-dir insertion
+    resolves the shared module from the stashed tree and the shared
+    module's definitions bind the body's five plumbing names (the import
+    path task 1's test pins). The `common` module is popped from
+    sys.modules either way: a module another test module cached would
+    satisfy the import in place of the tree."""
     import shutil
     import tempfile
     ws = tempfile.mkdtemp(prefix="cw-report-ws-")
@@ -589,19 +605,32 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
     })
     hook, cwd = sys.excepthook, os.getcwd()
     os.chdir(ws)
-    # the action's `import common` must fail here, as it does on this
-    # runner build (the action dir's `/./` segment breaks the scripts path
-    # resolution): the action then runs on its local fallback definitions
-    # — the path production takes. Otherwise a `common` already imported
-    # by another test module in this process (or the scripts dir already on
-    # sys.path) would satisfy the import and the fallback definitions
-    # would never land.
-    scripts_dir = os.path.realpath(
-        os.path.join(ROOT, ".github", "scripts"))
-    path_saved = list(sys.path)
-    sys.path[:] = [p for p in sys.path
-                   if p and os.path.realpath(p) != scripts_dir]
+    # a `common` module another test module cached in this process is
+    # popped first (restored in the finally): it would satisfy the step's
+    # import in place of the tree and the resolution under test would not
+    # be the one that ran.
     common_mod = sys.modules.pop("common", None)
+    path_saved = list(sys.path)
+    if shared_module == "fallback":
+        # the forced-fallback setup every standing test in the file relies
+        # on: the action's `import common` must fail here, as it does on
+        # this runner build (the action dir's `/./` segment breaks the
+        # scripts path resolution): the action then runs on its local
+        # fallback definitions — the path production takes. Otherwise the
+        # scripts dir already on sys.path would satisfy the import and the
+        # fallback definitions would never land.
+        scripts_dir = os.path.realpath(
+            os.path.join(ROOT, ".github", "scripts"))
+        sys.path[:] = [p for p in sys.path
+                       if p and os.path.realpath(p) != scripts_dir]
+    else:
+        # the import path: the report job's first step stashed the runtime
+        # tree to $RUNNER_TEMP/cw/stash before its first checkout — the
+        # copy below is that same tree, so the step's own scripts-dir
+        # insertion puts a resolvable scripts dir at the front of sys.path
+        # and the shared module resolves from the stashed tree
+        shutil.copytree(os.path.join(ROOT, ".github"),
+                        os.path.join(cw, "stash", ".github"))
     out = {"pr_body": "", "comment": ""}
     try:
         try:
@@ -622,6 +651,11 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
         sys.path[:] = path_saved
         if common_mod is not None:
             sys.modules["common"] = common_mod
+        else:
+            # the import path ran: drop the module it loaded from the
+            # stash (the temp tree is removed below) so no later test
+            # picks it up
+            sys.modules.pop("common", None)
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -631,6 +665,234 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
         shutil.rmtree(rt, ignore_errors=True)
         shutil.rmtree(fake, ignore_errors=True)
     return out["pr_body"], out["comment"], out["closed"]
+
+
+def test_report_step_plumbing_is_bound_on_the_import_path():
+    """(reporting "The report step's plumbing is bound on a runner where the
+    shared module imports" — new scenario) on a runner where the shared
+    module resolves from the runtime tree the report job stashed to
+    $RUNNER_TEMP before its first checkout, the step's `import common`
+    succeeds, and its five plumbing names — the state dir, the state file,
+    the log, the gh api, the branch push — are bound for the step's body to
+    the shared module's definitions: the body's bare-name calls resolve on
+    that path, the step does not die with an undefined-name error before
+    any of its report work has run (the crash wrapper's stage-fail-reason
+    diagnosis is not produced), and the report completes (the final PR body
+    carries the final status, the issue comment is posted, a successful run
+    closes the source issue). The sandbox mirrors the standing harness (a
+    temp workspace, a merged-state RUNNER_TEMP, a fake `gh` on PATH) with
+    the import resolution flipped: the stashed runtime tree carries a
+    resolvable scripts dir, so the step's own scripts-dir insertion puts the
+    shared module on sys.path and the import lands. A `common` cached in
+    sys.modules by another test module would satisfy the import without
+    resolving from the stashed tree — it is popped for the run (restored
+    after) so the stash is the resolution source."""
+    import shutil
+    ws = tempfile.mkdtemp(prefix="cw-report-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-report-rt-")
+    cw = os.path.join(rt, "cw")
+    os.makedirs(cw)
+    # the report job's first step stashed the runtime tree to
+    # $RUNNER_TEMP/cw/stash before its first checkout — the tree the step's
+    # scripts-dir resolution reads, so on a runner where that path works the
+    # shared module resolves from the stash
+    shutil.copytree(os.path.join(ROOT, ".github"),
+                    os.path.join(cw, "stash", ".github"))
+    with open(os.path.join(cw, "resolved-config.txt"), "w", encoding="utf-8") as f:
+        f.write("### Code Weaver — resolved configuration "
+                "(workflow log; never committed)\n"
+                "- issue: #42\n"
+                "- LLM model (which configured model): `Ornith-1.5-35B-A3B`\n"
+                "- caps: max-loops=`5` (0 = no cap)\n")
+    with open(os.path.join(cw, "stage-summary.txt"), "w", encoding="utf-8") as f:
+        f.write("stage 4 extract: clean — stage complete\n")
+    fake = tempfile.mkdtemp(prefix="cw-report-fake-")
+    binp = os.path.join(fake, "bin")
+    os.makedirs(binp)
+    comment_f = os.path.join(fake, "issue-comment.txt")
+    # a PR view carrying the '## Final status' marker: a verified completion
+    view_json = json.dumps(
+        {"body": "## Progress so far\n\n## Final status\n"
+                "- **Run result:** success\n",
+         "head": {"sha": "f" * 40, "ref": "ai/code-weaver/42"},
+         "html_url": "https://gh.example/pr/7"})
+    with open(os.path.join(binp, "gh"), "w", encoding="utf-8") as f:
+        f.write("#!%s\n" % sys.executable +
+                "import json, os, sys\n"
+                "args = sys.argv[1:]\n"
+                "body = ''\n"
+                "for a in args:\n"
+                "    if a.startswith('body='):\n"
+                "        body = a[len('body='): ]\n"
+                "if args[:1] == ['api'] and any('pulls/' in a for a in args):\n"
+                f"    print({view_json!r})\n"
+                "    sys.exit(0)\n"
+                "if args[:1] == ['api'] and 'state=closed' in args:\n"
+                "    open(os.environ['FAKE_GH_OUT'] + '.closed', 'w')"
+                ".write('closed')\n"
+                "if body:\n"
+                "    open(os.environ['FAKE_GH_OUT'], 'w').write(body)\n"
+                "if args[:2] == ['pr', 'edit'] and '--body-file' in args:\n"
+                "    bf = args[args.index('--body-file') + 1]\n"
+                "    open(os.environ['FAKE_GH_OUT'] + '.pr-body', 'w')"
+                ".write(open(bf).read())\n")
+    os.chmod(os.path.join(binp, "gh"), 0o755)
+    keys = ("PATH", "RUNNER_TEMP", "GITHUB_WORKSPACE", "GITHUB_REPOSITORY",
+            "GH_TOKEN", "GITHUB_ACTION_PATH", "AI_BRANCH", "DOC_DIR",
+            "CW_RUN_RESULT", "CW_PR_NUMBER", "CW_ISSUE_NUMBER", "FAKE_GH_OUT")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "PATH": binp + os.pathsep + (saved["PATH"] or ""),
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "GITHUB_REPOSITORY": "code-weaver/test-target",
+        "GH_TOKEN": "fake-token",
+        "GITHUB_ACTION_PATH": "",
+        "FAKE_GH_OUT": comment_f,
+        "CW_RUN_RESULT": "success",
+        "CW_ISSUE_NUMBER": "42",
+        "CW_PR_NUMBER": "7",
+    })
+    hook, cwd = sys.excepthook, os.getcwd()
+    common_mod = sys.modules.pop("common", None)
+    path_saved = list(sys.path)
+    os.chdir(ws)
+    ns = {"__name__": "cw_report_action_import_path"}
+    crashed = False
+    pr_body = comment = ""
+    closed = False
+    try:
+        try:
+            exec(compile(_report_action_source(),
+                          "<report action.yml run block>", "exec"), ns)
+        except SystemExit:
+            pass
+        crashed = os.path.isfile(os.path.join(cw, "stage-fail-reason.txt"))
+        pf = os.path.join(cw, "final-pr-body.md")
+        if os.path.isfile(pf):
+            pr_body = open(pf, encoding="utf-8").read()
+        if os.path.isfile(comment_f):
+            comment = open(comment_f, encoding="utf-8").read()
+        closed = os.path.isfile(comment_f + ".closed")
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        sys.path[:] = path_saved
+        if common_mod is not None:
+            sys.modules["common"] = common_mod
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(fake, ignore_errors=True)
+    # the shared module resolved from the stashed runtime tree — the import
+    # path's resolution source, not a copy elsewhere on sys.path
+    mod = ns.get("common")
+    assert isinstance(mod, types.ModuleType), \
+        "the import path: `import common` must resolve the shared module"
+    assert os.path.realpath(mod.__file__).startswith(
+        os.path.realpath(os.path.join(cw, "stash", ".github", "scripts"))), \
+        ("the shared module must resolve from the runtime tree the job "
+         f"stashed to $RUNNER_TEMP, got {mod.__file__!r}")
+    # the five plumbing names are bound for the step's body to the shared
+    # module's definitions — the body's bare-name calls resolve on the
+    # import path
+    for name in ("state_dir", "state_file", "log", "gh_api", "push_branch"):
+        assert ns.get(name) is getattr(mod, name), \
+            (f"the import path must bind the body's {name} to the shared "
+             f"module's definition, got {ns.get(name)!r}")
+    # the step completes rather than crashing: the crash wrapper's
+    # stage-fail-reason diagnosis (the one it writes before any report work)
+    # is not produced — an undefined-name error would have written it
+    assert not crashed, \
+        ("the step died with an error before any report work — the crash "
+         "wrapper's diagnosis was produced on the import path")
+    # the report completes on the import path: the final PR body carries the
+    # final status, the issue comment is posted, a successful run closes the
+    # source issue
+    assert "## Final status" in pr_body and "success" in pr_body, \
+        f"the final PR body must carry the final status: {pr_body!r}"
+    assert comment, "the issue comment must be posted on the import path"
+    assert closed, "a successful run closes the source issue"
+
+
+def test_report_fallback_plumbing_completes_the_report_as_the_import_path():
+    """(reporting "The report step's fallback plumbing stays effective
+    where the shared module cannot import" — new scenario; the "stays
+    effective" half is the standing stage-contract tests, which force the
+    import failure and assert the report the forced-fallback run
+    completes) where the shared module does not resolve from the runtime
+    tree, the step's ImportError branch stays in force — the body runs on
+    its local fallback definitions and completes its report AS ON THE
+    IMPORT PATH: the two paths are behaviourally equivalent for the
+    report's output — one ledger, one set of numbers on both surfaces.
+    The standing sandbox runs on both import resolutions (the
+    forced-fallback path the standing tests use — the scripts dir scrubbed
+    from sys.path, the `common` module popped; and the import path task 1
+    makes work — the shared module resolving from the runtime tree the job
+    stashed to $RUNNER_TEMP) and the two completed reports are asserted to
+    agree: the same final-status content on the PR-body surface and the
+    same issue comment — the usage totals, the stage outcomes, the
+    pointer-vs-self-contained comment form — and the same close state."""
+    ledger = ["10000 2000", "5000 1500"]
+    # the run's one ledger: the totals every surface of both paths'
+    # reports must carry
+    totals = ("- **Total input tokens:** 15000",
+              "- **Total output tokens:** 3500")
+    # the completion timestamp is minute-granularity and the two runs may
+    # straddle a minute boundary — normalise it before the equality
+    norm = lambda s: re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC",
+                            "<completed>", s)
+    # the two comment forms the completion verification selects: a
+    # verified completion keeps the pointer comment, a completion that
+    # could not be applied makes the comment self-contained
+    for view_body in ("## Progress so far\n\n## Final status\n- stale\n",
+                      "## Progress so far"):
+        fb_body, fb_comment, fb_closed = _run_report_action(
+            ledger=ledger, view_body=view_body)
+        im_body, im_comment, im_closed = _run_report_action(
+            shared_module="import", ledger=ledger, view_body=view_body)
+        for pr_body, comment, closed in (
+                (fb_body, fb_comment, fb_closed),
+                (im_body, im_comment, im_closed)):
+            # the report completes on that path: the PR body carries the
+            # final status, the usage totals and the stage outcomes
+            assert "## Final status" in pr_body and "success" in pr_body, \
+                f"the final PR body must carry the final status: {pr_body!r}"
+            for line in totals:
+                assert line in pr_body, \
+                    f"the PR body lists the run's totals: {pr_body!r}"
+                assert line in comment, \
+                    f"the issue comment lists the same totals: {comment!r}"
+            assert "### Stage outcomes" in pr_body, pr_body
+            assert "stage 4 extract: clean" in pr_body, pr_body
+            if "## Final status" in view_body:
+                assert "final status is in the PR body" in comment, \
+                    (f"a verified completion keeps the pointer comment: "
+                     f"{comment!r}")
+            else:
+                assert "could not be completed" in comment, comment
+                assert "### Stage outcomes" in comment, comment
+                assert "stage 4 extract: clean" in comment, comment
+            assert closed, "a successful run closes the source issue"
+        # the two completed reports agree: the same final-status content
+        # on the PR-body surface and the same issue comment (the usage
+        # totals, the stage outcomes, the pointer-vs-self-contained form)
+        # and the same close state
+        assert norm(im_body) == norm(fb_body), \
+            ("the fallback-completed report must equal the import path's: "
+             f"{im_body!r} != {fb_body!r}")
+        assert norm(im_comment) == norm(fb_comment), \
+            ("the fallback-completed issue comment must equal the import "
+             f"path's: {im_comment!r} != {fb_comment!r}")
+        assert im_closed == fb_closed, \
+            (f"the close state must agree on both paths: "
+             f"{im_closed} != {fb_closed}")
 
 
 def test_report_lists_usage_totals_assembled_from_the_ledger():

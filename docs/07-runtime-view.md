@@ -18,7 +18,17 @@ dropping a value for one downstream job while the next job received it;
 `GITHUB_ENV`, fed by the trigger artifact's state files, is the per-job
 in-process channel). The stage records its stage baseline (the branch
 tip as the stage started) so its guard judges only that stage's work;
-earlier stages' committed outputs are never off-limits.
+earlier stages' committed outputs are never off-limits. The report job's
+inlined status-report step draws its plumbing names across the same stash
+boundary (chapter 6: the runtime tree in `$RUNNER_TEMP`): where the shared
+module resolves from the stashed tree the step's `import common` binds the
+body's five bare-name plumbing calls (the state dir, the state file, the
+log, the gh api, the branch push) to the shared module's definitions; where
+the module does not resolve on that runner, the step's `ImportError`
+branch binds the same names to local fallback definitions in the step —
+the body's calls are unchanged on both paths, and the reports the two
+paths complete agree (one ledger, one set of numbers on both the PR body
+and the issue comment).
 
 **Resume semantics.** A re-triggered run for an issue whose AI branch
 already exists reuses that branch — every stage runs again from the

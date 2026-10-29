@@ -26,7 +26,7 @@ jobs:
       target-branch: main
       llm-model: Qwen3.8  # which configured model — the one adjustable LLM setting
       runner: self-hosted      # runner label the stage jobs run on (pi is installed & configured for the run by stage 2)
-      factory-ref: 4   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
+      factory-ref: 7   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
