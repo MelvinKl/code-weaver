@@ -21,15 +21,18 @@ jobs:
     # the factory repo at a pinned ref (the public release line the external
     # targets pin). The job therefore calls THIS repo's own copy of the
     # factory workflow — a relative uses: (the runner reads the file from
-    # the triggering commit) — and the factory-ref input stays empty, so
-    # each stage job's first step stashes the workspace's own .github /
-    # pi-prompts tree before the stage's first checkout replaces it: the
-    # run's workflow file and the runtime tree its stage steps execute are
-    # one version — the triggered repo's own (requirements/reuse-by-ref.feature,
+    # the triggering commit). The file's embedded runtime tree is the
+    # repo's own tree at that commit (the embed's contract test keeps it
+    # fresh: a commit whose file carries a stale tree fails the suite), so
+    # the run's workflow file and the runtime tree its stage steps execute
+    # are one version — the triggered repo's own (requirements/reuse-by-ref.feature,
     # "a run triggered in the factory's own repo works on that repo's code").
+    # The (legacy) factory-ref input stays undeclared — no stage reads it
+    # anymore; the file carries its runtime tree embedded.
     # External targets keep the pinned-tag pattern instead:
     # uses: MelvinKl/code-weaver/.github/workflows/factory.yml at a version
-    # tag, relayed beside it as the factory-ref input.
+    # tag — one pin: the file carries its runtime tree, so no relayed
+    # ref accompanies it.
     uses: ./.github/workflows/factory.yml
     with:
       max-loops: 25

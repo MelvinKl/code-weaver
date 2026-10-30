@@ -25,12 +25,15 @@ never appears in a `with:` input or a committed file.
 The consumer workflow is the **only per-target code** — it stays short
 and stable (it declares the `labeled`-only issue trigger plus a manual
 dispatch; opening or editing an issue schedules no run), carries no
-pipeline logic, and references the factory by owner, repo, path and ref.
-The oracle pins the owner (`MelvinKl`) and a **version tag** — a moving
-branch ref is not a stable ref. The one declared exception is the factory
-project's own repo (chapter 8): its consumer workflow calls its own copy
-of the factory workflow by relative path with the `factory-ref` input
-left empty, so a run triggered in it works the code of the repo it was
+pipeline logic, and references the factory by owner, repo, path and ref
+— one pin: the file at the ref carries its runtime tree embedded, so no
+second ref accompanies it. The oracle pins the owner (`MelvinKl`) and a
+**version tag** — a moving branch ref is not a stable ref. The one
+declared exception is the factory project's own repo (chapter 8): its
+consumer workflow calls its own copy of the factory workflow by relative
+path — the file's embedded runtime tree is the repo's own (the embed's
+contract test keeps it fresh, and the release flow gates publication on
+it), so a run triggered in it works the code of the repo it was
 triggered in.
 
 **In scope** — the 15-stage pipeline (chapter 5/6): trigger, setup-pi,

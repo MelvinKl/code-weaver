@@ -50,20 +50,22 @@
   repo) after each run.
 - **Reuse by ref** — the factory lives in this repo and is referenced by
   ref (the self-contained reusable workflow + the runtime tree its stage
-  steps execute — the scripts and the pi prompt templates, in the same
-  repo); the consumer relays that ref as the `factory-ref` input and each
-  stage job's first step clones the runtime tree from the factory repo at
-  it, so the ref selects the workflow and its runtime tree as one version
-  from the factory repo, a ref bump
+  steps execute — the scripts and the pi prompt templates, embedded in
+  the workflow file as a base64 tarball stage 1 materialises into the
+  runner's temp dir, riding the trigger's artifact to every later stage
+  job) — so the ref on the consumer's `uses:` line is the only pin a run
+  makes (the `factory-ref` input is a legacy no-op), the ref selects the
+  workflow file and its runtime tree as one version from the factory
+  repo, a ref bump
   selects them as one version, and targets pinned to an older ref keep
   working — an upgrade is a one-line ref bump, and every published
   version — an older `vX.Y.Z` tag or a new single-number tag — is a
   stable ref. A repo that is the factory project itself consumes its own
-  copy instead (a relative `uses:` of the workflow in its own repo, the
-  `factory-ref` input empty): a run triggered in it works the repo's own
-  tree — the workflow file and the runtime tree its stage steps execute
-  are one version, the triggered repo's own, never a clone of the factory
-  repo at a pinned ref.
+  copy instead (a relative `uses:` of the workflow in its own repo; the
+  embedded tree is that repo's own at the triggered commit): a run
+  triggered in it works the repo's own tree — the workflow file and the
+  runtime tree its stage steps execute are one version, the triggered
+  repo's own, never a clone of the factory repo at a pinned ref.
 - **Satisfied no-op** — a re-run of work already on the branch: the
   model's empty answer with a non-empty diff against the run's baseline
   means the work is in place — the stage is green, not an error.

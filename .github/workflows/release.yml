@@ -11,12 +11,23 @@
 # permission — that is not a scope available to it — so the flow must
 # never push a commit that updates a workflow file; it never does.)
 #
-# The published version is one file: factory.yml is self-contained — its
-# stage steps are inlined and each stage job stashes the runtime tree it
-# executes from the called repo at the called ref — so the tag needs no
-# pre-tag rewrite of own-action refs (there are no own-action refs left
-# to rewrite). Tags are immutable: a target that pinned an older ref keeps
-# working; upgrading is a one-line ref bump in the target's workflow.
+# The published version is one file: factory.yml is self-contained —
+# its stage steps are inlined, and its runtime tree (the .github
+# scripts, the stage scripts, the pi prompt templates) is embedded in
+# the file — a base64 tarball stage 1 materialises — so the tag needs
+# no pre-tag rewrite of anything: there are no own-action refs left to
+# rewrite, and no runtime tree to fetch (the file carries it). A target
+# pins the version exactly once — its uses: ref: the file at the ref IS
+# the whole version, workflow logic and runtime tree together — and no
+# stage reads a relayed ref, because there is no second ref to relay.
+# The rewrite the old design did at release time (on a throwaway
+# branch, a push the publishing principal is refused) is now committed
+# to main by the maintainer (the `embed` make target), and this flow's
+# role in it is to gate publication on its correctness: the step below
+# verifies the committed file's embedded tree against the committed
+# runtime tree, and a stale version is not published. Tags are
+# immutable: a target that pinned an older ref keeps working; upgrading
+# is a one-line ref bump in the target's workflow.
 #
 # One machinery note: the `gh` CLI refuses to run inside a GitHub Actions
 # job unless `GH_TOKEN` is set in the step env (it does not fall back to
@@ -41,6 +52,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Verify the published file's rewrite is fresh
+        # The release pipeline's rewrite of the published file is the
+        # embedded runtime tree (the one-ref-is-one-version mechanism the
+        # consumer's single uses: pin relies on). The rewrite is committed
+        # to main by the maintainer — the flow itself must never push a
+        # commit that updates a workflow file (the `workflows` scope the
+        # App cannot be granted) — so the flow's part of the rewrite is
+        # read-only: gate publication on its correctness. A commit whose
+        # file carries a stale tree (the maintainer changed
+        # .github/scripts, .github/actions or pi-prompts without
+        # re-running `make embed`) must not be published — fail here,
+        # before the tag, with the exact cause.
+        run: |
+          python3 .github/scripts/embed-runtime.py --check || {
+            echo "::error::the committed factory.yml carries a stale embedded runtime tree — re-run \`make embed\` in the commit that changed the runtime tree and re-push; a stale version must not be published"
+            exit 1
+          }
       - name: Publish the release
         env:
           # the gh CLI refuses to run in an Actions job unless GH_TOKEN is

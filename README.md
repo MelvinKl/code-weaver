@@ -108,7 +108,6 @@ jobs:
       target-branch: main
       llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
-      factory-ref: 7   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
@@ -121,17 +120,22 @@ jobs:
       PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
 ```
 
-**Why the consumer relays the ref.** GitHub fetches only the called
+**Why the consumer pins once.** GitHub fetches only the called
 workflow's file — the runner never checks the factory repo into the
-target's workspace — so the called ref is not visible to the stage jobs.
-The `factory-ref` input relays it: each stage job's first step then
-clones the factory's runtime tree (the stage scripts, the shared scripts,
-the pi prompt templates) from the factory repo at exactly that ref, into
-the runner's temp dir, before the stage's checkout replaces the
-workspace with the target. A consumer that omits the input falls back to
-copying whatever `.github` / `pi-prompts` tree the workspace holds —
-reliable only on a runner whose workspace the same repo last occupied,
-and the mechanism that breaks a cross-repo run otherwise.
+target's workspace — so the called ref is not visible to the stage
+jobs. The old answer relayed the ref as a `factory-ref` input (a second
+pin beside the `uses:` line) and had each stage job clone the factory
+repo at it; the restored-and-improved answer carries the answer in the
+file instead: the workflow's runtime tree (the stage scripts, the
+shared scripts, the pi prompt templates) is **embedded in the workflow
+file** — a base64 tarball in stage 1's first step, which materialises
+it into the runner's temp dir before any checkout replaces the
+workspace, and the trigger's artifact carries it to every later stage
+job's first step. No run fetches the factory repo, and no stage reads
+the `factory-ref` input (a legacy no-op, still declared so an older
+consumer's `with:` block stays schema-valid): the ref on the `uses:`
+line is the only version selection a run makes — one ref selects the
+workflow file and its runtime tree as one version.
 
 The `GH_TOKEN` secret holds the token every factory stage authenticates with
 — it must be a token that **can read the target repo** (its user/app a member
@@ -139,14 +143,12 @@ of the owning org; a fine-grained PAT scoped to *this* repository). Stage 1
 verifies this up front: a missing, dead or wrongly-scoped token fails within
 seconds with the exact cause in the log — not as an opaque red checkout.
 
-**Upgrading is a ref bump** in that `uses:` line — and in the
-`factory-ref` input beside it, which carries the same ref so the stage
-jobs clone the factory's runtime tree from the factory repo at exactly
-the version the `uses:` line selects: the ref then selects the reusable
-workflow — self-contained, its stage steps inlined in the workflow file
-and the runtime tree its steps execute (the scripts, the pi prompt
-templates) shipping in the same repo — as one version from the factory
-repo; a ref bump selects the whole version.
+**Upgrading is a ref bump** in that `uses:` line — and that is the only
+pin: the file at the ref carries the runtime tree its steps execute (the
+scripts, the pi prompt templates) embedded in it, so the ref selects the
+reusable workflow — self-contained, its stage steps inlined in the
+workflow file and its runtime tree embedded in the file — as one version
+from the factory repo; a ref bump selects the whole version.
 **Every published version is a stable ref**: a push to the factory's `main`
 branch publishes the next single increasing number as a GitHub release;
 targets pinned to an older ref keep working.
@@ -165,7 +167,7 @@ targets pinned to an older ref keep working.
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
-| `factory-ref` | *(empty)* | ref of the factory repo the stage jobs clone their runtime tree from — it must match the `uses:` line (one ref then selects the workflow file and the runtime tree as one version); empty falls back to the workspace's own tree — a repo that is the factory project itself relies on that fallback on purpose: its workflow calls its own copy of the factory workflow (a relative `uses:`) and a run triggered in it works the code of the repo it was triggered in (chapter 8) |
+| `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is embedded in the workflow file, so the ref on the `uses:` line is the only pin a run makes (a repo that is the factory project itself calls its own copy of the factory workflow — a relative `uses:` — and a run triggered in it works the code of the repo it was triggered in, chapter 8) |
 
 The **LLM backend is provided for the run** — via a GitHub secret or the
 repo file `.pi/agent/models.json`. The runner's pre-existing user-level
@@ -211,11 +213,11 @@ factory.
 ```
 .github/
   workflows/
-    factory.yml        the 15-stage pipeline as one self-contained reusable workflow (the stage steps inlined in the file; no composite actions)
+    factory.yml        the 15-stage pipeline as one self-contained, self-carrying reusable workflow (the stage steps inlined in the file; the runtime tree embedded in it as a base64 tarball — one ref is one version; no composite actions)
     house-ci.yml       this repo's own gate (uv; compile+YAML+oracle+pytest)
     release.yml        push to main → next single increasing number → GitHub release (the ref targets pin; the default GITHUB_TOKEN publishes the tag on main's HEAD — no special token)
   actions/
-    <stage>/           the stage's python script — the stage's STEPS are inlined in factory.yml (the workflow is self-contained: no composite actions to reference, no own-action ref for the release to rewrite); each dir holds the script its inlined stage step runs
+    <stage>/           the stage's python script — the stage's STEPS are inlined in factory.yml (the workflow is self-contained: no composite actions to reference, no own-action ref for the release to rewrite, no runtime tree for a stage job to fetch — the file carries it embedded); each dir holds the script its inlined stage step runs
     setup-pi/          stage 2 — install pi for the run + write the provided harness + backend/model checks
     pi-run/            one headless `pi --print` run (the stage primitive)
     baseline/          stage 3 — branch ai/code-weaver/<issue> + baseline ref
@@ -232,6 +234,7 @@ factory.
     stages.py          the shared generation/review loop machinery
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
+    embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
 requirements/          the Gherkin oracle for THIS repo (15 files, 156 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
