@@ -1,17 +1,27 @@
 # 8. Deployment View
 
 **Consume it by ref.** The target repo carries the short consumer
-workflow (chapter 4). It pins the factory by **owner, repo, path and a
-version tag** — `uses:
-MelvinKl/code-weaver/.github/workflows/factory.yml@7`. The oracle
-pins that owner and a version tag: a moving branch ref (`@main`) is not a
-stable ref, so both the deployed consumer workflow and the README's
-consumption example declare the same owner and the same tag (the
+workflow (chapter 4). An external target pins the factory by **owner,
+repo, path and a version tag** — `uses:
+MelvinKl/code-weaver/.github/workflows/factory.yml@<version tag>` — and
+relays that tag as the `factory-ref` input. The oracle pins the owner and
+a version tag: a moving branch ref (`@main`) is not a stable ref, so both
+the deployed consumer workflow and the README's consumption example
+declare the same owner and the same tag (the
 trigger-contract tests keep the two surfaces in lock-step on the
-`labeled`-only trigger). Its `secrets:` block carries `GH_TOKEN` (the only
-required one) plus the four optional harness-provider secrets
-(`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`, `PI_EXTENSION_ENV`) — a provider
-value never appears in a `with:` input or a committed file.
+`labeled`-only trigger). **This repo is the declared exception — the
+factory project itself**: its workflow calls its own copy of the factory
+workflow (a relative `uses:`, read from the triggering commit) and
+leaves the `factory-ref` input empty, so a run triggered in it checks and
+works the code of the repo it was triggered in — each stage job stashes
+the workspace's own `.github` / `pi-prompts` tree before the first
+checkout replaces it, and the run's workflow file and the runtime tree
+its stage steps execute are one version: the triggered repo's own, never
+a clone of the factory repo at a pinned ref. Its `secrets:` block carries
+`GH_TOKEN` (the only required one) plus the four optional
+harness-provider secrets (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`,
+`PI_EXTENSION_ENV`) — a provider value never appears in a `with:` input
+or a committed file.
 
 **Upgrades are a ref bump.** `release.yml` fires on the main branch's
 advance: it tags the advance's head with the next single increasing
@@ -27,7 +37,9 @@ first step from the factory repo at the ref the consumer relays as the
 ref bump selects the whole version at once (the workflow file and the
 tree its steps execute come from the same commit); tags are
 immutable, so targets pinned to an older ref keep working, and bumping
-the ref is the only change a target ever makes. Stage 15 keeps those
+the ref is the only change a target ever makes. A run triggered in the
+factory project's own repo has no ref to bump: it always works the
+triggering commit's tree — the repo's own commits are its upgrades. Stage 15 keeps those
 pinned targets working with its own dual-path plumbing (chapter 6):
 where the pinned ref's runtime tree resolves no shared module (a ref
 that predates the module, or the legacy workspace-copy tree), the report

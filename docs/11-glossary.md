@@ -27,7 +27,7 @@
   that DID change scenarios with zero parseable verdicts still fails the
   stage — the oracle cannot be assumed green.
 - **Oracle** — the Gherkin requirements under `requirements/` (15 files,
-  155 scenarios), structured by topic: each file is named after the topic
+  156 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
@@ -58,7 +58,12 @@
   selects them as one version, and targets pinned to an older ref keep
   working — an upgrade is a one-line ref bump, and every published
   version — an older `vX.Y.Z` tag or a new single-number tag — is a
-  stable ref.
+  stable ref. A repo that is the factory project itself consumes its own
+  copy instead (a relative `uses:` of the workflow in its own repo, the
+  `factory-ref` input empty): a run triggered in it works the repo's own
+  tree — the workflow file and the runtime tree its stage steps execute
+  are one version, the triggered repo's own, never a clone of the factory
+  repo at a pinned ref.
 - **Satisfied no-op** — a re-run of work already on the branch: the
   model's empty answer with a non-empty diff against the run's baseline
   means the work is in place — the stage is green, not an error.

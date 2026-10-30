@@ -165,7 +165,7 @@ targets pinned to an older ref keep working.
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
-| `factory-ref` | *(empty)* | ref of the factory repo the stage jobs clone their runtime tree from — it must match the `uses:` line (one ref then selects the workflow file and the runtime tree as one version); empty falls back to the workspace's legacy tree |
+| `factory-ref` | *(empty)* | ref of the factory repo the stage jobs clone their runtime tree from — it must match the `uses:` line (one ref then selects the workflow file and the runtime tree as one version); empty falls back to the workspace's own tree — a repo that is the factory project itself relies on that fallback on purpose: its workflow calls its own copy of the factory workflow (a relative `uses:`) and a run triggered in it works the code of the repo it was triggered in (chapter 8) |
 
 The **LLM backend is provided for the run** — via a GitHub secret or the
 repo file `.pi/agent/models.json`. The runner's pre-existing user-level
@@ -233,7 +233,7 @@ factory.
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 155 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 156 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -241,7 +241,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **155 Gherkin scenarios** — the oracle this
+`requirements/` holds **156 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

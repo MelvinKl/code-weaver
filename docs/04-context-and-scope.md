@@ -27,7 +27,11 @@ and stable (it declares the `labeled`-only issue trigger plus a manual
 dispatch; opening or editing an issue schedules no run), carries no
 pipeline logic, and references the factory by owner, repo, path and ref.
 The oracle pins the owner (`MelvinKl`) and a **version tag** — a moving
-branch ref is not a stable ref.
+branch ref is not a stable ref. The one declared exception is the factory
+project's own repo (chapter 8): its consumer workflow calls its own copy
+of the factory workflow by relative path with the `factory-ref` input
+left empty, so a run triggered in it works the code of the repo it was
+triggered in.
 
 **In scope** — the 15-stage pipeline (chapter 5/6): trigger, setup-pi,
 baseline, requirement-extraction (+ requirement check), planning (+ plan

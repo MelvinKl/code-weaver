@@ -16,9 +16,21 @@ jobs:
     # through the factory's `runner` input instead (every factory job runs on
     # it; pi is not a pre-requisite of its environment — stage 2 installs
     # and configures pi for the run).
-    # the oracle pins the owner and a VERSION TAG (a moving branch ref is not
-    # a stable ref)
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@8
+    # This repo IS the factory project — a run triggered in it must check
+    # and work the code of the repo it was triggered in, never a clone of
+    # the factory repo at a pinned ref (the public release line the external
+    # targets pin). The job therefore calls THIS repo's own copy of the
+    # factory workflow — a relative uses: (the runner reads the file from
+    # the triggering commit) — and the factory-ref input stays empty, so
+    # each stage job's first step stashes the workspace's own .github /
+    # pi-prompts tree before the stage's first checkout replaces it: the
+    # run's workflow file and the runtime tree its stage steps execute are
+    # one version — the triggered repo's own (requirements/reuse-by-ref.feature,
+    # "a run triggered in the factory's own repo works on that repo's code").
+    # External targets keep the pinned-tag pattern instead:
+    # uses: MelvinKl/code-weaver/.github/workflows/factory.yml at a version
+    # tag, relayed beside it as the factory-ref input.
+    uses: ./.github/workflows/factory.yml
     with:
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
@@ -26,7 +38,6 @@ jobs:
       target-branch: main
       llm-model: Qwen3.8  # which configured model — the one adjustable LLM setting
       runner: self-hosted      # runner label the stage jobs run on (pi is installed & configured for the run by stage 2)
-      factory-ref: 8   # the same ref as the uses: line — the stage jobs clone the factory's runtime tree from the factory repo at it
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives

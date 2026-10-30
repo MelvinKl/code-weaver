@@ -18,6 +18,18 @@
 # so the consumer relays the called ref as the factory-ref input and the
 # step clones the factory repo at that ref (an empty factory-ref falls
 # back to copying whatever tree the workspace holds).
+# Dogfood delta — this repo is the factory project itself: a run
+# triggered in it must check and work the code of the repo it was
+# triggered in, not a clone of the factory repo at a pinned ref. Its
+# consumer workflow therefore calls the repo's own copy of the factory
+# workflow (a relative uses: — the runner reads the file from the
+# triggering commit) and leaves the factory-ref input empty: each stage
+# job stashes the workspace's own .github / pi-prompts tree before the
+# first checkout replaces it, and the run's workflow file and the
+# runtime tree its stage steps execute are one version — the triggered
+# repo's own. The pinned-tag + relayed-ref pattern above stays the spec
+# for external targets (a target whose tree holds no copy of the factory's
+# runtime tree).
 
 Feature: Reuse by ref, never copy-paste
   As a maintainer of a target project
@@ -28,7 +40,8 @@ Feature: Reuse by ref, never copy-paste
   Scenario: The factory is invoked as a reusable workflow
     Given the target repo's workflow .github/workflows/code-weaver.yml
     When it invokes the factory
-    Then it uses MelvinKl/code-weaver/.github/workflows/factory.yml at a version tag
+    Then an external target uses MelvinKl/code-weaver/.github/workflows/factory.yml at a version tag and relays that tag as the factory-ref input
+    And a repo that is the factory project itself uses its own copy of the factory workflow — a relative uses: of the workflow file in its own repo — with the factory-ref input left empty
     And it passes issue-number and the factory settings via with
     And it passes GH_TOKEN via secrets
 
@@ -59,6 +72,14 @@ Feature: Reuse by ref, never copy-paste
     Then its first step clones the factory repo at that ref into the runner's temp dir
     And its stage steps run their scripts from that clone
     And the tree they run is the factory's at the called ref — the workflow file and the runtime tree are one version
+
+  @reuse
+  Scenario: A run triggered in the factory's own repo works on that repo's code
+    Given the triggered repo is the factory project itself — its tree holds the factory's own runtime tree
+    When a stage job starts
+    Then the run's workflow file is the repo's own copy of the factory workflow, read from the triggering commit — a relative uses:, never a clone of the factory repo at a pinned ref
+    And each stage job stashes the workspace's own .github / pi-prompts tree before its first checkout replaces the workspace and runs its stage steps from that stashed copy
+    And the run's workflow file and the runtime tree its stage steps execute are one version — the code of the repo the run was triggered in
 
   @reuse
   Scenario: An upgrade is a ref bump

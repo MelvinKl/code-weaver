@@ -186,32 +186,57 @@ def test_planner_context_falls_back_to_top_level_arc42():
 
 
 def test_consumer_workflow_pins_owner_and_version_tag():
-    """(reuse-by-ref "the factory is invoked as a reusable workflow") the
-    consumer workflow uses the oracle's owner at a version tag — a moving
-    branch ref is not a stable ref — and passes issue-number + the factory
-    settings via with: and GH_TOKEN via secrets:. The ref is a single
-    increasing number: the current scheme's tag shape (the retired
-    semver ref shape is gone — reuse-by-ref "every published version is
-    a stable ref": "its tag is a single increasing version number"). The
-    expected outcome extends to the run's pi harness providers
-    (configuration "The pi harness secrets ride the reusable workflow's
-    secrets block"): the same three surfaces — the factory's secrets:
-    block, the deployed consumer workflow, the README example — carry the
-    four provider secret entries in the same form, while the owner, path
-    and ref pin stays unchanged (the README's example is documentation,
-    not a pinned surface: the suite does not compare its ref against the
-    deployed workflow, so a release ref bump on one surface never fails
-    the suite until the other is synced)."""
+    """(reuse-by-ref "the factory is invoked as a reusable workflow" — both
+    of its consumption shapes — and "a run triggered in the factory's own
+    repo works on that repo's code") the consumer workflow consumes the
+    factory one of two ways and passes issue-number + the factory settings
+    via with: and GH_TOKEN via secrets:. An external target pins the
+    oracle's owner, repo and path at a version tag — a moving branch ref is
+    not a stable ref — and relays that tag as the factory-ref input (one
+    ref selects the workflow file and the runtime tree); the ref is a
+    single increasing number, the current scheme's tag shape (the retired
+    semver ref shape is gone — reuse-by-ref "every published version is a
+    stable ref"). This repo is the factory project itself, so its workflow
+    takes the other shape: a relative uses: of its own copy of the factory
+    workflow with the factory-ref input left empty — the stage jobs stash
+    and run the repo's own runtime tree, so a run triggered in it works the
+    code of the repo it was triggered in. The expected outcome extends to
+    the run's pi harness providers (configuration "The pi harness secrets
+    ride the reusable workflow's secrets block"): the same three surfaces —
+    the factory's secrets: block, the deployed consumer workflow, the README
+    example — carry the four provider secret entries in the same form, while
+    the uses: shape stays within its pattern (the README's example is
+    documentation, not a pinned surface: the suite does not compare its ref
+    against the deployed workflow, so a release ref bump on one surface
+    never fails the suite until the other is synced)."""
     text = _read(".github/workflows/code-weaver.yml")
-    m = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", text)
-    assert m, "no uses: line naming the factory"
-    owner, path, ref = m.groups()
-    assert owner == "MelvinKl", f"oracle pins the MelvinKl owner, found {owner}"
-    assert path.rstrip() == ".github/workflows/factory.yml"
-    assert re.fullmatch(r"\d+", ref), (
-        f"@{ref} is not a single increasing version number — the current "
-        "scheme's tag shape (the retired semver ref shape is gone)")
     assert "with:" in text and "GH_TOKEN" in text and "secrets:" in text
+    m = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", text)
+    if m:
+        # the external-target pattern: owner + path + a version tag, and
+        # the tag relayed beside it as the factory-ref input
+        owner, path, ref = m.groups()
+        assert owner == "MelvinKl", f"oracle pins the MelvinKl owner, found {owner}"
+        assert path.rstrip() == ".github/workflows/factory.yml"
+        assert re.fullmatch(r"\d+", ref), (
+            f"@{ref} is not a single increasing version number — the "
+            "current scheme's tag shape (the retired semver ref shape is gone)")
+        mref = re.search(r"factory-ref:\s*(\S+)", text)
+        assert mref and mref.group(1) == ref, (
+            "the pinned-tag pattern relays the uses: ref as the "
+            "factory-ref input (one ref selects the workflow file and the "
+            "runtime tree as one version)")
+    else:
+        # the dogfood pattern: a repo that is the factory project itself
+        # calls its own copy of the factory workflow — a relative uses: of
+        # the file in its own repo — and leaves the factory-ref input empty,
+        # so the stage jobs stash the workspace's own tree
+        mrel = re.search(r"uses:\s*\.?/?\.github/workflows/factory\.yml\b", text)
+        assert mrel, "no uses: line naming the factory"
+        assert not re.search(r"factory-ref:\s*\S+", text), (
+            "the dogfood pattern leaves the factory-ref input empty — the "
+            "stage jobs run the repo's own runtime tree, never a clone of "
+            "the factory repo at a pinned ref")
     readme = _read("README.md")
     # the extension: all three consumer surfaces carry the four harness
     # provider secret entries in the same form — the factory declares them
