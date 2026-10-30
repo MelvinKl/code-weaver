@@ -11,6 +11,13 @@
 # permission — that is not a scope available to it — so the flow must
 # never push a commit that updates a workflow file; it never does.)
 #
+# A re-run of the flow is a no-op: before cutting, the publish step
+# asks the shared-plumbing helper whether main's HEAD already carries a
+# numbered tag and, where it does, exits without publishing — one tag
+# per commit, the version series advancing only when main does. A
+# duplicate version (a number spent on a commit already tagged) is what
+# a consumer pin written for that number would otherwise land on.
+#
 # The published version is one file: factory.yml is self-contained —
 # its stage steps are inlined, and its runtime tree (the .github
 # scripts, the stage scripts, the pi prompt templates) is embedded in
@@ -92,6 +99,22 @@ jobs:
           # The release notes' "changed since" list is computed against
           # main's HEAD, so the notes list real main changes.
           CHANGES=$(git diff --stat "$RANGEFROM" HEAD -- .github pi-prompts requirements | tail -n +2)
+
+          # One tag per commit: a re-run of this flow at an unchanged
+          # HEAD (a workflow-dispatch retry) would otherwise spend the
+          # next number on a duplicate of a version already published —
+          # and a consumer pin written for the next number would land on
+          # the duplicate instead of on the change. A HEAD any numbered
+          # tag already points at publishes nothing: the version series
+          # advances only when main does. (The helper's guard shape:
+          # raw tag lines on stdin, the matching numbered tags on stdout,
+          # non-empty → skip.)
+          ALREADY=$(git ls-remote --tags origin \
+            | python3 .github/scripts/release-number.py --published-at "$(git rev-parse HEAD)")
+          if [ -n "$ALREADY" ]; then
+            echo "HEAD $(git rev-parse --short HEAD) is already published as $(printf '%s' "$ALREADY" | tr '\n' ' ') — a re-run of the release at an unchanged HEAD publishes nothing (one tag per commit)"
+            exit 0
+          fi
 
           # The tag points at main's HEAD — the commit this push delivered,
           # already on the remote. The push uploads only the tag object

@@ -192,15 +192,22 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     factory one of two ways and passes issue-number + the factory settings
     via with: and GH_TOKEN via secrets:. An external target pins the
     oracle's owner, repo and path at a version tag — a moving branch ref is
-    not a stable ref — and relays that tag as the factory-ref input (one
-    ref selects the workflow file and the runtime tree); the ref is a
-    single increasing number, the current scheme's tag shape (the retired
-    semver ref shape is gone — reuse-by-ref "every published version is a
-    stable ref"). This repo is the factory project itself, so its workflow
-    takes the other shape: a relative uses: of its own copy of the factory
-    workflow with the factory-ref input left empty — the stage jobs stash
-    and run the repo's own runtime tree, so a run triggered in it works the
-    code of the repo it was triggered in. The expected outcome extends to
+    not a stable ref — and passes no factory-ref of its own: the file is
+    self-contained (its runtime tree embedded), so the single pinned tag
+    selects workflow file and runtime tree as one version — while the
+    factory keeps the factory-ref input declared as a legacy no-op, and an
+    older version's consumer block that still passes it stays schema-valid.
+    The ref is a single increasing number, the current scheme's tag shape
+    (the retired semver ref shape is gone — reuse-by-ref "every published
+    version is a stable ref"). This repo is the factory project itself,
+    and its workflow takes the external shape too: it pins the public
+    release line (a version tag of the MelvinKl line), so the dogfood
+    exercises exactly the published version the external targets get —
+    the code a run in it works is still the triggered repo's own. The
+    test accepts either shape and asserts the contract of the shape the
+    file uses — in both, the with: block passes no factory-ref of its
+    own (one ref selects the whole version), while the factory keeps the
+    input declared as a legacy no-op. The expected outcome extends to
     the run's pi harness providers (configuration "The pi harness secrets
     ride the reusable workflow's secrets block"): the same three surfaces —
     the factory's secrets: block, the deployed consumer workflow, the README
@@ -213,24 +220,30 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     assert "with:" in text and "GH_TOKEN" in text and "secrets:" in text
     m = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", text)
     if m:
-        # the external-target pattern: owner + path + a version tag, and
-        # the tag relayed beside it as the factory-ref input
+        # the pinned pattern: owner + path + a version tag — and no
+        # factory-ref relayed beside it (the single-pin contract)
         owner, path, ref = m.groups()
         assert owner == "MelvinKl", f"oracle pins the MelvinKl owner, found {owner}"
         assert path.rstrip() == ".github/workflows/factory.yml"
         assert re.fullmatch(r"\d+", ref), (
             f"@{ref} is not a single increasing version number — the "
             "current scheme's tag shape (the retired semver ref shape is gone)")
-        mref = re.search(r"factory-ref:\s*(\S+)", text)
-        assert mref and mref.group(1) == ref, (
-            "the pinned-tag pattern relays the uses: ref as the "
-            "factory-ref input (one ref selects the workflow file and the "
-            "runtime tree as one version)")
+        assert not re.search(r"factory-ref:\s*\S+", text), (
+            "the single-pin pattern passes no factory-ref — one ref selects "
+            "the whole version, because the file is self-contained; the "
+            "input stays declared in the factory as a legacy no-op, so an "
+            "older version's consumer block that still passes it remains "
+            "schema-valid")
+        factory = _read(".github/workflows/factory.yml")
+        assert re.search(r"^\s*factory-ref:", factory, re.M), (
+            "the (legacy) factory-ref input stays declared in the factory's "
+            "inputs: block — schema compatibility for the with: blocks of "
+            "older published versions")
     else:
-        # the dogfood pattern: a repo that is the factory project itself
-        # calls its own copy of the factory workflow — a relative uses: of
-        # the file in its own repo — and leaves the factory-ref input empty,
-        # so the stage jobs stash the workspace's own tree
+        # the alternative shape: the consumer calls the factory's own
+        # copy by relative uses: (the runner reads the file from the
+        # triggering commit) and leaves the factory-ref input empty —
+        # the stages run the tree the file embeds
         mrel = re.search(r"uses:\s*\.?/?\.github/workflows/factory\.yml\b", text)
         assert mrel, "no uses: line naming the factory"
         assert not re.search(r"factory-ref:\s*\S+", text), (
@@ -251,6 +264,40 @@ def test_consumer_workflow_pins_owner_and_version_tag():
             f"the deployed consumer workflow must wire {name} in its secrets: block"
         assert line in readme, \
             f"the README example must wire {name} in its secrets: block — same form as the deployed workflow"
+
+
+def test_factory_upload_steps_opt_into_hidden_files():
+    """(the runtime tree the stage jobs execute — reuse-by-ref "a run is
+    the factory working the tree of the ref it ran") every stage job gets
+    the runtime tree from the trigger job's artifact, and the tree lives
+    under cw/stash/.github/ — inside a HIDDEN directory. The
+    actions/upload-artifact action excludes hidden files by default: a
+    step that uploads the run's state dir without
+    `include-hidden-files: true` silently drops the .github part of the
+    tree, and every stage job that downloads that artifact arrives with
+    its stashed stage script missing (run 41126074467 failed exactly this
+    way at stage 2, after the single-pin change put the tree in the
+    artifact instead of re-cloning it in each stage job)."""
+    lines = _read(".github/workflows/factory.yml").splitlines()
+    steps, cur = [], None
+    for ln in lines:
+        if re.match(r"^ {6}- \S", ln) or re.match(r"^  \S", ln):
+            if cur is not None:
+                steps.append(cur)
+            cur = [ln]
+        elif cur is not None:
+            cur.append(ln)
+    if cur is not None:
+        steps.append(cur)
+    uploads = [s for s in steps if "actions/upload-artifact" in s[0]]
+    assert uploads, "no upload-artifact steps found in the factory"
+    for s in uploads:
+        name = re.search(r"name:\s*(\S+)", "\n".join(s))
+        assert name and "include-hidden-files: true" in "\n".join(s), (
+            f"the {name.group(1) if name else 'unnamed'} upload step does "
+            "not opt into hidden files — the stashed tree under "
+            "cw/stash/.github/ would be dropped from its artifact and "
+            "every stage job would lose its stashed stage scripts")
 
 
 def test_factory_workflow_is_self_contained():

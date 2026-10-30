@@ -373,3 +373,28 @@ def test_no_documented_surface_states_the_retired_mechanism():
             assert marker not in text, (
                 f"{relpath} still states the retired release mechanism "
                 f"({marker!r})")
+
+
+def test_re_run_at_an_already_tagged_head_publishes_nothing():
+    """(reuse-by-ref "Every published version is a stable ref" — the
+    added And line: a re-run of the release at an unchanged HEAD
+    publishes nothing — one tag per commit, so a number is never spent
+    on a duplicate) the guard is the helper's second pure function:
+    fed the remote's whole `git ls-remote --tags` line list and a commit
+    sha, it names the numbered tag pointing at that sha — a non-empty
+    answer is the workflow's skip signal (a re-run of the flow at an
+    unchanged HEAD exits before the tag, publishing nothing). Annotated
+    tags' peeled `sha\trefs/tags/<name>^{}` lines never match, and the
+    older `vX.Y.Z` series is not a number."""
+    lines = [
+        "abc123\trefs/tags/12",
+        "abc123\trefs/tags/13",
+        "def456\trefs/tags/13^{}",
+        "def456\trefs/tags/v0.1.0^{}",
+        "abc123\trefs/tags/v0.1.0",
+        "def456\trefs/tags/14",
+    ]
+    assert release_number.published_at(lines, "abc123") == ["12", "13"]
+    assert release_number.published_at(lines, "def456") == ["14"]
+    assert release_number.published_at(lines, "nope") == []
+    assert release_number.published_at([], "abc123") == []

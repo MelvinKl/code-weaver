@@ -131,7 +131,9 @@ shared scripts, the pi prompt templates) is **embedded in the workflow
 file** — a base64 tarball in stage 1's first step, which materialises
 it into the runner's temp dir before any checkout replaces the
 workspace, and the trigger's artifact carries it to every later stage
-job's first step. No run fetches the factory repo, and no stage reads
+job's first step (that upload opts into hidden files — the tree lives
+under the hidden .github/ directory, which the artifact API would
+otherwise drop). No run fetches the factory repo, and no stage reads
 the `factory-ref` input (a legacy no-op, still declared so an older
 consumer's `with:` block stays schema-valid): the ref on the `uses:`
 line is the only version selection a run makes — one ref selects the
@@ -167,7 +169,7 @@ targets pinned to an older ref keep working.
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
-| `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is embedded in the workflow file, so the ref on the `uses:` line is the only pin a run makes (a repo that is the factory project itself calls its own copy of the factory workflow — a relative `uses:` — and a run triggered in it works the code of the repo it was triggered in, chapter 8) |
+| `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is embedded in the workflow file, so the ref on the `uses:` line is the only pin a run makes (the factory project's own repo pins the public release line too — a run triggered in it works the code of the repo it was triggered in, and the dogfood exercises the published version its external targets get, chapter 8) |
 
 The **LLM backend is provided for the run** — via a GitHub secret or the
 repo file `.pi/agent/models.json`. The runner's pre-existing user-level

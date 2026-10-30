@@ -10,16 +10,17 @@ and a version tag: a moving branch ref (`@main`) is not a stable ref, so
 both the deployed consumer workflow and the README's consumption example
 declare the same owner and the same tag (the
 trigger-contract tests keep the two surfaces in lock-step on the
-`labeled`-only trigger). **This repo is the declared exception — the
-factory project itself**: its workflow calls its own copy of the factory
-workflow (a relative `uses:`, read from the triggering commit) with the
-(legacy) `factory-ref` input left empty, so a run triggered in it checks
-and works the code of the repo it was triggered in — the file's embedded
-runtime tree is the repo's own tree at the triggered commit (the embed's
-contract test keeps it fresh, and the release flow gates publication on
-it), and the run's workflow file and the runtime tree its stage steps
-execute are one version: the triggered repo's own, never a clone of the
-factory repo at a pinned ref. Its `secrets:` block carries
+`labeled`-only trigger). **This repo is the factory project itself — and
+its workflow uses the same shape as its external targets**: it pins the
+public release line (a version tag of the MelvinKl line) with the
+(legacy) `factory-ref` input left undeclared, so the dogfood exercises
+exactly the published version the external targets get — a broken
+release breaks the dogfood visibly — while a run triggered in it still
+checks out and works the code of the repo it was triggered in: the pin
+selects the machinery (the file and the runtime tree embedded in it, the
+tagged version — the embed's contract test keeps that version fresh, and
+the release flow gates publication on it), never the code, and no stage
+clones the factory repo at a second ref. Its `secrets:` block carries
 `GH_TOKEN` (the only required one) plus the four optional
 harness-provider secrets (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`,
 `PI_EXTENSION_ENV`) — a provider value never appears in a `with:` input
@@ -32,16 +33,23 @@ action (a push to main would re-trigger the release workflow — the tag is
 the only ref it publishes). The tag points at a commit that is already on
 the remote, so the push uploads only the tag object — no new commit
 content — and the default GITHUB_TOKEN publishes it: no special token, no
-secret. The workflow at a ref is self-contained and self-carrying — its stage
+secret. A re-run of the flow at an unchanged HEAD publishes nothing —
+one tag per commit, the number series advancing only when main does (the
+helper's guard), so a number is never spent on a duplicate version. The
+workflow at a ref is self-contained and self-carrying — its stage
 steps are inlined in the file, and its runtime tree is embedded in the
 file (stage 1 materialises it; the trigger's artifact carries it to
-every later stage job's first step) — so a target's ref bump selects the
+every later stage job's first step — that upload opts into hidden
+files, the tree sitting under the hidden .github/ directory the
+artifact API would otherwise drop) — so a target's ref bump selects the
 whole version at once (the workflow file and the tree its steps execute
 are one version: the file's own); tags are
 immutable, so targets pinned to an older ref keep working, and bumping
-the ref is the only change a target ever makes. A run triggered in the
-factory project's own repo has no ref to bump: it always works the
-triggering commit's tree — the repo's own commits are its upgrades. Stage 15 keeps those
+the ref is the only change a target ever makes. The factory project's
+own repo keeps the same pattern: its dogfood pins the public release
+line, and the ref bump is the upgrade of the machinery a run works with
+— while a run triggered in it still checks and works the triggered
+repo's own code. Stage 15 keeps those
 pinned targets working with its own dual-path plumbing (chapter 6):
 where the pinned ref's runtime tree resolves no shared module (a ref
 that predates the module, or the legacy workspace-copy tree), the report

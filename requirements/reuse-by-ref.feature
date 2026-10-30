@@ -26,13 +26,18 @@
 # the release flow gates publication on its freshness — the publishing
 # principal still only pushes tag objects, never a workflow-file commit.
 # Dogfood delta — this repo is the factory project itself: a run
-# triggered in it must check and work the code of the repo it was
-# triggered in, not a clone of the factory repo at a pinned ref. Its
-# consumer workflow therefore calls the repo's own copy of the factory
-# workflow (a relative uses: — the runner reads the file from the
-# triggering commit), whose embedded runtime tree is the repo's own tree
-# at that commit: the run's workflow file and the runtime tree its stage
-# steps execute are one version — the triggered repo's own.
+# triggered in it checks and works the code of the repo it was
+# triggered in (the checkout is the triggered repo, never a clone of
+# the factory repo). Its consumer workflow pins the public release
+# line — a version tag of the MelvinKl line, the same shape its
+# external targets use: the dogfood exercises exactly the published
+# version the external targets get, so a broken release breaks the
+# dogfood visibly. The pin selects the machinery — the workflow file
+# and the runtime tree embedded in it (the tagged version; the embed's
+# contract test keeps that version fresh) — never the code a run
+# works. One tag per commit: the release flow's guard makes a re-run
+# at an unchanged HEAD publish nothing, so a number is never spent on
+# a duplicate.
 
 Feature: Reuse by ref, never copy-paste
   As a maintainer of a target project
@@ -44,7 +49,7 @@ Feature: Reuse by ref, never copy-paste
     Given the target repo's workflow .github/workflows/code-weaver.yml
     When it invokes the factory
     Then an external target uses MelvinKl/code-weaver/.github/workflows/factory.yml at a version tag — one pin: the file at the tag carries its runtime tree embedded, so no relayed ref accompanies it
-    And a repo that is the factory project itself uses its own copy of the factory workflow — a relative uses: of the workflow file in its own repo — with the (legacy) factory-ref input left undeclared
+    And a repo that is the factory project itself pins the public release line too — a version tag of the MelvinKl line — with the (legacy) factory-ref input left undeclared
     And it passes issue-number and the factory settings via with
     And it passes GH_TOKEN via secrets
 
@@ -79,11 +84,11 @@ Feature: Reuse by ref, never copy-paste
 
   @reuse
   Scenario: A run triggered in the factory's own repo works on that repo's code
-    Given the triggered repo is the factory project itself — its tree holds the factory's own runtime tree
+    Given the triggered repo is the factory project itself
     When a stage job starts
-    Then the run's workflow file is the repo's own copy of the factory workflow, read from the triggering commit — a relative uses:, never a clone of the factory repo at a pinned ref
-    And each stage job materialises the runtime tree the workflow file embeds — the repo's own tree at the triggered commit, the embed's contract test keeping it fresh — and runs its stage steps from that copy
-    And the run's workflow file and the runtime tree its stage steps execute are one version — the code of the repo the run was triggered in
+    Then the run's workflow file is the public release the dogfood pins — the factory workflow at a version tag of the MelvinKl line, never a clone of the factory repo at a second ref
+    And each stage job materialises the runtime tree the workflow file embeds — the tagged version's tree, the embed's contract test keeping that version fresh — and runs its stage steps from that copy
+    And the code the run works is the triggered repo's own — the pin selects the machinery (the file and its embedded tree), never the code
 
   @reuse
   Scenario: An upgrade is a ref bump
@@ -99,6 +104,7 @@ Feature: Reuse by ref, never copy-paste
     When a new release is published
     Then its tag is a single increasing version number
     And workflows pinned to an older ref keep working
+    And a re-run of the release at an unchanged HEAD publishes nothing — one tag per commit, so a number is never spent on a duplicate
 
   @reuse @issue-60
   Scenario: The README's consumption pattern works on a target repo

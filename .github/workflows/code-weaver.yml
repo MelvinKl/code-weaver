@@ -16,24 +16,22 @@ jobs:
     # through the factory's `runner` input instead (every factory job runs on
     # it; pi is not a pre-requisite of its environment — stage 2 installs
     # and configures pi for the run).
-    # This repo IS the factory project — a run triggered in it must check
-    # and work the code of the repo it was triggered in, never a clone of
-    # the factory repo at a pinned ref (the public release line the external
-    # targets pin). The job therefore calls THIS repo's own copy of the
-    # factory workflow — a relative uses: (the runner reads the file from
-    # the triggering commit). The file's embedded runtime tree is the
-    # repo's own tree at that commit (the embed's contract test keeps it
-    # fresh: a commit whose file carries a stale tree fails the suite), so
-    # the run's workflow file and the runtime tree its stage steps execute
-    # are one version — the triggered repo's own (requirements/reuse-by-ref.feature,
-    # "a run triggered in the factory's own repo works on that repo's code").
-    # The (legacy) factory-ref input stays undeclared — no stage reads it
-    # anymore; the file carries its runtime tree embedded.
-    # External targets keep the pinned-tag pattern instead:
-    # uses: MelvinKl/code-weaver/.github/workflows/factory.yml at a version
-    # tag — one pin: the file carries its runtime tree, so no relayed
-    # ref accompanies it.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@12
+    # This repo IS the factory project — and its consumer workflow uses
+    # the same shape as its external targets: it pins the PUBLIC release
+    # line — uses: MelvinKl/code-weaver/.github/workflows/factory.yml at
+    # a version tag. The dogfood thereby exercises exactly the published
+    # version the external targets get — a broken release breaks the
+    # dogfood visibly. A run triggered here still checks out and works
+    # the code of the repo it was triggered in — the pin selects the
+    # machinery (the workflow file and the runtime tree embedded in it,
+    # the tagged version), never the code; no stage clones the factory
+    # repo or reads a relayed ref, and the (legacy) factory-ref input
+    # stays undeclared (requirements/reuse-by-ref.feature, "a run
+    # triggered in the factory's own repo works on that repo's code").
+    # Bumping the tag number is the dogfood's upgrade — one tag is one
+    # complete version, and the release flow's one-tag-per-commit guard
+    # keeps the series one commit per number.
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@14
     with:
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}

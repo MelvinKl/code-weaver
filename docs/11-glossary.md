@@ -60,12 +60,12 @@
   selects them as one version, and targets pinned to an older ref keep
   working — an upgrade is a one-line ref bump, and every published
   version — an older `vX.Y.Z` tag or a new single-number tag — is a
-  stable ref. A repo that is the factory project itself consumes its own
-  copy instead (a relative `uses:` of the workflow in its own repo; the
-  embedded tree is that repo's own at the triggered commit): a run
-  triggered in it works the repo's own tree — the workflow file and the
-  runtime tree its stage steps execute are one version, the triggered
-  repo's own, never a clone of the factory repo at a pinned ref.
+  stable ref. The factory project's own repo uses the same shape: it
+  pins the public release line (a version tag of the MelvinKl line) —
+  the dogfood exercises the published version its external targets get —
+  while a run triggered in it works the triggered repo's own code; the
+  pin selects the machinery, never the code, and no stage clones the
+  factory repo at a second ref.
 - **Satisfied no-op** — a re-run of work already on the branch: the
   model's empty answer with a non-empty diff against the run's baseline
   means the work is in place — the stage is green, not an error.
