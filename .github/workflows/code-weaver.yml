@@ -33,7 +33,7 @@ jobs:
     # uses: MelvinKl/code-weaver/.github/workflows/factory.yml at a version
     # tag — one pin: the file carries its runtime tree, so no relayed
     # ref accompanies it.
-    uses: ./.github/workflows/factory.yml
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@12
     with:
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
