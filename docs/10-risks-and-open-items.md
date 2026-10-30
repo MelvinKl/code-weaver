@@ -117,17 +117,20 @@
   rewording above in `requirements/configuration.feature`,
   `requirements/test-and-review.feature` and
   `requirements/safety.feature` (a follow-up issue).
-- **Cost rate table covers only known models** — the report stage derives
-  the run's total cost from the recorded usage, keyed on the run's
-  resolved `llm-model` setting (the only documented adjustable LLM
-  setting; its resolved value rides the trigger's resolved-config state
-  the report job downloads), via a small per-model rate table in the
-  report stage's inlined step (the stage's steps live in `factory.yml`;
-  its script at `.github/actions/report/`); the table covers only known
-  models,
-  and a target's model with no rate entry is listed as *unpriced* in the
-  report (the usage totals are listed regardless) — the owner extends the
-  table when a new model joins the runner's configured set.
+- **Cost rates come from the run's model configuration** — the report
+  stage derives the run's total cost from the recorded usage, keyed on
+  the run's resolved `llm-model` setting (the only documented adjustable
+  LLM setting; its resolved value rides the trigger's resolved-config state
+  the report job downloads), at the rates the run's model configuration
+  declares for that model — the `cost` object of the model's entry in the
+  configuration the setup stage materialises (a non-empty `PI_MODELS`
+  secret wins over the repo file `.pi/agent/models.json`; the report job
+  resolves the same provider and lists the source it read the rates from,
+  so the cost is auditable against the run's own configuration). A
+  target's model configuration with no `cost` entry for its model is listed
+  as *unpriced* in the report (the usage totals are listed regardless) —
+  the owner adds the model's cost rates to the target's `models.json` (or
+  the `PI_MODELS` secret) when a new model joins its configured set.
 - **arc42 structure varies per target** — the extraction prompt
   tolerates the structural difference: extraction proceeds on the
   readable parts; a missing, renamed or reordered chapter is never a

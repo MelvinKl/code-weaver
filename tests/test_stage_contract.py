@@ -16,12 +16,14 @@ The pins (one per scenario the fix loop had to fulfil):
   (requirement-extraction "extraction places the delta by topic") — and
   tolerates arc42 structure variance (safety "the factory tolerates arc42
   structure variance");
-- the consumer workflow and the README pin the oracle's owner at a
-  version tag — a single increasing number, the current scheme (the
-  retired semver ref shape is gone) — and the two surfaces declare the
-  same owner, the same path and the same tag in lock-step
-  (reuse-by-ref "the factory is invoked as a reusable workflow",
-  "every published version is a stable ref");
+- the consumer workflow pins the oracle's owner at a version tag — a
+  single increasing number, the current scheme (the retired semver ref
+  shape is gone) — and wires the run's harness providers through its
+  secrets block; the README's example is documentation, not a pinned
+  surface — the suite no longer compares its ref against the deployed
+  workflow, so a release ref bump on one surface never fails the suite
+  until the other is synced (reuse-by-ref "the factory is invoked as a
+  reusable workflow", "every published version is a stable ref");
 - the factory workflow is self-contained: every stage's steps are inlined
   in the workflow file — no own-action `uses:` reference remains (an
   own-action ref would have to be fully qualified and pinned to a ref the
@@ -51,12 +53,16 @@ The pins (one per scenario the fix loop had to fulfil):
   review");
 - the report stage's final status report lists the run's total input and
   output tokens and the total cost — assembled from the per-call usage
-  records in the state dir, the cost derived from the recorded usage and
-  the run's resolved model (rate listed; unpriced for a model with no
-  rate entry), and a failed run's report covering the calls made before
-  the stop (issue-43 "the final report lists the input and output tokens
-  used during the run", "the final report lists the total cost of the
-  run", "the usage and cost of a failed run are reported too");
+  records in the state dir, the cost derived from the recorded usage, the
+  run's resolved model, and the run's model configuration itself — the
+  rates are the resolved model's `cost` entry in the configuration the
+  setup stage materialises (a non-empty PI_MODELS secret wins over the
+  repo file .pi/agent/models.json, and the report lists the source it
+  priced from); a model with no cost entry is listed as unpriced — and a
+  failed run's report covers the calls made before the stop (issue-43 "the
+  final report lists the input and output tokens used during the run",
+  "the final report lists the total cost of the run", "the usage and cost
+  of a failed run are reported too");
 - the report stage re-reads the PR after editing its body: a verified
   completion keeps the pointer comment (the PR body and the issue comment
   list the same usage numbers — one ledger, one set of figures), while a
@@ -192,9 +198,10 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     secrets block"): the same three surfaces — the factory's secrets:
     block, the deployed consumer workflow, the README example — carry the
     four provider secret entries in the same form, while the owner, path
-    and ref pin stays unchanged — the lock-step chapter 8 states (both
-    the deployed consumer workflow and the README's example declare the
-    same owner, path and tag)."""
+    and ref pin stays unchanged (the README's example is documentation,
+    not a pinned surface: the suite does not compare its ref against the
+    deployed workflow, so a release ref bump on one surface never fails
+    the suite until the other is synced)."""
     text = _read(".github/workflows/code-weaver.yml")
     m = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", text)
     assert m, "no uses: line naming the factory"
@@ -205,13 +212,7 @@ def test_consumer_workflow_pins_owner_and_version_tag():
         f"@{ref} is not a single increasing version number — the current "
         "scheme's tag shape (the retired semver ref shape is gone)")
     assert "with:" in text and "GH_TOKEN" in text and "secrets:" in text
-    # the deployed consumer workflow and the README's consumption example
-    # declare the same owner, the same path and the same tag (lock-step)
     readme = _read("README.md")
-    rm = re.search(r"uses:\s*([\w.-]+)/code-weaver/(\S+?)@([\w.-]+)", readme)
-    assert rm and rm.groups()[:3] == (owner, path, ref), (
-        "the README's example drifted from the deployed workflow — the "
-        "lock-step spans the full owner, path and ref")
     # the extension: all three consumer surfaces carry the four harness
     # provider secret entries in the same form — the factory declares them
     # in its workflow_call secrets: block, the deployed workflow and the
@@ -507,10 +508,33 @@ def _report_action_source() -> str:
         "no `run: |` block on the report stage's status-report step")
 
 
+def _models_config(r_in: float, r_out: float) -> str:
+    """A minimal pi models.json (the shape the setup stage parses) with one
+    provider: Ornith priced at the given USD-per-1M rates, and a second
+    model with no `cost` entry — the unpriced case the report lists when
+    the configuration carries the model but not its rates."""
+    return ('{\n'
+            '  "providers": {\n'
+            '    "test": {\n'
+            '      "baseUrl": "http://example.invalid/v1",\n'
+            '      "api": "openai-completions",\n'
+            '      "models": [\n'
+            '        {"id": "Ornith-1.5-35B-A3B",\n'
+            f'         "cost": {{"input": {r_in}, "output": {r_out},\n'
+            '                  "cacheRead": 0.05, "cacheWrite": 0}},\n'
+            '        {"id": "Some-Other-Runner-Model",\n'
+            '         "contextWindow": 8192}\n'
+            '      ]\n'
+            '    }\n'
+            '  }\n'
+            '}\n')
+
+
 def _run_report_action(run_result="success", pr_number="7", issue_number="42",
                        ledger=None, model="Ornith-1.5-35B-A3B",
                        view_body="## Progress so far",
-                       shared_module="fallback"):
+                       shared_module="fallback",
+                       models_config=None, pi_models_env=None):
     """Exec the report action's inline python in a sandbox: a plain temp
     workspace (no git repo, no doc dir, no PLAN.md — the arc42-activity
     path has nothing to touch), a temp RUNNER_TEMP carrying the merged
@@ -556,6 +580,15 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
                 f"- caps: max-loops=`5` (0 = no cap)\n")
     with open(os.path.join(cw, "stage-summary.txt"), "w", encoding="utf-8") as f:
         f.write("stage 4 extract: clean — stage complete\n")
+    if models_config is not None:
+        # the run's model configuration as the repo-file provider — the
+        # .pi/agent/models.json the report job resolves in the workspace
+        # (the provider the setup stage falls back to when the secret is
+        # absent)
+        agent = os.path.join(ws, ".pi", "agent")
+        os.makedirs(agent)
+        with open(os.path.join(agent, "models.json"), "w", encoding="utf-8") as f:
+            f.write(models_config)
     fake = tempfile.mkdtemp(prefix="cw-report-fake-")
     binp = os.path.join(fake, "bin")
     os.makedirs(binp)
@@ -587,7 +620,8 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
     os.chmod(os.path.join(binp, "gh"), 0o755)
     keys = ("PATH", "RUNNER_TEMP", "GITHUB_WORKSPACE", "GITHUB_REPOSITORY",
             "GH_TOKEN", "GITHUB_ACTION_PATH", "AI_BRANCH", "DOC_DIR",
-            "CW_RUN_RESULT", "CW_PR_NUMBER", "CW_ISSUE_NUMBER", "FAKE_GH_OUT")
+            "CW_RUN_RESULT", "CW_PR_NUMBER", "CW_ISSUE_NUMBER",
+            "CW_PI_MODELS", "INPUT_PI_MODELS", "FAKE_GH_OUT")
     saved = {k: os.environ.get(k) for k in keys}
     for k in keys:
         os.environ.pop(k, None)
@@ -602,6 +636,10 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
         "CW_RUN_RESULT": run_result,
         "CW_ISSUE_NUMBER": issue_number,
         "CW_PR_NUMBER": pr_number,
+        # the run's model configuration provider relay — set when the test
+        # names pi_models_env (the secret wins over the repo file), empty
+        # otherwise (an empty provider value is an absent provider)
+        "CW_PI_MODELS": pi_models_env or "",
     })
     hook, cwd = sys.excepthook, os.getcwd()
     os.chdir(ws)
@@ -921,33 +959,68 @@ def test_report_cost_derives_from_usage_and_resolved_model():
     "the listed cost is consistent with the run's recorded token usage")
     the listed cost is derived from the recorded usage, keyed on the run's
     resolved model (the llm-model setting from the trigger's
-    resolved-config state), via the report's per-model rate table — the
-    rate used is listed in the report so the cost is auditable; a model
-    with no rate entry is listed as unpriced, and the recorded usage
-    totals still land in the report."""
-    # 15000 in / 3500 out across the run; the resolved model is priced
+    resolved-config state), and priced at the rates the run's model
+    configuration declares for that model — the `cost` object of the
+    model's models.json entry, read from the configuration's provider the
+    way the setup stage resolves it (here the repo file
+    .pi/agent/models.json, the source the report lists so the cost stays
+    auditable); a model the configuration carries no cost entry for is
+    listed as unpriced, and the recorded usage totals still land in the
+    report."""
+    # 15000 in / 3500 out across the run; the resolved model is priced by
+    # the configuration the sandbox writes as the repo file
     ledger = ["10000 2000", "5000 1500"]
     r_in, r_out = 0.10, 0.20
     priced = (f"- **Total cost:** ${(15000 * r_in + 3500 * r_out) / 1e6:.4f} "
               f"(model `Ornith-1.5-35B-A3B` @ ${r_in:.2f}/M input, "
-              f"${r_out:.2f}/M output)")
-    pr_body, comment, _closed = _run_report_action(ledger=ledger)
+              f"${r_out:.2f}/M output — rates from the repo file "
+              f".pi/agent/models.json)")
+    pr_body, comment, _closed = _run_report_action(
+        ledger=ledger, models_config=_models_config(r_in, r_out))
     for surface in (pr_body, comment):
         assert priced in surface, \
             ("the listed cost must be recorded usage × the resolved model's "
-             f"rate, with the rate listed: {surface!r}")
-    # a model with no rate entry is listed as unpriced — the usage totals
-    # are reported regardless
+             f"configuration rates, with the source listed: {surface!r}")
+    # a model the configuration carries but gives no cost entry for is
+    # listed as unpriced — the usage totals are reported regardless
     pr_body, comment, _closed = _run_report_action(
-        ledger=ledger, model="Some-Other-Runner-Model")
-    unpriced = (f"- **Total cost:** unpriced "
-                f"(model `Some-Other-Runner-Model` has no rate entry — "
-                "the owner extends the report's rate table)")
+        ledger=ledger, model="Some-Other-Runner-Model",
+        models_config=_models_config(r_in, r_out))
+    unpriced = (f"- **Total cost:** unpriced (model "
+                f"`Some-Other-Runner-Model` has no cost rates in the "
+                f"run's model configuration — put the model's cost rates in "
+                ".pi/agent/models.json (or the models-configuration "
+                f"secret))")
     for surface in (pr_body, comment):
         assert unpriced in surface, \
-            f"a model with no rate entry is listed as unpriced: {surface!r}"
+            f"a model with no cost entry is listed as unpriced: {surface!r}"
         assert "- **Total input tokens:** 15000" in surface
         assert "- **Total output tokens:** 3500" in surface
+
+
+def test_report_cost_prices_at_the_secret_provider_over_the_repo_file():
+    """(the same issue-43 cost pin — provider resolution)
+    the rates the report prices with are the ones the run's model
+    configuration declares, and the configuration is resolved the way the
+    setup stage resolves it: a non-empty PI_MODELS secret wins over the
+    repo file .pi/agent/models.json. The sandbox carries both providers at
+    different rates — the report must list the secret's rates, name the
+    provider it priced from, and stay consistent with the recorded
+    usage."""
+    ledger = ["10000 2000"]
+    r_in, r_out = 0.30, 0.40
+    priced = (f"- **Total cost:** ${(10000 * r_in + 2000 * r_out) / 1e6:.4f} "
+              f"(model `Ornith-1.5-35B-A3B` @ ${r_in:.2f}/M input, "
+              f"${r_out:.2f}/M output — rates from the run's model "
+              f"configuration (a GitHub secret))")
+    pr_body, comment, _closed = _run_report_action(
+        ledger=ledger,
+        models_config=_models_config(0.10, 0.20),
+        pi_models_env=_models_config(0.30, 0.40))
+    for surface in (pr_body, comment):
+        assert priced in surface, \
+            ("a non-empty PI_MODELS secret wins over the repo file — "
+             f"the report must price at the secret's rates: {surface!r}")
 
 
 def test_failed_run_report_covers_the_calls_before_the_stop():
@@ -966,11 +1039,13 @@ def test_failed_run_report_covers_the_calls_before_the_stop():
     r_in, r_out = 0.10, 0.20
     priced = (f"- **Total cost:** ${(3000 * r_in + 400 * r_out) / 1e6:.4f} "
               f"(model `Ornith-1.5-35B-A3B` @ ${r_in:.2f}/M input, "
-              f"${r_out:.2f}/M output)")
+              f"${r_out:.2f}/M output — rates from the repo file "
+              f".pi/agent/models.json)")
     # a failed run that reached the PR: the comment (and the PR body's
     # final status) carry the pre-stop usage and cost
     pr_body, comment, _closed = _run_report_action(
-        run_result="failure", ledger=ledger)
+        run_result="failure", ledger=ledger,
+        models_config=_models_config(r_in, r_out))
     for surface in (pr_body, comment):
         for line in ("- **Total input tokens:** 3000",
                      "- **Total output tokens:** 400",
@@ -981,7 +1056,8 @@ def test_failed_run_report_covers_the_calls_before_the_stop():
     # a run that died before the PR existed: the no-PR failure comment
     # still lists the pre-stop usage and cost
     pr_body, comment, _closed = _run_report_action(
-        run_result="failure", pr_number="", ledger=ledger)
+        run_result="failure", pr_number="",
+        ledger=ledger, models_config=_models_config(r_in, r_out))
     assert pr_body == "", "no PR was opened — there is no PR body to complete"
     for line in ("- **Total input tokens:** 3000",
                  "- **Total output tokens:** 400",

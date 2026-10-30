@@ -1916,6 +1916,14 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       DOC_DIR: ${{ inputs.doc-dir }}
+      # the run's model configuration rides the report job's env (the
+      # factory's with: + CW_<name> env relay idiom — the setup-pi job's
+      # env carries the same relay): the report stage prices the run's
+      # cost from the same model configuration the setup stage
+      # materialised — a non-empty models-configuration secret wins over
+      # the repo file .pi/agent/models.json, and the rates the report lists are
+      # the ones that configuration declares for the run's resolved model
+      CW_PI_MODELS: ${{ secrets.PI_MODELS }}
       # (no ternary in this job's env — a `?` in a reusable workflow's
       # expressions makes the file invalid; the parenthesized &&/|| chain with
       # string literals expresses the same if-else; job-level env stays to
@@ -2231,10 +2239,15 @@ jobs:
               # run's resolved model — the llm-model setting, the only
               # documented adjustable LLM setting; its resolved value rides the
               # trigger's resolved-config state, which the report job downloads
-              # first — via a small per-model rate table, with the rate listed
-              # in the report so the listed cost is auditable and consistent
-              # with the recorded usage; a model with no rate entry is listed
-              # as unpriced
+              # first. The rates come from the run's model configuration itself
+              # — the provider the setup stage materialised (a non-empty
+              # models-configuration secret wins over the repo file
+              # .pi/agent/models.json, which this job resolves the same way): the per-model `cost`
+              # object in its models.json entry carries the USD-per-1M-tokens
+              # rates, and the report lists the rates used with the source it
+              # read them from, so the listed cost is auditable and consistent
+              # with the recorded usage; a model the configuration carries no
+              # cost entry for is listed as unpriced
               model = ""
               cfg = state_file("resolved-config.txt")
               if os.path.isfile(cfg):
@@ -2244,24 +2257,75 @@ jobs:
                           if len(p) >= 2:
                               model = p[1].strip()
                           break
-              # USD per 1M tokens: (input, output) — the table covers only
-              # known models; the owner extends it for the runner's others
-              COST_RATES = {"Ornith-1.5-35B-A3B": (0.10, 0.20)}
+              # the run's model configuration — resolved the way the setup
+              # stage resolves it: a non-empty models-configuration secret
+              # (the CW_ relay this job's env carries) wins over the repo
+              # file .pi/agent/models.json in the workspace
+              models_raw = _cw_in_opt("pi-models")
+              models_source = ("the run's model configuration (a GitHub secret)"
+                                if models_raw
+                                else "the repo file .pi/agent/models.json")
+              if not models_raw:
+                  fp = os.path.join(os.environ.get("GITHUB_WORKSPACE") or ".",
+                                    ".pi", "agent", "models.json")
+                  if os.path.isfile(fp):
+                      try:
+                          with open(fp, encoding="utf-8") as f:
+                              models_raw = f.read()
+                      except OSError:
+                          models_raw = None
+              # USD per 1M tokens for the resolved model — the `cost`
+              # object of its models.json entry (input, output,
+              # cacheRead, cacheWrite). The usage ledger records input and
+              # output only, so the cost is the input/output part of it
+              r_in = r_out = None
+              if models_raw:
+                  try:
+                      data = json.loads(models_raw)
+                  except Exception:
+                      data = None
+                  if data is not None:
+                      def _walk(o):
+                          # the providers' models lists — the same shape the
+                          # setup stage's model-set check walks
+                          if isinstance(o, dict):
+                              for k, v in o.items():
+                                  if k == "models" and isinstance(v, list):
+                                      for m in v:
+                                          yield m
+                                  else:
+                                      yield from _walk(v)
+                          elif isinstance(o, list):
+                              for v in o:
+                                  yield from _walk(v)
+                      for m in _walk(data):
+                          if isinstance(m, dict) and m.get("id") == model:
+                              c = m.get("cost")
+                              if isinstance(c, dict):
+                                  try:
+                                      r_in = float(c.get("input"))
+                                      r_out = float(c.get("output"))
+                                  except (TypeError, ValueError):
+                                      r_in = r_out = None
+                              break
               if not have_usage:
                   usage_lines = ("- **Total input tokens:** 0\n"
                                  "- **Total output tokens:** 0\n"
                                  "- **Total cost:** $0.00 (no pi call recorded usage)")
-              elif model not in COST_RATES:
+              elif r_in is None or r_out is None:
                   usage_lines = (f"- **Total input tokens:** {tot_in}\n"
                                  f"- **Total output tokens:** {tot_out}\n"
                                  f"- **Total cost:** unpriced (model `{model}` "
-                                 "has no rate entry — the owner extends the report's rate table)")
+                                 "has no cost rates in the run's model "
+                                 "configuration — put the model's cost rates "
+                                 "in .pi/agent/models.json (or the models-"
+                                 "configuration secret))")
               else:
-                  r_in, r_out = COST_RATES[model]
                   usage_lines = (f"- **Total input tokens:** {tot_in}\n"
                                  f"- **Total output tokens:** {tot_out}\n"
                                  f"- **Total cost:** ${(tot_in * r_in + tot_out * r_out) / 1e6:.4f} "
-                                 f"(model `{model}` @ ${r_in:.2f}/M input, ${r_out:.2f}/M output)")
+                                 f"(model `{model}` @ ${r_in:.2f}/M input, ${r_out:.2f}/M output — "
+                                 f"rates from {models_source})")
 
               if pr:
                   view = json.loads(gh_api(
