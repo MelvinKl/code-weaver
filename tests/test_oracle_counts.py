@@ -99,7 +99,10 @@ def _tree_counts():
 
 def test_documented_oracle_counts_match_the_requirements_tree():
     """(requirement-extraction "The documented oracle counts match the
-    requirements tree" — new) the README and the arc42 chapters state how
+    requirements tree" — new; reference
+    `requirements/requirement-extraction.feature::The documented oracle
+    counts match the requirements tree`) the README and the arc42
+    chapters state how
     many feature files and scenarios the oracle holds; read against the
     requirements/ tree, the stated number of feature files equals the
     number of files under requirements/ and the stated number of

@@ -129,10 +129,14 @@ def _push_list_value(block, key):
 def test_release_workflow_fires_on_main_advance():
     """(scenario "A change on main automatically releases a new version" —
     the trigger half of its When; scenario "The release flow no longer
-    carries the semver scheme" — "it fires on the main branch's advance")
-    the release workflow's push event declares `main` among its branches:
-    a change landing on the main branch is what schedules the release
-    run."""
+    carries the semver scheme" — "it fires on the main branch's
+    advance"; reference
+    `requirements/auto-release-on-main.feature::A change on main
+    automatically releases a new version`,
+    `requirements/auto-release-on-main.feature::The release flow no longer
+    carries the semver scheme`)
+    the release workflow's push event declares `main` among its branches: a
+    change landing on the main branch is what schedules the release run."""
     text = _read(RELEASE_WORKFLOW)
     branches = _push_list_value(_push_block(_event_map(text)), "branches")
     assert branches is not None, (
@@ -145,7 +149,9 @@ def test_release_workflow_fires_on_main_advance():
 
 def test_release_workflow_declares_no_tag_trigger():
     """(scenario "The release flow no longer carries the semver scheme" —
-    "rather than on a maintainer's manual tag") the push event declares
+    "rather than on a maintainer's manual tag"; reference
+    `requirements/auto-release-on-main.feature::The release flow no
+    longer carries the semver scheme`) the push event declares
     no tag filter of any kind — the retired trigger was
     `push: tags: ["v*.*.*"]`, a maintainer pushing a `vX.Y.Z` tag
     manually; under the new flow a maintainer tag must schedule nothing."""
@@ -159,7 +165,9 @@ def test_release_workflow_declares_no_tag_trigger():
 
 def test_release_workflow_carries_no_semver_tag():
     """(scenario "The release flow no longer carries the semver scheme" —
-    "it creates no semver vX.Y.Z tags") no semver tag anywhere in the
+    "it creates no semver vX.Y.Z tags"; reference
+    `requirements/auto-release-on-main.feature::The release flow no
+    longer carries the semver scheme`) no semver tag anywhere in the
     workflow file — header, trigger, or any body step: neither the retired
     `v*.*.*` glob, nor the `vX.Y.Z` placeholder, nor a concrete
     `v<digits>.<digits>.<digits>` tag (which would be the only shape a
@@ -177,7 +185,10 @@ def test_release_workflow_carries_no_semver_tag():
 
 
 def test_next_number_with_no_published_number_is_one():
-    """(scenario "The automatic release takes the next increasing number")
+    """(scenario "The automatic release takes the next increasing number";
+    reference
+    `requirements/auto-release-on-main.feature::The automatic release
+    takes the next increasing number`)
     no numbered release published yet — the published ref set is empty, or
     carries only the older `vX.Y.Z` tags — → the first release is `1`."""
     assert release_number.next_release_number([]) == "1"
@@ -188,10 +199,13 @@ def test_next_number_with_no_published_number_is_one():
 def test_next_number_is_the_number_after_the_highest():
     """(scenario "The automatic release takes the next increasing number"
     — "the new version is tagged with the number after N", "the version
-    numbers of published releases never repeat and never decrease")
-    numbered releases [1, 2, 3] published → the next is 4; the input
-    order is irrelevant, and successive releases grow the series
-    strictly — one more than everything already published."""
+    numbers of published releases never repeat and never decrease";
+    reference
+    `requirements/auto-release-on-main.feature::The automatic release
+    takes the next increasing number`)
+    numbered releases [1, 2, 3] published → the next is 4; the input order
+    is irrelevant, and successive releases grow the series strictly — one
+    more than everything already published."""
     assert release_number.next_release_number(["1", "2", "3"]) == "4"
     assert release_number.next_release_number(["3", "1", "2"]) == "4"
     published = []
@@ -202,7 +216,10 @@ def test_next_number_is_the_number_after_the_highest():
 
 
 def test_older_semver_tags_stay_out_of_the_number_series():
-    """(scenario "The automatic release takes the next increasing number")
+    """(scenario "The automatic release takes the next increasing number";
+    reference
+    `requirements/auto-release-on-main.feature::The automatic release
+    takes the next increasing number`)
     the published set mixed with older `vX.Y.Z` tags — the older tags are
     not numbers and are ignored: they neither lower nor advance the new
     series, which stays strictly increasing next to them."""
@@ -214,7 +231,11 @@ def test_older_semver_tags_stay_out_of_the_number_series():
 def test_workflow_tags_the_computed_single_number():
     """(scenario "A change on main automatically releases a new version"
     — the publication half; "The automatic release takes the next
-    increasing number" — the tag it creates) the workflow computes the
+    increasing number" — the tag it creates; reference
+    `requirements/auto-release-on-main.feature::A change on main
+    automatically releases a new version`,
+    `requirements/auto-release-on-main.feature::The automatic release
+    takes the next increasing number`) the workflow computes the
     number at run time with the shared-plumbing helper and creates the
     tag from exactly that value — no maintainer tags anything by hand,
     and the tag is a single increasing number, not a semver ref."""
@@ -232,10 +253,13 @@ def test_workflow_tags_the_computed_single_number():
 def test_workflow_creates_a_github_release_from_the_tag():
     """(scenario "A change on main automatically releases a new version"
     — "the release is a GitHub release that a target can pin like any
-    published version") the workflow creates the GitHub release from the
-    computed tag with the `gh release create` mechanism (the `gh` CLI is
-    a documented runner pre-requisite, `docs/08`) — publication happens
-    without any maintainer action."""
+    published version"; reference
+    `requirements/auto-release-on-main.feature::A change on main
+    automatically releases a new version`)
+    the workflow creates the GitHub release from the computed tag with the
+    `gh release create` mechanism (the `gh` CLI is a documented runner
+    pre-requisite, `docs/08`) — publication happens without any maintainer
+    action."""
     text = _read(RELEASE_WORKFLOW)
     assert re.search(r'gh release create "\$NEXT"', text), (
         "release.yml does not create a GitHub release from the computed "
@@ -244,18 +268,21 @@ def test_workflow_creates_a_github_release_from_the_tag():
 
 def test_release_publishes_with_the_default_token():
     """(scenario "A change on main automatically releases a new version"
-    — the publication half) the flow publishes the tag and the release
-    with the default GITHUB_TOKEN — no special token, no secret: the tag
-    points at main's HEAD (a commit the push already delivered to the
-    remote), so the tag push uploads only the tag object — no new commit
-    content, no workflow-file update in the push. The github-actions App
-    behind the GITHUB_TOKEN can never be granted the `workflows`
-    permission (that is not a scope available to it, and a workflow
-    claiming it in its permissions block is rejected as invalid — a run
-    dies at 0s) — so the flow must never push a commit that updates a
-    workflow file, and it never does. The permissions block grants only
-    what publication needs: `contents: write` (the tag ref and the
-    release object)."""
+    — the publication half; reference
+    `requirements/auto-release-on-main.feature::A change on main
+    automatically releases a new version`)
+    the flow publishes the tag and the release with the default
+    GITHUB_TOKEN — no special token, no secret: the tag points at main's
+    HEAD (a commit the push already delivered to the remote), so the tag
+    push uploads only the tag object — no new commit content, no
+    workflow-file update in the push. The github-actions App behind the
+    GITHUB_TOKEN can never be granted the `workflows` permission (that is
+    not a scope available to it, and a workflow claiming it in its
+    permissions block is rejected as invalid — a run dies at 0s) — so the
+    flow must never push a commit that updates a workflow file, and it
+    never does. The permissions block grants only what publication needs:
+    `contents: write` (the tag
+    ref and the release object)."""
     text = _read(RELEASE_WORKFLOW)
     assert re.search(r"(?m)^  contents: write", text), (
         "release.yml's permissions block no longer grants contents: write "
@@ -280,15 +307,17 @@ def test_release_publishes_with_the_default_token():
 
 def test_release_tags_main_head_not_a_throwaway_branch():
     """(the same scenario — the publication-side invariant that makes the
-    tokenless flow possible) the tag points at main's HEAD — the commit
-    this push delivered, already on the remote. The flow cuts no
-    throwaway branch: the retired design rewrote the reusable
-    workflow's own action refs on a throwaway release branch and tagged
-    that rewritten commit — its push uploaded a new commit updating a
-    workflow file, the one push the publishing principal is refused. The
-    rewrite is gone with the consolidation (factory.yml is
-    self-contained — its stage steps are inlined) — so the tag is cut
-    from main's HEAD itself, and the push uploads only the tag object."""
+    tokenless flow possible; reference
+    `requirements/auto-release-on-main.feature::A change on main
+    automatically releases a new version`)
+    the tag points at main's HEAD — the commit this push delivered, already
+    on the remote. The flow cuts no throwaway branch: the retired design
+    rewrote the reusable workflow's own action refs on a throwaway release
+    branch and tagged that rewritten commit — its push uploaded a new
+    commit updating a workflow file, the one push the publishing principal
+    is refused. The rewrite is gone with the consolidation (factory.yml is
+    self-contained — its stage steps are inlined) — so the tag is cut from
+    main's HEAD itself, and the push uploads only the tag object."""
     text = _read(RELEASE_WORKFLOW)
     assert "git checkout -B" not in text, (
         "release.yml still cuts a throwaway release branch — the tag "
@@ -323,7 +352,12 @@ def _paragraph(text, heading):
 def test_readme_upgrading_section_describes_the_new_flow():
     """(scenarios "A change on main automatically releases a new version"
     and "The automatic release takes the next increasing number" — the
-    README surface) the README's "Upgrading is a ref bump" paragraph
+    README surface; reference
+    `requirements/auto-release-on-main.feature::A change on main
+    automatically releases a new version`,
+    `requirements/auto-release-on-main.feature::The automatic release
+    takes the next increasing number`) the README's "Upgrading is a ref
+    bump" paragraph
     describes the new mechanism: a push to the factory's main branch
     publishes the next single increasing number as a GitHub release."""
     para = _paragraph(_read("README.md"), "**Upgrading is a ref bump**")
@@ -336,7 +370,11 @@ def test_readme_upgrading_section_describes_the_new_flow():
 
 
 def test_chapter8_upgrades_paragraph_describes_the_new_flow():
-    """(the same two scenarios — the arc42 surface) chapter 8's "Upgrades
+    """(the same two scenarios — the arc42 surface; reference
+    `requirements/auto-release-on-main.feature::A change on main
+    automatically releases a new version`,
+    `requirements/auto-release-on-main.feature::The automatic release
+    takes the next increasing number`) chapter 8's "Upgrades
     are a ref bump" paragraph describes the new mechanism (fires on the
     main branch's advance; publishes the next single increasing number as
     a GitHub release) and keeps the retained stability sentence (tags are
@@ -356,7 +394,9 @@ def test_chapter8_upgrades_paragraph_describes_the_new_flow():
 
 def test_no_documented_surface_states_the_retired_mechanism():
     """(scenario "The release flow no longer carries the semver scheme" —
-    the documentation surfaces) no surface — the README or any arc42
+    the documentation surfaces; reference
+    `requirements/auto-release-on-main.feature::The release flow no
+    longer carries the semver scheme`) no surface — the README or any arc42
     chapter — still states the retired mechanism: `release.yml`
     "turns a `vX.Y.Z` tag into a GitHub release" (chapter 8's form) or
     "tag `vX.Y.Z` → GitHub release" (the README's form). A doc that still
@@ -379,7 +419,9 @@ def test_re_run_at_an_already_tagged_head_publishes_nothing():
     """(reuse-by-ref "Every published version is a stable ref" — the
     added And line: a re-run of the release at an unchanged HEAD
     publishes nothing — one tag per commit, so a number is never spent
-    on a duplicate) the guard is the helper's second pure function:
+    on a duplicate; reference
+    `requirements/reuse-by-ref.feature::Every published version is a
+    stable ref`) the guard is the helper's second pure function:
     fed the remote's whole `git ls-remote --tags` line list and a commit
     sha, it names the numbered tag pointing at that sha — a non-empty
     answer is the workflow's skip signal (a re-run of the flow at an

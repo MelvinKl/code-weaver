@@ -5,7 +5,7 @@
 - **Requirements are derived, not invented.** The delta requirements come
   from the target project itself (its arc42 markdown, its baseline diff,
   its README); an empty or vague issue body produces nothing.
-- **Bounded autonomy.** Every loop in the pipeline (guard re-run,
+- **Bounded autonomy.** Every loop in the pipeline (guard repair,
   review-fix, gate-fix) is capped; a cap of 0 means uncapped, and a
   non-zero cap guarantees the run terminates.
 - **The human stays the gate.** The factory opens the PR and stops;

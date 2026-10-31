@@ -49,16 +49,15 @@ Feature: Configuration surface
 
   @config
   Scenario: The loop caps are configurable
-    Given the defaults are MAX_LOOPS 5 and MAX_TOTAL_TOKENS 500000
-    When a target lowers or raises them
+    Given the default is MAX_LOOPS 5
+    When a target lowers or raises it
     Then every bounded loop in the pipeline uses the target's values
 
   @config
   Scenario: A loop cap of 0 means no cap
-    Given the defaults are MAX_LOOPS 5 and MAX_TOTAL_TOKENS 500000
+    Given the default is MAX_LOOPS 5
     When a target sets MAX_LOOPS to 0
-    Then the guard re-run, review-fix and gate-fix loops run without a loop-count limit
-    And setting MAX_TOTAL_TOKENS to 0 removes the token budget
+    Then the guard repair, review-fix and gate-fix loops run without a loop-count limit
     And the resolved configuration records the removed caps
 
   @config
@@ -98,6 +97,12 @@ Feature: Configuration surface
     And their contents are NOT embedded in the prompt in full
     And pi reads the ones the task needs on demand with its read tool
     And the invocation's token overhead stays small
+
+  Scenario: A stage instruction avoids file lists that carry no meaning
+    Given a stage builds the pi prompt for one of its calls
+    When the prompt's instructions are read
+    Then no instruction lists project files as context to rummage through
+    And a file list appears in an instruction only where the set is the instruction's scope — the changed requirements the plan must cover, the off-limits files the guard reverts, the plan file the implement stage works
 
   @config
   Scenario: The plan files are the only implementation files handed to pi in full

@@ -40,18 +40,33 @@ no-op* (measured against the run's baseline), not a phantom retry.
 **The review loop.** Stage 10 runs the target's suite (`make test`) — the
 suite executes **every** scenario — then pi reviews the output against the
 changed scenarios: the feature files this run modified are the review's
-judgement scope, because a target's requirements dir accumulates one file
-per issue and re-judging the whole oracle on every run would make the review
-unboundedly slow (the standing oracle was judged in the runs that added it).
+judgement scope, joined by the scenarios the run's changed tests reference
+(a changed test is judged by the requirement it references — the references
+are extracted from the changed tests' docstrings), because a target's
+requirements dir accumulates one file per issue and re-judging the whole
+oracle on every run would make the review unboundedly slow (the standing
+oracle was judged in the runs that added it). The review runs on every
+iteration's output, red or green — a red suite is never a pass, so the
+review's own breakdown cannot hide one (and on a green suite the same
+breakdown fails the stage: the oracle cannot be assumed green).
 pi emits the `REVIEW-VERDICT` block (one `SCENARIO <file>::<name>: <verdict>`
-line per changed scenario — parsed from the response, or from a file the
+line per scenario in scope — parsed from the response, or from a file the
 model wrote (mirrored to the state dir, the repo copy removed)); a run that
-changed no requirements passes vacuously (the suite's full result stands and
-the empty block is the answer), while a run that DID change scenarios with
-zero parseable verdicts fails the stage — a silent pass is impossible.
-Unfulfilled scenarios build the fix directive; stage 11 commits the fix and
-re-runs stage 10, bounded by the loop caps; each iteration's log lands in the
-state dir (→ artifact), never the repo tree.
+changed no requirements and no referencing tests passes vacuously (the
+suite's full result stands and
+the empty block is the answer), while a run that DID change scenarios or has
+a referencing test with zero parseable verdicts fails the stage — a silent
+pass is impossible.
+The reviewer's report — the review call's full output: each verdict's
+evidence, the UNFULFILLED lines' "what's missing / what the fix must do",
+the note on what the tests don't cover — is mirrored per iteration into the
+state dir (→ artifact), and the fix directive names it by path: the fixer
+reads it on demand, alongside the machine-parsed verdict summary and, for a
+red suite, the raw output tail (a red iteration whose review breaks keeps
+the fix loop running on the raw output). Unfulfilled verdicts and a red
+suite build the fix directive; stage 11 commits the fix and re-runs stage
+10, bounded by the loop caps; each iteration's log lands in the state dir
+(→ artifact), never the repo tree.
 
 **Failure paths.** A crashed stage persists its full traceback to the
 runner's durable diagnostic log plus a one-line reason in the stage's

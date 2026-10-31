@@ -38,6 +38,7 @@ Feature: Implementation
   Scenario: Tests are generated for the new behaviour
     When the implement stage runs
     Then tests covering the new behaviour are added under tests/
+    And each test that implements a requirement carries a reference to the Gherkin scenario it arose from
 
   @implement
   Scenario: The arc42 documentation is updated and complete
@@ -57,7 +58,7 @@ Feature: Implementation
     Given the implement stage finished
     When the implement-check stage runs
     Then no file under requirements/ has changed
-    And any such edit is reverted and the pipeline loops back to the plan stage
+    And any such edit is reverted by the guard's pi repair call — it does not re-run the stage or loop back to the plan stage
 
   @implement
   Scenario: Implementation may only edit the current issue's plan

@@ -281,13 +281,17 @@ def pi_invoke(
         needs on demand with its read tool, and the invocation's token
         overhead stays small (configuration: "project files are referenced
         by path, not injected into the pi call");
-      - `context_as_args=True` — the extraction stage: the project files
-        (the Gherkin oracle, the arc42 markdown, the README, the baseline
-        diff) are handed to pi as @-file arguments — pi reads the named
-        files as context before answering (setup-pi: "pi reads the project
-        files as context"). The extraction needs the whole oracle, the
-        arc42 and the baseline diff up front to keep the delta consistent
-        with the existing scenarios.
+      - `context_as_args=True` — the extraction stage: the NON-oracle
+        project files (the arc42 markdown, the README, the baseline diff)
+        are handed to pi as @-file arguments — pi reads the named files as
+        context before answering (setup-pi: "pi reads the project files as
+        context"). The Gherkin oracle is NOT one of them: the stage's
+        instructions name its directory as the oracle's location and list
+        no requirement file by name — pi reads the files it judges relevant
+        from that directory on demand, and a directory is never an
+        @-argument (its handling reads files, so one there would crash pi
+        with EISDIR). The extraction reads the arc42 and the baseline diff
+        up front to keep the delta consistent with the existing scenarios.
 
     The invocation is `pi --print --mode json`: one-shot, stdout is a
     JSONL event stream. The stream is captured in full and EVERY completed
@@ -326,8 +330,10 @@ def pi_invoke(
             prompt_text = f"{instructions}\n\n{f.read()}".strip()
     # the context slice (see the docstring): path-referenced by default;
     # @-file arguments only when the stage opts in (the extraction stage)
-    # — a context entry that does not exist is dropped, never passed (a
-    # missing @-file would make pi's reader fail the call)
+    # — a context entry that is not an existing file is dropped, never
+    # passed: a missing @-file would make pi's reader fail the call, and a
+    # directory would crash pi with EISDIR (a directory is never an
+    # @-argument)
     ctx = [c for c in context if os.path.isfile(c)]
     if ctx:
         if context_as_args:
@@ -469,7 +475,7 @@ def guard_denied(f: str, allow: list[str], deny: list[str]) -> bool:
       path components (the implementation guard's `__pycache__` entry
       re-admits pycache at any depth this way — its call's deny set is only
       {requirements, plans}, so the component match is what keeps the
-      suite's compiled byproducts out of the revert list).
+      suite's compiled byproducts out of the violation list).
     - `deny` — the inverted-allow marker (`"!" + path` in the CLI): the
       entry denies itself and everything under it. The implementation
       stage's lane is "everything EXCEPT the protected set" — its guard
@@ -494,50 +500,247 @@ class GuardResult:
     violations: list[str]
 
 
+def _guard_violations(baseline: str, allow: list[str],
+                      deny: list[str]) -> list[str]:
+    """The shared guard's detection — the half the remedy change does not
+    touch: every working-tree change against the stage's baseline (tracked +
+    untracked, `changed_files`) that the stage's allowed set does not admit
+    (guard_denied). The three check sites keep their per-stage file sets and
+    this one shared predicate."""
+    return [f for f in changed_files(baseline)
+            if guard_denied(f, allow, deny)]
+
+
+def _guard_repair_instructions(baseline: str, violations: list[str],
+                               stage: str, template: str) -> str:
+    """The guard's repair instructions — the state-dir file the repair pi
+    call reads (the shape the shared plumbing already folds into its user
+    text). The instructions (a) name the off-limits files that changed,
+    (b) instruct pi to revert the changes to the named files, and
+    (c) instruct pi to keep the stage's own work valid against the task its
+    initial instructions gave it — the stage's prompt template referenced
+    by path, not embedded (the no-injection rule)."""
+    label = stage or "the stage"
+    files = "\n".join(f"  - {f}" for f in violations)
+    if template:
+        task = ("the task its initial instructions gave it — the stage's "
+                f"prompt template `pi-prompts/{template}.md` (read it if "
+                "the repair needs the task's context)")
+    else:
+        task = ("the task its initial instructions gave it — the stage's "
+                "prompt template under `pi-prompts/`")
+    return (
+        f"You are repairing a guard violation in {label}. The stage's "
+        "working tree carries changes outside the stage's allowed file set, "
+        "and the guard must restore the protected set without disturbing the "
+        "stage's own work.\n\n"
+        "The off-limits files that changed against the stage's baseline "
+        f"(`{baseline}`) are:\n\n"
+        f"{files}\n\n"
+        "Do exactly this:\n\n"
+        "1. Revert the changes to the named files — each back to its state "
+        f"at the baseline `{baseline}`: a file the baseline knew — `git "
+        f"checkout {baseline} -- <file>`; a file the baseline does not know "
+        "(one the stage added) — remove it from the tree (`git rm -f -- "
+        "<file>` for a tracked one, a plain deletion for an untracked one). "
+        "Revert exactly the named files — no other file may change.\n\n"
+        "2. Keep the stage's own work valid against " + task + ". The "
+        "stage's allowed changes stay intact; adjust the stage's own work "
+        "only where reverting the named files invalidates it.\n"
+    )
+
+
+def _guard_repair_call(baseline: str, violations: list[str],
+                       stage: str, template: str
+                       ) -> tuple[subprocess.CompletedProcess, str]:
+    """One repair call of the guard's bounded repair loop — a pi call
+    through the documented shared pi-call plumbing (pi_invoke: the call
+    every stage's invocation goes through — the run's resolved model, the
+    360-minute call cap, each finished call appending its input and output
+    token counts to the run's usage ledger). The repair instructions are
+    assembled in the plumbing as a state-dir file the call reads. Returns
+    the completed process and its class: "done" (the call ran to
+    completion), "cut" (cut off at the 360-minute cap — a slow model,
+    retried inside the loop), "dropped" (a non-zero exit with no output —
+    the provider stream died mid-flight, retried inside the loop),
+    "broken" (a non-zero exit with output — a broken environment; a slow
+    model is never a broken environment, and a broken environment is not
+    looped over)."""
+    model = os.environ.get("LLM_MODEL") or ""
+    ins = state_file("guard-repair.md")
+    with open(ins, "w", encoding="utf-8") as f:
+        f.write(_guard_repair_instructions(baseline, violations, stage,
+                                           template))
+    r = pi_invoke(model, ins)
+    if r.returncode == 0:
+        return r, "done"
+    if r.returncode == 124:
+        return r, "cut"
+    try:
+        has_out = bool(open(state_file("pi-guard-repair.md.out"),
+                            encoding="utf-8",
+                            errors="replace").read().strip())
+    except OSError:
+        has_out = False
+    return r, ("dropped" if not has_out else "broken")
+
+
+def _guard_stage_failure(stage: str, violations: list[str]) -> None:
+    """The stop the guard makes when its repair cap is exhausted without
+    clearing the violation: a failure report listing the violations (the
+    named off-limits files) — the job-visible `::error::` line, the
+    stage-fail-reason state file the run's summary step carries on to the
+    report, and the stage-summary mirror — then the stage exits non-zero
+    (a controlled stop, not a crash: the crash hook's diagnosis is for
+    uncaught exceptions, this is the guard's verdict)."""
+    label = stage or "the stage"
+    report = (f"the guard's repair cap (MAX_LOOPS) is exhausted without "
+              f"clearing the violation — {len(violations)} off-limits "
+              f"file(s) still changed: {' '.join(violations)}")
+    log(f"::error::guard: {report}")
+    d = state_dir()
+    os.makedirs(d, exist_ok=True)
+    try:
+        with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+            f.write(f"{label}: FAILED — {report}\n")
+        with open(os.path.join(d, "stage-summary.txt"), "a",
+                  encoding="utf-8") as f:
+            f.write(f"{label}: FAILED — {report}\n")
+    except OSError:
+        pass  # the job-visible line survives
+    sys.exit(1)
+
+
+def _guard_repair(baseline: str, allow: list[str], deny: list[str],
+                  violations: list[str], stage: str, template: str
+                  ) -> GuardResult:
+    """The guard's remedy for a detected violation — a bounded repair loop,
+    not a git revert plus a stage re-run. Each iteration makes one pi call
+    through the documented shared pi-call plumbing: the instructions name
+    the off-limits files that changed, instruct pi to revert the changes to
+    the named files, and instruct pi to keep the stage's own work valid
+    against the task its initial instructions gave it. After the call the
+    guard re-checks the working tree against the stage baseline + allowed
+    set — a cleared re-check lets the stage complete WITHOUT re-running its
+    generation (the pipeline proceeds to the next stage; the reverts are
+    committed so they ride the branch), and the guard records the cleared
+    repair in the state dir (`stage-guard-repaired.txt`) — the plan
+    stage's loop machinery claims that record and re-runs the plan stage's
+    generation, the guard re-checking the re-run (plan "the plan stage may
+    only touch its own plan file": any other change is reverted and the
+    plan stage re-runs); the other stages' machinery leaves the record
+    unclaimed and their stages complete without re-running. The repair
+    calls consume iterations
+    of the same documented cap machinery (caps_ok): bounded by MAX_LOOPS,
+    0 = no cap; a repair call cut off at the 360-minute pi call cap, or
+    dropped by a dead provider stream, consumes its iteration and is
+    retried inside the loop (a slow model is not a broken environment);
+    a cap exhausted without clearing the violation exits the stage with the
+    failure report listing the violations."""
+    attempt = 0
+    cleared: list[str] = []
+    while True:
+        try:
+            caps_ok(attempt)
+        except CapReached:
+            _guard_stage_failure(stage, violations)
+        r, kind = _guard_repair_call(baseline, violations, stage, template)
+        if kind == "broken":
+            log(f"::error::guard: the repair call failed (exit "
+                f"{r.returncode}) — a broken environment is not looped over")
+            sys.exit(1)
+        if kind == "cut":
+            log("::warning::guard: the repair call was cut off at the pi "
+                "call cap (exit 124) — a slow model, not a broken "
+                "environment; the iteration is consumed")
+        elif kind == "dropped":
+            log("::warning::guard: the repair call died with no output "
+                f"(exit {r.returncode}) — a dropped provider stream, not "
+                "a broken environment; the iteration is consumed")
+        else:
+            log(f"guard: the repair call completed (off-limits: "
+                f"{' '.join(violations)}) — re-checking the working tree")
+        # after the call the guard re-checks the working tree against the
+        # stage baseline + allowed set
+        cleared.extend(v for v in violations if v not in cleared)
+        violations = _guard_violations(baseline, allow, deny)
+        if not violations:
+            # the repair cleared the violation: commit the reverted files so
+            # the reverts ride the branch, then let the stage complete
+            # without re-running its generation — and record the cleared
+            # repair in the state dir (the plan stage's loop machinery
+            # claims the record and re-runs the plan stage's generation on
+            # it, the guard re-checking the re-run; the other stages' loop
+            # machinery leaves it unclaimed — a stage's guard call clears a
+            # stale record from a previous stage's guard call at its start)
+            commit_all("guard repair: off-limits changes reverted in place")
+            try:
+                with open(state_file("stage-guard-repaired.txt"), "w",
+                          encoding="utf-8") as f:
+                    f.write(f"{stage or 'the stage'}: the guard's pi call "
+                            f"reverted the off-limits change(s) — "
+                            f"{', '.join(cleared)}\n")
+            except OSError:
+                pass  # the record rides the state dir; a write failure is a
+                       # log gap, not a verdict change
+            log(f"guard: OK after repair — {' '.join(cleared)} reverted in "
+                f"place; the stage's own work stays valid, the stage "
+                f"completes without re-running its generation")
+            log("guard: the cleared repair is recorded in the state dir "
+                "(stage-guard-repaired.txt) — a stage that re-runs on a "
+                "repaired violation (the plan stage) re-runs its generation "
+                "on it")
+            return GuardResult(ok=True, violations=cleared)
+        attempt += 1
+
+
 def guard(baseline: str, allow: list[str] | tuple[str, ...],
-          deny: list[str] | tuple[str, ...] = ()) -> GuardResult:
-    """The one shared guard idiom (plan §4.1): everything in the baseline
-    diff that is not admitted (guard_denied) is reverted exactly (modified
-    files checked out from the baseline, untracked ones cleaned), and the
-    result is returned so the stage can re-run its generation. Invoked three
-    times by the three check stages with different allowed paths — one script
-    (guard-check.py), three calls; the implementation call passes the
-    inverted-allow deny set (its lane is everything except the protected
-    dirs), the others their plain allow sets."""
+          deny: list[str] | tuple[str, ...] = (), stage: str = "",
+          template: str = "") -> GuardResult:
+    """The one shared guard idiom (plan §4.1) — one implementation, three
+    call sites (the three check stages, each with its own per-stage allowed
+    file set): collect the working-tree changes against the stage's baseline
+    and compare them against the stage's allowed set — a clean stage
+    passes. A violation is repaired with a pi call — the off-limits files
+    named, pi told to revert the changes to the named files, and told to
+    keep the stage's own work valid against the task its initial
+    instructions gave it — instead of the guard reverting the files by git
+    and the stage being re-run: after each repair call the guard re-checks
+    the working tree against the stage baseline + allowed set, a cleared
+    re-check lets the stage complete without re-running its generation
+    (and records the cleared repair in the state dir —
+    stage-guard-repaired.txt, which the plan stage's loop machinery claims
+    to re-run the plan stage's generation, the guard re-checking the
+    re-run; the other checks' stages complete without re-running), and a
+    repair cap (MAX_LOOPS, 0 = no cap) exhausted without clearing the
+    violation fails the stage with a failure report listing the
+    violations. Invoked three times by the three check stages with
+    different allowed paths — one script (guard-check.py), three calls; the
+    implementation call passes the inverted-allow deny set (its lane is
+    everything except the protected dirs), the others their plain allow
+    sets. `stage` / `template` are the stage's identity for the repair
+    instructions (the CLI form reads them from the CW_GUARD_STAGE /
+    CW_GUARD_TEMPLATE env entries the stage sets for its guard call)."""
     allow = [a.rstrip("/") for a in allow if a]
     deny = [a.rstrip("/") for a in deny if a]
-    violations = []
-    for f in changed_files(baseline):
-        if not guard_denied(f, allow, deny):
-            continue
-        violations.append(f)
+    # a fresh guard call starts without a repair record: the state dir is
+    # shared across a run's stages, and a previous stage's cleared repair
+    # must not re-trigger a later stage's re-run
+    try:
+        os.remove(state_file("stage-guard-repaired.txt"))
+    except OSError:
+        pass
+    violations = _guard_violations(baseline, allow, deny)
     if not violations:
         log(f"guard: OK — only {' '.join(allow) or '(baseline)'} changed")
         return GuardResult(ok=True, violations=[])
-    # Revert exactly the files that leaked — the operation depends on what the
-    # baseline knew about each file:
-    #   baseline knows it (a tracked file that was modified) → restore its
-    #   baseline content;
-    #   baseline does not know it (a file the stage added, committed or not)
-    #   → remove it from the tree.
-    for f in violations:
-        exists_at_baseline = subprocess.run(
-            ["git", "cat-file", "-e", f"{baseline}:{f}"],
-            cwd=repo(), capture_output=True, text=True,
-        ).returncode == 0
-        if exists_at_baseline:
-            subprocess.run(["git", "checkout", baseline, "--", f], cwd=repo(), check=True)
-        elif subprocess.run(["git", "ls-files", "--", f], cwd=repo(),
-                            capture_output=True, text=True).stdout.strip():
-            subprocess.run(["git", "rm", "-f", "--", f], cwd=repo(), check=True)
-        else:
-            p = os.path.join(repo(), f)
-            if os.path.isdir(p):
-                subprocess.run(["git", "clean", "-fdq", "--", f], cwd=repo())
-            elif os.path.exists(p):
-                os.remove(p)
-    log(f"::error::guard: REVERTED off-limits files: {' '.join(violations)}")
-    return GuardResult(ok=False, violations=violations)
+    log(f"::error::guard: {len(violations)} off-limits file(s) in the "
+        f"working tree ({' '.join(violations)}) — repairing with a pi "
+        f"call (the off-limits files reverted, the stage's own work kept "
+        f"valid; the plan stage re-runs its generation on the cleared "
+        f"repair, the other stages complete without re-running)")
+    return _guard_repair(baseline, allow, deny, violations, stage,
+                         template)
 
 
 def commit_all(message: str) -> bool:
@@ -625,11 +828,25 @@ def external_guard() -> str | None:
 def main_guard_cli() -> None:
     """guard-check.py entry point:
         guard-check.py <baseline-ref> <allowed-path>… [! <denied-path>…]
-    exit 0 = clean stage, 1 = violations reverted (caller re-runs the
-    stage). Plain entries admit (whitelist semantics); a `!` section marker
+    exit 0 = the stage passes the guard — clean (everything changed is
+    inside the allowed paths), or a violation the guard's repair call
+    cleared in place (the off-limits files reverted by the call, a cleared
+    re-check — the stage completes without re-running its generation; the
+    guard records the cleared repair in the state dir
+    (stage-guard-repaired.txt) — the plan stage's loop machinery claims it
+    to re-run the plan stage's generation, the other checks' stages complete
+    without re-running);
+    exit 1 = the guard did not let the stage pass — its repair loop
+    exhausted MAX_LOOPS without clearing the violation (a failure report
+    listing the violations is logged and written to the state dir; the
+    stage fails on it), or its repair call hit a broken environment.
+    Plain entries admit (whitelist semantics); a `!` section marker
     switches to inverted-allow entries, which deny (the implementation
     guard's protected set) — a file is a violation when it is denied AND no
-    allow entry admits it (see guard_denied)."""
+    allow entry admits it (see guard_denied). The stage's identity for the
+    repair instructions (its label and prompt template) rides the
+    CW_GUARD_STAGE / CW_GUARD_TEMPLATE env entries the stage sets for its
+    guard call."""
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
         print("usage: guard-check.py <baseline-ref> <allowed-path>… "
@@ -644,7 +861,9 @@ def main_guard_cli() -> None:
         allow, deny = tail[:i], [a for a in tail[i + 1:] if a]
     else:
         allow, deny = tail, []
-    r = guard(baseline, allow, deny)
+    r = guard(baseline, allow, deny,
+              stage=os.environ.get("CW_GUARD_STAGE", ""),
+              template=os.environ.get("CW_GUARD_TEMPLATE", ""))
     sys.exit(0 if r.ok else 1)
 
 

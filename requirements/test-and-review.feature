@@ -32,19 +32,27 @@ Feature: Test and review loop
     When the fix loop commits a fix and re-runs test-and-review
     Then the loop repeats until zero problems remain
 
+  @review
+  Scenario: The reviewer's report is fed into the fixer
+    Given the review judged the run's scenarios against the test output
+    When the fix loop builds the fix directive
+    Then the reviewer's report for the iteration is mirrored into the state dir
+    And the directive names the report by path — the fixer reads it on demand
+    And the per-scenario evidence, what the fix must do and the findings the tests don't cover reach the fixer with the report
+
+  @review
+  Scenario: The review judges every iteration, red or green
+    Given a test-and-review iteration
+    When the iteration's suite run is reviewed
+    Then the review runs on the iteration's test output whether the suite is green or red
+    And a red iteration whose review breaks keeps the fix loop running on the raw test output
+
   @review @safety
   Scenario: The fix loop is bounded by MAX_LOOPS
     Given MAX_LOOPS is non-zero
     And the fix loop has run MAX_LOOPS iterations
     When the problems are still not zero
     Then the pipeline stops with a failure report listing the unfulfilled scenarios
-
-  @review @safety
-  Scenario: The loop respects the token budget
-    Given MAX_TOTAL_TOKENS is non-zero
-    And the cumulative LLM spend reached MAX_TOTAL_TOKENS
-    When another loop iteration would start
-    Then the loop stops and reports the budget exhaustion
 
   @review
   Scenario: Every iteration is logged without touching the repo tree
@@ -72,3 +80,23 @@ Feature: Test and review loop
     Then it takes the repo's make test target
     And the suite's runner is a stdlib-only script in the tree
     And the oracle is skipped-not-failed where the parser port is absent
+
+  Scenario: Tests reference the Gherkin requirement they arose from
+    Given the test suite under tests/
+    When a test that implements a Gherkin scenario is read
+    Then it carries a reference to the scenario it arose from
+    And a test that is only for correctness carries no such reference
+
+  @review
+  Scenario: A test change is judged by the requirement it references
+    Given a run whose work changes a test
+    When the test-and-review stage reviews the change
+    Then a test that is only for correctness may be changed freely
+    And a test that references a requirement leaves that requirement fulfilled after the change
+
+  Scenario: A changed requirement pulls in the tests that reference it
+    Given the run changed a Gherkin scenario in place
+    And the test suite has tests that reference that scenario
+    When the implementation works the changed requirement
+    Then every test that references the changed scenario is adjusted with it
+    And the adjusted tests fulfil the requirement as it now reads

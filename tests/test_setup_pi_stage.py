@@ -123,7 +123,13 @@ def test_secret_provider_wins_over_repo_file():
     """(setup-pi "The model configuration is provided by a GitHub secret or
     a repo file", "The additional packages are provided by a GitHub secret
     or a repo file", "The MCP configuration is provided via a GitHub secret"
-    — the GitHub-secret half of each provider pair) a non-empty GitHub
+    — the GitHub-secret half of each provider pair; reference
+    `requirements/setup-pi.feature::The model configuration is provided
+    by a GitHub secret or a repo file`,
+    `requirements/setup-pi.feature::The additional packages are provided
+    by a GitHub secret or a repo file`,
+    `requirements/setup-pi.feature::The MCP configuration is provided via
+    a GitHub secret`) a non-empty GitHub
     secret provider wins over the named repo file: the resolved content is
     the secret's, for every harness element that carries both a secret and
     a repo-file provider. A secret value that arrives empty is an absent
@@ -163,7 +169,9 @@ def test_secret_provider_wins_over_repo_file():
 
 def test_empty_or_absent_settings_provider_leaves_no_additional_packages():
     """(setup-pi "An empty or absent settings provider leaves pi without
-    additional packages") the harness materialisation writes a
+    additional packages"; reference
+    `requirements/setup-pi.feature::An empty or absent settings provider
+    leaves pi without additional packages`) the harness materialisation writes a
     `settings.json` only for a present provider: with the provider empty or
     absent (both halves), it CLEARS the agent directory's `settings.json`
     instead — the runner's pre-existing user-level settings (which declare
@@ -196,10 +204,13 @@ def test_empty_or_absent_settings_provider_leaves_no_additional_packages():
 
 def test_provided_config_without_backend_fails_and_never_falls_back():
     """(setup-pi "A provided file without a backend is not a usable
-    configuration") a provided model configuration (a GitHub secret or the
-    repo file) carrying no OpenAI-compatible backend URL triggers the
-    explicit "no backend in the provided configuration" failure — and the
-    code path never reads the runner's user-level configuration as the run's
+    configuration"; reference
+    `requirements/setup-pi.feature::A provided file without a backend is
+    not a usable configuration`)
+    a provided model configuration (a GitHub secret or the repo file)
+    carrying no OpenAI-compatible backend URL triggers the explicit "no
+    backend in the provided configuration" failure — and the code path
+    never reads the runner's user-level configuration as the run's
     configuration: the failure holds even though a valid user-level
     configuration (a backend URL and a model set) sits in the user agent
     directory, and the stage never resolves the run's backend from it."""
@@ -244,7 +255,13 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
     """(setup-pi "The run's harness is written into the agent subdirectory
     the invocation resolves", "pi resolves its model configuration from the
     agent directory the setup stage wrote", "The additional environment
-    variables are provided via a .env-style GitHub secret") the harness
+    variables are provided via a .env-style GitHub secret"; reference
+    `requirements/setup-pi.feature::The run's harness is written into the
+    agent subdirectory the invocation resolves`,
+    `requirements/setup-pi.feature::pi resolves its model configuration
+    from the agent directory the setup stage wrote`,
+    `requirements/setup-pi.feature::The additional environment variables
+    are provided via a .env-style GitHub secret`) the harness
     materialisation targets the agent subdirectory the run's pi invocations
     resolve — `PI_CODING_AGENT_DIR` where the runner sets it, otherwise
     `~/.pi/agent` — and writes every provided element there: `models.json`,

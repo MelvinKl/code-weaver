@@ -68,7 +68,10 @@ def _readme_example_types():
 
 
 def test_readme_example_declares_labeled_only():
-    """(scenario "The README example shows a labeled-only trigger") the
+    """(scenario "The README example shows a labeled-only trigger";
+    reference
+    `requirements/labeled-only-trigger.feature::The README example shows a
+    labeled-only trigger`) the
     README's consumption example declares `issues.types` as exactly
     `[labeled]` — no `opened`, no `edited`."""
     types = _readme_example_types()
@@ -78,7 +81,10 @@ def test_readme_example_declares_labeled_only():
 
 def test_deployed_consumer_workflow_declares_labeled_only():
     """(scenario "The repo's own deployed workflow uses a labeled-only
-    trigger") the consumer workflow this repo deploys on itself declares
+    trigger"; reference
+    `requirements/labeled-only-trigger.feature::The repo's own deployed
+    workflow uses a labeled-only trigger`) the consumer workflow this repo
+    deploys on itself declares
     `on.issues.types` as exactly `[labeled]` — no `opened`, no `edited`."""
     types = _types_list(_read(".github/workflows/code-weaver.yml"))
     assert types == ["labeled"], f"deployed workflow declares {types!r}"
@@ -86,7 +92,10 @@ def test_deployed_consumer_workflow_declares_labeled_only():
 
 def test_readme_example_and_deployed_workflow_agree():
     """(scenario "The documented example and the deployed workflow agree on
-    the trigger") both extractions are non-empty, equal to each other, and
+    the trigger"; reference
+    `requirements/labeled-only-trigger.feature::The documented example and
+    the deployed workflow agree on the trigger`) both extractions
+    are non-empty, equal to each other, and
     each is exactly the single type `labeled` — the two declared triggers
     stay character-for-character the same."""
     example = _readme_example_types()
@@ -98,8 +107,15 @@ def test_readme_example_and_deployed_workflow_agree():
 
 def test_consumer_workflow_never_fires_on_opened_or_edited():
     """(scenarios "Opening an issue does not start a factory run" and
-    "Editing an issue without a label change does not start a factory run")
-    GitHub schedules a consumer workflow run only for declared event types,
+    "Editing an issue without a label change does not start a factory
+    run"; reference
+    `requirements/labeled-only-trigger.feature::Opening an issue does not
+    start a factory run`,
+    `requirements/labeled-only-trigger.feature::Editing an issue without a
+    label change does not start a factory run`,
+    `requirements/trigger.feature::A manual dispatch processes a named
+    issue`) GitHub schedules a consumer workflow run only for declared
+    event types,
     so `opened` and `edited` must be excluded from `on.issues.types` — and
     the unchanged manual dispatch must stay declared (regression guard for
     `requirements/trigger.feature`'s "A manual dispatch processes a named
@@ -115,10 +131,15 @@ def test_consumer_workflow_never_fires_on_opened_or_edited():
 def test_factory_trigger_gate_unchanged():
     """(scenarios "Adding the trigger label still starts the factory and
     records the issue" and "Adding a label that is not the trigger label
-    leaves the factory idle") the reusable factory is event-agnostic by
-    design — issue #20 changes only the consumer layer, so stage 1's gate
-    is unchanged; these six markers pin it verbatim so the gate (and its
-    `factory idle` negative path) cannot regress."""
+    leaves the factory idle"; reference
+    `requirements/labeled-only-trigger.feature::Adding the trigger label
+    still starts the factory and records the issue`,
+    `requirements/labeled-only-trigger.feature::Adding a label that is not
+    the trigger label leaves the factory idle`)
+    the reusable factory is event-agnostic by design — issue #20 changes
+    only the consumer layer, so stage 1's gate is unchanged; these six
+    markers pin it verbatim so the gate (and its `factory idle` negative
+    path) cannot regress."""
     text = _read(".github/workflows/factory.yml")
     start = text.index("  trigger:")
     end = text.index("  setup-pi:")

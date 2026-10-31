@@ -1,6 +1,8 @@
 # requirements/requirement-extraction.feature
 # Factory stages 3 + 4 — derive the delta requirements from the project itself
 # (arc42 markdown files + git diff + docs/README) and write them as Gherkin.
+# The oracle reaches the extractor as its directory, not a file list: pi
+# decides for itself which oracle files the delta touches.
 
 Feature: Requirement extraction
   As the factory
@@ -25,6 +27,7 @@ Feature: Requirement extraction
     Given the project has the arc42 markdown files, docs/ and README.md
     When the extraction stage runs pi with the requirements prompt template
     Then pi reads the arc42 markdown files, the baseline diff and docs/README as context
+    And pi reads the oracle files it judges relevant from the requirements directory on demand
     And the derived requirements are the delta implied by the issue text against that baseline
 
   @extraction
@@ -55,13 +58,18 @@ Feature: Requirement extraction
     Then it updates the same requirement file in place (named after the topic the delta covers)
     And no duplicate requirement files fork
 
-  Scenario: The context handed to pi is concrete files, never directories
-    # pi's @-argument handling reads each argument as a file (it even
-    # sniffs image mime types) — a directory there crashes pi with EISDIR
-    Given the requirements dir and the doc dir exist in the checkout
-    When the stage assembles the pi context arguments
-    Then every context argument is a file that exists
-    And directories are expanded to the files they contain
+  Scenario: The extraction prompt names the oracle directory; pi picks the relevant files
+    # the prompt used to hand the whole oracle as an expanded file list — the
+    # extractor now only learns where the oracle lives and decides for itself
+    # which files the delta touches; a directory is still never an @-argument
+    # (pi's @-argument handling reads files — a directory there crashes pi
+    # with EISDIR)
+    Given the extraction stage assembles the pi call for the derivation
+    When the call's instructions and @-file arguments are read
+    Then the instructions name the requirements directory as the oracle's location
+    And the instructions list no requirement file by name
+    And pi reads the files it judges relevant from that directory on demand
+    And every @-file argument of the call is a file that exists — a directory is never an @-argument
 
   Scenario: Extraction places the delta by topic
     Given an issue with a number and a title

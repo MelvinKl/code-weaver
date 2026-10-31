@@ -22,10 +22,10 @@ Feature: Secrets and safety
 
   @safety
   Scenario: Every loop in the pipeline respects its cap
-    Given the pipeline contains the guard re-run, review-fix and gate-fix loops
-    Then every loop respects the configured cap
+    Given the pipeline contains the guard repair, review-fix and gate-fix loops
+    Then every bounded loop is bounded by its iteration cap alone
     And a cap of 0 means that loop is uncapped
-    And the factory is guaranteed to terminate while all caps are non-zero
+    And the factory is guaranteed to terminate while all remaining loop caps are non-zero
 
   @safety
   Scenario: Work only happens on the AI branch

@@ -128,7 +128,9 @@ PROVIDER_MARKERS = (
 
 def test_documented_setup_stage_installs_and_configures_pi():
     """(setup-pi "The documented setup stage installs and configures pi
-    for the run" — new, @docs) the README's stage list and the arc42
+    for the run" — new, @docs; reference
+    `requirements/setup-pi.feature::The documented setup stage installs
+    and configures pi for the run`) the README's stage list and the arc42
     chapters that discuss the setup stage state the new contract — the
     setup stage installs pi and configures it for the workflow run. Every
     surface that discusses the stage must carry both statements: a chapter
@@ -160,7 +162,9 @@ def test_documented_setup_stage_installs_and_configures_pi():
 
 
 def test_documented_surfaces_state_no_pi_prerequisite():
-    """(same scenario — the second Then) the surfaces state that no
+    """(same scenario — the second Then; reference
+    `requirements/setup-pi.feature::The documented setup stage installs
+    and configures pi for the run`) the surfaces state that no
     pre-installed or pre-configured pi is a pre-requisite of the runner
     environment: every surface that discusses the setup stage carries the
     negation, with "pre-requisite" reserved for what survives (the `gh`
@@ -178,7 +182,9 @@ def test_documented_surfaces_state_no_pi_prerequisite():
 
 def test_documentation_lists_the_harness_providers():
     """(setup-pi "The documentation lists the harness providers" — new,
-    @docs) the README and the arc42 deployment chapter list the providers
+    @docs; reference
+    `requirements/setup-pi.feature::The documentation lists the harness
+    providers`) the README and the arc42 deployment chapter list the providers
     — the GitHub secrets and the repo files `.pi/agent/models.json`,
     `.pi/settings.json` and `.pi/mcp.json`, plus the `.env`-style secret
     for the extension's environment variables — and state that an empty
@@ -192,7 +198,11 @@ def test_documentation_lists_the_harness_providers():
 
 
 def test_no_documented_surface_states_the_retired_setup_contract():
-    """(the negative half of both @docs scenarios) no surface — the README
+    """(the negative half of both @docs scenarios; reference
+    `requirements/setup-pi.feature::The documented setup stage installs
+    and configures pi for the run`,
+    `requirements/setup-pi.feature::The documentation lists the harness
+    providers`) no surface — the README
     or any arc42 chapter — still states the retired verify-only
     mechanism: pi "a pre-requisite of the runner environment"
     (affirmatively), the factory "never installs or re-configures pi", or

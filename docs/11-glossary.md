@@ -17,27 +17,49 @@
   structure — a delta's scenarios extend the existing topic file that covers
   them, a new file is created only for a topic no file yet covers, and no
   file is named after the issue.
-- **Delta-scoped review** — the test-and-review stage's review judges only the
-  scenarios of the feature files a run changed (the suite still executes the
-  whole oracle). The standing oracle is the accumulated set, so re-judging
+- **Delta-scoped review** — the test-and-review stage's review judges the
+  scenarios of the feature files a run changed, plus the scenarios the
+  run's changed tests reference (a changed test is judged by the requirement
+  it references; the suite still executes the whole oracle). The standing
+  oracle is the accumulated set, so re-judging
   every scenario on every run grows with the repo's issue history and was
   the review step's unbounded runtime; the runs that added scenarios own
-  their review. A run that changed no requirements passes vacuously (the
+  their review. A run that changed no requirements and no referencing
+  tests passes vacuously (the
   suite's full result stands, the empty verdict block is the answer); a run
-  that DID change scenarios with zero parseable verdicts still fails the
-  stage — the oracle cannot be assumed green.
+  that DID change scenarios or has a referencing test with zero parseable
+  verdicts still fails the
+  stage — the oracle cannot be assumed green. The review runs on every
+  iteration's output (red or green), and its full output — the reviewer's
+  report: each verdict's evidence, the UNFULFILLED lines' "what's missing
+  / what the fix must do", the note on what the tests don't cover — is
+  mirrored per iteration into the state dir and fed into the fixer: the
+  fix directive names it by path, the fixer reads it on demand
 - **Oracle** — the Gherkin requirements under `requirements/` (15 files,
-  156 scenarios), structured by topic: each file is named after the topic
+  161 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
 - **Guard** — the shared "only X changed" check (one implementation,
   three call sites): collects working-tree changes against the stage
-  baseline, allows the per-stage set, reverts exactly the off-limits
-  files and re-runs the stage.
+  baseline, compares them against the per-stage set, and repairs a
+  violation with a pi call — the off-limits files named, told to be
+  reverted, the stage's own work told to stay valid against the task its
+  initial instructions gave it — instead of reverting by git and restarting
+  the stage; the guard records a cleared repair in the state dir — the
+  plan stage's check re-runs the plan stage's generation on it (any other
+  change is reverted and the plan stage re-runs) while the other checks'
+  stages complete without re-running; the repair loop is bounded by
+  `MAX_LOOPS` (0 = no cap), and a
+  cap exhausted without clearing the violation fails the stage with a
+  report listing the violations.
 - **Context contract** — the two disjoint slices (chapter 5): the
-  extraction stage's `@`-file arguments (pi reads the named files as
-  context before answering) and the other stages' path-referenced files
+  extraction stage's `@`-file arguments (the arc42 markdown, `README.md`,
+  the baseline diff — pi reads the named files as context before answering;
+  the Gherkin oracle is not one of them — its directory is named in the
+  instructions and pi reads the files it judges relevant on demand, a
+  directory never being an `@`-argument) and the other stages'
+  path-referenced files
   (contents never embedded; pi reads on demand with its read tool).
 - **State dir / artifacts** — `$RUNNER_TEMP/cw/`: every stage value is a
   file; the dirs travel as workflow artifacts between jobs and are never

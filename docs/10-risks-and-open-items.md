@@ -6,12 +6,16 @@
   The residual risk is a *verdict* drift (the judge calls a scenario
   fulfilled that the code does not meet) — inherent to a model as judge;
   the bounded fix loop is the containment.
-- **The oracle's two context slices** — setup-pi pins `@`-file arguments
-  for `requirements/`, `README.md`, `docs/`; configuration pins
-  path-referenced, never-embedded files. The fix re-sliced the two onto
-  disjoint stage boundaries (chapter 5): extraction is the `@`-file
-  slice; plan/implement/review/pr-body are the path-referenced slice. An
-  oracle edit that re-couples them contradicts itself again.
+- **The oracle's two context slices** — setup-pi pins the capability that
+  pi, invoked with `@`-file arguments, reads the named files as context
+  before answering; configuration pins path-referenced, never-embedded
+  files. The slices sit on disjoint stage boundaries (chapter 5):
+  extraction is the `@`-file slice — the `@`-file arguments are the arc42
+  markdown, `README.md` and the baseline diff, and the oracle reaches the
+  extractor as its directory named in the instructions, pi reading the files
+  it judges relevant from it on demand (a directory is never an
+  `@`-argument); plan/implement/review/pr-body are the path-referenced
+  slice. An oracle edit that re-couples them contradicts itself again.
 - **Runner environment** — no pre-installed or pre-configured pi is a
   pre-requisite: the setup stage installs pi for the run and configures it
   for the workflow run from the run's provided harness, failing explicitly
@@ -26,7 +30,9 @@
   fix: only the next triggered run carries a workflow change.
 - **Self-editing separation** — the implement guard's deny set excludes
   `requirements-dir`: intra-PR test fixes are fine, requirement edits are
-  not (they loop back to the plan stage). The guard runs inverted — the
+  not (the guard repairs them in place with a pi call — the changed file
+  named and reverted, the stage not re-run, no loop back to the plan
+  stage). The guard runs inverted — the
   implementation's lane is everything except the protected set (requirements
   and the plans dir), with exactly the current issue's plan file re-allowed
   over it (the plan is a live state tracker); any other issue's plan file is
@@ -45,7 +51,9 @@
   `implement.feature`'s “implementation may only edit the current
   issue's plan” say the same thing: the stricter implement pin is what the
   guard enforces. The implement stage stays walled off from the oracle
-  (its guard reverts requirement edits and loops back to planning).
+  (its guard repairs requirement edits in place — the changed file named
+  and reverted by the guard's pi call — no loop back to planning, the
+  stage is not re-run).
 - **Extraction delta shape** — the guard keeps the delta inside the
   requirements dir; inside it, the stage pins the topic placement: a
   delta's scenarios extend the existing topic file that covers their topic
@@ -79,12 +87,12 @@
   scenario name (the one-file-behind state the review stage is the
   designated resolver of). The owner's follow-up is the rename + When
   edit in `requirements/trigger.feature` (a follow-up issue).
-- **Open item for the owner (four standing scenarios superseded by
-  #43)** — the issue-43 delta's header
+- **Four standing scenarios superseded by #43 — landed by the issue-69
+  run** — the issue-43 delta's header
   (`cost-and-token-usage.feature`) declares four standing
   scenarios superseded — run #43 reported them in its stage reply instead of
   editing (at the time requirements/ was read-only to the extraction
-  stage; the placement change lifts that pin):
+  stage; the placement change lifted that pin):
   `configuration.feature`’s “The loop caps are configurable” and “A loop
   cap of 0 means no cap” (both Givens pin “the defaults are MAX_LOOPS 5
   and MAX_TOTAL_TOKENS 500000”); `test-and-review.feature`’s “The loop
@@ -109,14 +117,14 @@
   with the “a cap of 0 means that loop is uncapped” line staying. In run
   #43 the factory did not make that edit: at the time `requirements/` was
   read-only to every stage, so per the rule then in force the contradiction
-  was reported, not edited. The placement change lifts the extraction
-  stage's read-only pin, so the rewording above can now land in the three
-  files, by the owner or a follow-up run. `PLAN.md` — where the
-  arc42 set lives in a target without a `docs/` dir — is not in this repo's
-  tree, so this entry stands alone. The owner's follow-up is the
-  rewording above in `requirements/configuration.feature`,
+  was reported, not edited. The placement change lifted the extraction
+  stage's read-only pin, and the issue-69 run is that follow-up run — its
+  extraction stage made the rewording above land in the three files
+  (`requirements/configuration.feature`,
   `requirements/test-and-review.feature` and
-  `requirements/safety.feature` (a follow-up issue).
+  `requirements/safety.feature`), so this entry is closed. `PLAN.md` —
+  where the arc42 set lives in a target without a `docs/` dir — is not in
+  this repo's tree, so nothing else is owed there.
 - **Cost rates come from the run's model configuration** — the report
   stage derives the run's total cost from the recorded usage, keyed on
   the run's resolved `llm-model` setting (the only documented adjustable

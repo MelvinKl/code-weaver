@@ -6,7 +6,10 @@
   Gherkin into the requirements dir, placed by topic — an existing topic file
   extended in place, a new file only for a topic no file yet covers; the guard
   (the one shared idiom) then verifies that ONLY the requirements dir changed
-  — a leak reverts the offending files and the extraction re-runs. Changed
+  — a leak is repaired in place by the guard's pi call (the off-limits files
+  named, told to be reverted, the stage's own work told to stay valid) and a
+  clean re-check lets the stage complete without re-running the extraction.
+  Changed
   feature files must parse with Cucumber's official Gherkin parser (a
   requirement must be executable: the test-and-review stage runs every
   scenario).
@@ -28,12 +31,16 @@ import stages
 
 
 def existing_context() -> list[str]:
-    """The project files the extraction's pi call reads — handed to pi as
-    @-file arguments (pi reads the named files as context before answering):
-    the Gherkin oracle, the arc42 markdown (the docs/ files — the top-level
-    PLAN.md where a target has no doc dir), README.md, and the baseline diff
-    (the issue's change set recorded by the baseline stage)."""
-    ctx = stages.project_context()
+    """The NON-oracle project files the extraction's pi call reads — handed
+    to pi as @-file arguments (pi reads the named files as context before
+    answering): the arc42 markdown (the docs/ files — the top-level PLAN.md
+    where a target has no doc dir), README.md, and the baseline diff (the
+    issue's change set recorded by the baseline stage). The Gherkin oracle
+    is NOT expanded into these arguments: the call's instructions name its
+    directory as the oracle's location and list no requirement file by name
+    — pi reads the files it judges relevant from that directory on demand
+    (a directory is never an @-argument)."""
+    ctx = stages.project_context(include_oracle=False)
     diff = common.state_file("baseline.diff")
     if os.path.exists(diff):
         ctx.append(diff)

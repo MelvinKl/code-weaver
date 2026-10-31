@@ -22,11 +22,11 @@ builders and the report stage fall back to that file, so the contract
 holds for both shapes.
 
 The repository's implementation plan (`PLAN.md`) and the Gherkin oracle
-(`requirements/` — 15 files, 156 scenarios, structured by topic: each
+(`requirements/` — 15 files, 161 scenarios, structured by topic: each
 file is named after the topic it covers) are sibling artefacts, not part of
 this set: the plan is the build tracker, the oracle is the requirements
 this code must fulfil (the factory's own stage 10 checks the implementation
-against every one of the 156 scenarios).
+against every one of the 161 scenarios).
 
 ## AI activity (code-weaver)
 

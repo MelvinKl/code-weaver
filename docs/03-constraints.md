@@ -18,8 +18,12 @@
   providers (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`, `PI_EXTENSION_ENV`)
   ride the same block.
 - **The requirements are read-only.** No stage may edit a file under the
-  requirements dir: the guard reverts such edits (and, during
-  implementation, loops the run back to the plan stage).
+  requirements dir: the guard repairs such edits in place with a pi call —
+  the changed file named and reverted, the stage's own work told to stay
+  valid — instead of reverting them by git; a requirement edit during
+  implementation does not loop the run back to the plan stage (the same
+  repair call confirms the implementation's work based on the plan is still
+  valid).
 - **Work happens only on the AI branch** `ai/code-weaver/<issue_number>`;
   the target branch is never modified by the factory.
 - **The test suite is stdlib-only.** The suite runner is a plain-python

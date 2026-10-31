@@ -83,7 +83,9 @@ def _payload_bytes(text):
 
 def test_factory_file_carries_its_runtime_tree_embedded():
     """(reuse-by-ref "a published version is self-contained" — the
-    restored-and-improved rewrite) the workflow file's payload region
+    restored-and-improved rewrite; reference
+    `requirements/reuse-by-ref.feature::A published version is
+    self-contained`) the workflow file's payload region
     exists exactly once and holds a fresh build of the repo's runtime
     tree — the embed the release pipeline's rewrite commits: the file
     at the tag the release flow cuts carries the tree of that tag, byte
@@ -108,7 +110,9 @@ def test_factory_file_carries_its_runtime_tree_embedded():
 
 
 def test_embedded_tree_holds_the_canonical_runtime_files():
-    """(the same scenario, made silent-safe) the payload decodes to a
+    """(the same scenario, made silent-safe; reference
+    `requirements/reuse-by-ref.feature::A published version is
+    self-contained`) the payload decodes to a
     tarball whose extracted tree holds the marker files the stage code
     resolves against — a curation drift in the embedder (a prefix lost,
     an exclusion over-broad) would leave a tree the stage steps cannot
@@ -140,7 +144,9 @@ def test_embedded_tree_holds_the_canonical_runtime_files():
 
 def test_no_run_fetches_the_factory_repo():
     """(reuse-by-ref "a published version is self-contained" — the
-    single-pin property) no run-time path in the file reaches the
+    single-pin property; reference
+    `requirements/reuse-by-ref.feature::A published version is
+    self-contained`) no run-time path in the file reaches the
     factory repo: the old mechanism's git clone and its owner-qualified
     URL are gone, so the ref on the consumer's uses: line is the only
     version selection a run makes — there is no second pin to keep in
@@ -158,7 +164,9 @@ def test_no_run_fetches_the_factory_repo():
 
 
 def test_no_stage_reads_the_factory_ref_input():
-    """(the input the double pin relayed) no step expression in the
+    """(the input the double pin relayed; reference
+    `requirements/reuse-by-ref.feature::The whole version is one ref`)
+    no step expression in the
     file reads `inputs.factory-ref` anymore — the input stays declared
     (a legacy no-op, so an older consumer's with: block stays
     schema-valid), but the runtime tree is the file's own: reading the

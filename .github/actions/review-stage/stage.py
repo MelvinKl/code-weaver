@@ -3,17 +3,33 @@
 
   run the target's test suite (contract: `make test`) → the Gherkin oracle
   executes: every scenario is an acceptance test
-  → pi (review prompt) marks every scenario of the run's changed feature
-    files FULFILLED/UNFULFILLED against the results (the suite executes
-    every scenario; only the re-judgement is delta-scoped — the accumulated
-    oracle is not re-reviewed on every run) and notes anything the tests
-    don't cover that affects those scenarios
+  → pi (review prompt) marks every scenario in the run's verdict scope
+    FULFILLED/UNFULFILLED against the results — the scenarios of the
+    run's changed feature files, plus the scenarios the run's changed
+    tests reference (the suite executes every scenario; only the
+    re-judgement is delta-scoped — a changed test is judged by the
+    requirement it references, and the accumulated oracle is not
+    re-reviewed on every run) and notes anything the tests don't cover
+    that affects those scenarios — the review runs on every iteration's
+    output, red or green: the report it returns is what the fixer acts on
   → green & all fulfilled → stage 10 done
-  → otherwise a fix directive is built, pi fixes, the suite + review re-run.
+  → otherwise the reviewer's report — the review call's full captured
+    output: the verdict block with each line's evidence, the
+    UNFULFILLED lines' "what's missing / what the fix must do", the
+    note on what the tests don't cover — is mirrored per iteration
+    into the state dir, and the fix directive names it by path: the
+    fixer reads it on demand (the no-injection idiom the review call
+    itself uses for the test output), alongside the machine-parsed
+    verdict summary and, for a red suite, the raw output tail; pi
+    fixes, the suite + review re-run. A review that breaks on a red
+    iteration keeps the fix loop running on the raw output (a red
+    suite is never a pass); the same breakdown on a green suite fails
+    the stage (the oracle cannot be assumed green)
 Bounded by MAX_LOOPS (0 = no cap). Each iteration — test output,
-verdict, fix directive — is logged into the state dir and travels as a
-workflow artifact: the audit trail lives in the workflow log/artifacts, and
-nothing under test-results/ is ever committed to the repo.
+verdict, reviewer report, fix directive — is logged into the state dir
+and travels as a workflow artifact: the audit trail lives in the
+workflow log/artifacts, and nothing under test-results/ is ever
+committed to the repo.
 
 The review call's captured output is the model's FULL transcript: the pi
 invocation runs `--print --mode json` and the harness reconstructs EVERY
@@ -30,6 +46,7 @@ completed turns behind), a settled non-zero exit is a broken environment.
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import shutil
@@ -69,12 +86,71 @@ REVIEW_OUT = "pi-review.md.out"
 # scenario on every run makes the review unboundedly slow (the standing
 # oracle was judged in the runs that added it — those runs own it). The
 # suite still EXECUTES every scenario; only pi's re-judgement is scoped to
-# the feature files that changed against the run's baseline.
+# the run's verdict scope — the feature files that changed against the run's
+# baseline, plus the scenarios the run's changed test files reference (a
+# changed test is judged by the requirement it references). A run that
+# changed no requirements and no referencing tests passes vacuously exactly
+# as before.
 def delta_feature_files() -> list[str]:
     req = common.env_dir("REQUIREMENTS_DIR")
     if not req:
         return []
     return stages.changed_requirement_files()
+
+
+# The reference convention the suite and the oracle join on — the
+# implement stage prescribes it in its instructions and the suite's
+# standing test enforces it over tests/: a test that implements a
+# Gherkin scenario carries a reference to the scenario it arose from —
+# the machine form is the test's docstring citing
+# `<feature file>::<scenario name>` (e.g.
+# `requirements/guard-rail.feature::Guard repairs are capped`); a test
+# that is only for correctness carries no such reference. The review
+# extracts exactly these citations from the run's changed test files —
+# the changed tests' references join the verdict scope.
+SCENARIO_REF_RE = re.compile(r"`requirements/([\w.-]+\.feature)::([^`]+)`")
+
+
+def changed_test_files() -> list[str]:
+    """The test files this run changed — the working tree against the
+    run's baseline, filtered to the test suite's dir (`tests/`). They
+    ride the review call's path-referenced context (the slice is
+    preserved — never embedded), and the scenarios their docstrings
+    reference join the verdict scope."""
+    return [f for f in common.changed_files(stages.baseline_sha())
+            if stages.under(f, "tests")]
+
+
+def referenced_scenarios(test_files: list[str]) -> list[tuple[str, str]]:
+    """The scenarios the run's changed test files reference — the
+    convention's docstring form (SCENARIO_REF_RE), read from the
+    docstrings of the named test files (the module docstring and every
+    function's; a file that does not parse contributes no references).
+    Every referenced scenario joins the verdict scope: a changed test
+    that is only for correctness references nothing — it may be changed
+    freely, no verdict is owed on its account; a changed test that
+    references a scenario must leave that scenario fulfilled after the
+    change, and a test change that leaves it unfulfilled is an
+    unfulfilled scenario of the run's delta that feeds the fix loop like
+    any other. De-duplicated, first-seen order."""
+    refs: list[tuple[str, str]] = []
+    for f in test_files:
+        try:
+            tree = ast.parse(
+                open(os.path.join(common.repo(), f), encoding="utf-8",
+                     errors="replace").read())
+        except (OSError, ValueError, SyntaxError):
+            continue
+        docs = [ast.get_docstring(tree) or ""]
+        docs += [ast.get_docstring(n) or ""
+                 for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+        for doc in docs:
+            doc = " ".join(doc.split())
+            for m in SCENARIO_REF_RE.finditer(doc):
+                ref = (m.group(1), m.group(2).strip())
+                if ref not in refs:
+                    refs.append(ref)
+    return refs
 
 
 def _stream_settled(template: str) -> bool | None:
@@ -168,33 +244,64 @@ def _verdict_file() -> tuple[str | None, str | None]:
 def review(i: int, test_out: str):
     prompt = common.state_file(f"review-prompt-{i}.txt")
     changed = delta_feature_files()
+    tests = changed_test_files()
+    refs = referenced_scenarios(tests)
     with open(prompt, "w") as f:
         f.write(
             f"The test output of this iteration is in {test_out} (read it).\n"
             f"Review it against the Gherkin scenarios this run must judge and the current diff.\n"
         )
-        if changed:
-            f.write(
-                "The feature files this run changed — their scenarios are the "
-                "only ones your REVIEW-VERDICT block covers:\n"
-                + "\n".join(f"- {f}" for f in changed)
-                + "\n"
-            )
+        if changed or refs:
+            if changed:
+                f.write(
+                    "The feature files this run changed — their scenarios "
+                    "are in your verdict scope:\n"
+                    + "\n".join(f"- {f}" for f in changed)
+                    + "\n"
+                )
+            if refs:
+                f.write(
+                    "The test files this run changed reference these "
+                    "scenarios (extracted from their docstrings) — "
+                    "the scenarios the changed tests reference join "
+                    "the verdict scope with the changed feature files' "
+                    "scenarios:\n"
+                    + "\n".join(f"- {f}::{n}" for f, n in refs)
+                    + "\n"
+                    "The run's changed test files are named in your "
+                    "context list — read the ones a verdict needs. A "
+                    "changed test that is only for correctness references "
+                    "nothing — it may be changed freely, no verdict is "
+                    "owed on its account. A changed test that references "
+                    "a scenario must leave that scenario fulfilled after "
+                    "the change — a test change that leaves it "
+                    "unfulfilled is an unfulfilled scenario of the "
+                    "run's delta: mark it UNFULFILLED and the fix loop "
+                    "acts on it like any other.\n"
+                )
+            else:
+                f.write(
+                    "Your REVIEW-VERDICT block covers exactly the changed "
+                    "feature files' scenarios — none of those skipped, "
+                    "none invented.\n"
+                )
         else:
             f.write(
-                "This run changed no requirements. The verdict block stays "
-                "empty — no scenario lines — between its markers, and the "
-                "note names any problem the suite output itself shows.\n"
+                "This run changed no requirements, and no changed test "
+                "references a scenario. The verdict block stays empty — "
+                "no scenario lines — between its markers, and the note "
+                "names any problem the suite output itself shows.\n"
             )
-    # Referenced by path, NOT injected — embedding the test output and the
-    # changed feature files in full would cost far too many tokens; pi reads
-    # what the review needs on demand. test_out is an absolute state-dir path
-    # and is already named in the prompt ("read it"). The context lists the
-    # changed feature files only — never the whole requirements dir: a
-    # directory argument would crash pi with EISDIR, and referencing the
-    # standing oracle would invite the unbounded re-review the delta scope
-    # exists to avoid.
-    context = [test_out, *changed]
+    # Referenced by path, NOT injected — embedding the test output, the
+    # changed feature files and the run's changed test files in full would
+    # cost far too many tokens; pi reads what the review needs on demand.
+    # test_out is an absolute state-dir path and is already named in the
+    # prompt ("read it"). The context lists the changed feature files and
+    # the run's changed test files — never a whole dir: a directory
+    # argument would crash pi with EISDIR, and referencing the standing
+    # oracle would invite the unbounded re-review the delta scope exists
+    # to avoid.
+    context = [test_out, *changed, *tests]
     r = stages.pi_stage("review", prompt_file=prompt, context=context)
     if r.returncode != 0:
         out = common.state_file(REVIEW_OUT)
@@ -229,14 +336,19 @@ def review(i: int, test_out: str):
                    "oracle cannot be assumed green")
         return None, 1
     verdicts = parse_verdicts(text)
-    if not verdicts and not delta_feature_files():
-        # The run's delta is empty: the prompt asked for an empty block, and
-        # a model that honoured it (or one that simply summarised) is a
-        # vacuous pass — zero scenarios changed, zero scenarios to judge.
-        # (An empty delta with a real model answer is still returned: the
+    if (not verdicts and not delta_feature_files()
+            and not referenced_scenarios(changed_test_files())):
+        # The run's delta is empty: no changed requirements and no changed
+        # test referencing a scenario — the prompt asked for an empty
+        # block, and a model that honoured it (or one that simply
+        # summarised) is a vacuous pass — zero scenarios to judge. (An
+        # empty delta with a real model answer is still returned: the
         # stage treats it as "nothing to review".)
-        common.log("stage 10: no changed requirements in this run — the "
-                   "review's empty verdict block is the vacuous pass")
+        common.log("stage 10: no changed requirements and no changed "
+                   "test references a scenario in this run — the "
+                   "run's delta is empty; the verdict block stays "
+                   "empty, and the suite's own result decides the "
+                   "stage")
         return ([], text), 0
     if not verdicts:
         # The block is the oracle — accept it from a file the review call
@@ -279,34 +391,57 @@ def tail(path: str, n: int = 200) -> str:
 def main() -> None:
     common.install_crash_diagnostics("stage 10-11 test & review")
     i = 0
-    prev_cut = False
     pending_audit = False
     while True:
         common.caps_ok(i)
         rc, out = run_tests(i)
-        res, rrc = review(i, out) if rc == 0 else (None, 0)
+        # The review runs on every iteration's output — red or green:
+        # the report it returns is what the fixer acts on, and a red
+        # suite is never a pass, so the review's own breakdown cannot
+        # hide one.
+        res, rrc = review(i, out)
         verdicts = res[0] if res else None
+        # The reviewer's report for the iteration — the review call's
+        # full captured output (the verdict block with each line's
+        # evidence, the UNFULFILLED lines' "what's missing / what the
+        # fix must do", the note on what the tests don't cover) —
+        # mirrored per iteration into the state dir (→ artifact; the
+        # raw capture file is overwritten every call). The fix
+        # directive names it by path and the fixer reads it on demand —
+        # the no-injection idiom the review call itself uses for the
+        # test output. The verdict summary is a lossy reduction of the
+        # report; the report is what the fixer acts on.
+        report_f = None
+        if res is not None:
+            report_f = common.state_file(f"review-report-{i}.txt")
+            with open(report_f, "w", encoding="utf-8") as f:
+                f.write(res[1])
 
-        if rc == 0 and verdicts is None and not delta_feature_files():
-            # No requirement change in this run = nothing for the review to
-            # judge: an empty block is the vacuous pass, not a parse failure.
-            # The guard (a silent pass is a false green) still applies where
-            # scenarios DO need judging.
+        if (rc == 0 and verdicts is None and not delta_feature_files()
+                and not referenced_scenarios(changed_test_files())):
+            # No requirement change in this run and no changed test
+            # referencing a scenario = nothing for the review to judge:
+            # an empty block is the vacuous pass, not a parse failure.
+            # The guard (a silent pass is a false green) still applies
+            # where scenarios DO need judging.
             common.log("stage 10: suite green — the run changed no "
-                       "requirements; nothing to review")
+                       "requirements and no changed test references a "
+                       "scenario; nothing to review")
             open(common.state_file("stage-summary.txt"), "a").write(
-                "stage 10 test-and-review: green — no changed requirements "
-                "to judge\n")
+                "stage 10 test-and-review: green — no changed "
+                "requirements and no test-referenced scenario to judge\n")
             return
 
+        if res is None and rrc == 124:
+            common.log("::warning::stage 10: the review call was cut off "
+                       "at its cap — a slow model, not a broken one; the "
+                       "loop retries (the iteration is consumed)")
+            i += 1
+            continue
         if rc == 0 and res is None:
-            if rrc == 124:
-                common.log("::warning::stage 10: the review call was cut off "
-                           "at its cap — a slow model, not a broken one; the "
-                           "loop retries (the iteration is consumed)")
-                prev_cut = True
-                i += 1
-                continue
+            # suite green, review failed or unparseable — the oracle
+            # cannot be assumed green: the stage fails (a silent pass is
+            # a false green)
             common.log("::error::stage 10: review failed or unparseable — "
                        "stage fails")
             sys.exit(1)
@@ -319,19 +454,45 @@ def main() -> None:
                 return
             bad_desc = "\n".join(f"- {f}::{name} — {ev}" for f, name, ev in unfulfilled)
             directive = (
-                "The following Gherkin scenarios are UNFULFILLED. Fix the implementation "
-                "(code, generated tests, docs) until they are fulfilled. "
-                "You must NOT edit any file under the requirements dir — a requirement "
-                "that cannot be fulfilled is reported, not rewritten:\n" + bad_desc
+                "The following Gherkin scenarios are UNFULFILLED — the "
+                "reviewer's full report for this iteration is in "
+                f"{report_f} (read it): it carries each verdict's evidence, "
+                "what is missing and what the fix must do, and the findings "
+                "the tests do not cover. Act on it.\n"
+                "Fix the implementation (code, generated tests, docs) until "
+                "they are fulfilled. You must NOT edit any file under the "
+                "requirements dir — a requirement that cannot be "
+                "fulfilled is reported, not rewritten:\n" + bad_desc
             )
         elif rc == 0:
             common.log("::error::stage 10: review unparseable — stage fails")
             sys.exit(1)
         else:
+            # Red suite: never a pass, so a review that broke or came back
+            # unparseable on this iteration is not fatal — the fix loop
+            # runs on the raw output (a broken environment still fails the
+            # stage at the fix call below).
+            unfulfilled = [v for v in (verdicts or []) if v[2] != "FULFILLED"]
             directive = (
-                "The test suite failed. Make it green by fixing the implementation "
-                "(never the requirements). Failing output (tail):\n" + tail(out)
-            )
+                "The test suite failed. Make it green by fixing the "
+                "implementation (never the requirements).")
+            if report_f is not None:
+                directive += (
+                    " The reviewer's full report for this iteration is in "
+                    f"{report_f} (read it) — it judges the run's scenarios "
+                    "against the failing output and notes what the tests do "
+                    "not cover; act on it.")
+            else:
+                common.log("::warning::stage 10: the review of this red "
+                           "iteration failed or was unparseable — the suite "
+                           "is red either way (never a pass); the fix loop "
+                           "runs on the raw test output")
+            if unfulfilled:
+                directive += (
+                    "\nIts UNFULFILLED verdicts:\n"
+                    + "\n".join(f"- {f}::{name} — {ev}"
+                                 for f, name, ev in unfulfilled))
+            directive += f"\nFailing output (tail):\n" + tail(out)
 
         # iteration log — state dir only (→ artifact); the repo tree is never
         # used as scratch space
@@ -346,8 +507,13 @@ def main() -> None:
                          "sound, roll back what is not — then act on the findings:\n\n"
                          + directive)
             pending_audit = False
+        report_note = (
+            f"`review-report-{i}.txt` (mirrored into the state dir; named "
+            "in the directive below)") if report_f is not None else \
+            "— the review produced no report this iteration"
         with open(common.state_file(f"review-iteration-{i}.md"), "w") as f:
             f.write(f"# iteration {i}\n\n## test (exit {rc})\n```\n{tail(out)}\n```\n\n"
+                    f"## reviewer report\n{report_note}\n\n"
                     f"## fix directive\n```\n{directive}\n```\n")
         fix_prompt = common.state_file(f"fix-prompt-{i}.txt")
         with open(fix_prompt, "w") as f:
@@ -360,8 +526,14 @@ def main() -> None:
         # committed its fix locally and never pushed it).
         pre = common.git(["rev-parse", "HEAD"], check=False)
         pre_tip = pre.stdout.strip() if pre.returncode == 0 else ""
+        context = stages.project_context()
+        if report_f is not None:
+            # the reviewer's report joins the fix call's path-referenced
+            # context — named in the directive, read on demand (a missing
+            # entry is dropped by the plumbing, never fatal)
+            context = [*context, report_f]
         r = stages.pi_stage("implement", prompt_file=fix_prompt,
-                            context=stages.project_context())
+                            context=context)
         if r.returncode not in (0, 124):
             out = common.state_file("pi-implement.md.out")
             try:

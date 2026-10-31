@@ -1,6 +1,6 @@
 # 9. Quality Requirements
 
-- **Loop caps.** Every bounded loop (guard re-run, review-fix, gate-fix)
+- **Loop caps.** Every bounded loop (guard repair, review-fix, gate-fix)
   stops when its problems are resolved or when it reaches the `MAX_LOOPS`
   iteration cap (default 5; **0 = no cap**) — no token budget is one of the
   loops' stopping conditions; with all remaining loop caps non-zero the
@@ -35,12 +35,20 @@
   guard's inverted-allow shape — deny = {requirements, plans}, the
   current issue's plan file re-allowed, the implementation's lane
   admitted).
-- **Verdict discipline.** The review marks *every scenario of the feature
-  files this run changed* (none of those skipped, none invented) — the
-  delta scope: the standing oracle stays as the runs that added it judged
+- **Verdict discipline.** The review marks *every scenario in the run's
+  delta scope — the scenarios of the feature files this run changed, plus
+  the scenarios the run's changed tests reference* (none of those skipped,
+  none invented — a changed test is judged by the requirement it
+  references) — the standing oracle stays as the runs that added it judged
   it, and re-judging it on every run is the unbounded work the review must
   not do; the suite still executes the whole oracle (each scenario an
-  acceptance test) and a run that changed no requirements passes vacuously.
+  acceptance test) and a run that changed no requirements and no referencing
+  tests passes vacuously.
   The parser tolerates observed format drift (em-dash separators,
-  parenthetical qualifiers) but a review with changed scenarios and zero
-  parseable verdicts fails the stage — the oracle cannot be assumed green.
+  parenthetical qualifiers) but a review with changed scenarios or
+  referencing tests and zero parseable verdicts fails the stage — the oracle
+  cannot be assumed green. The review's full output is the report the fix
+  stage feeds the fixer (mirrored per iteration into the state dir, named
+  in the fix directive by path — the fixer reads it on demand), so each
+  verdict's evidence and the findings the tests don't cover reach the
+  fixer, not just the verdict summary.

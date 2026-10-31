@@ -2,11 +2,11 @@
 # Issue 43 — the final report carries the run's total cost and input/output
 # token usage; the token budget (MAX_TOTAL_TOKENS), which cannot be enforced
 # during a pi call, is removed from the configuration surface.
-# Standing scenarios this delta supersedes (run #43 reported them in its
-# stage reply instead of editing — requirements/ was read-only to the
-# extraction stage then; the placement change lifts that read-only pin, so
-# the rewording specified in plans/43.md can now land in the files
-# themselves, by the owner or a follow-up run):
+# Standing scenarios this delta supersedes — the rewording specified in
+# plans/43.md was reported in run #43's stage reply instead of editing
+# (requirements/ was read-only to the extraction stage then); it lands in
+# the files themselves with the issue-69 run, which touches these same
+# scenarios:
 #   configuration.feature "The loop caps are configurable"
 #   configuration.feature "A loop cap of 0 means no cap"
 #   test-and-review.feature "The loop respects the token budget"
@@ -65,7 +65,7 @@ Feature: Run cost and token usage in the report, token budget removed
 
   @issue-43 @safety
   Scenario: The bounded loops stop on success or their iteration cap, not on token spend
-    Given the pipeline contains the guard re-run, the review-fix and the gate-fix loops
+    Given the pipeline contains the guard repair, the review-fix and the gate-fix loops
     And MAX_LOOPS is non-zero
     When one of those loops runs
     Then the loop stops when its problems are resolved or when it reaches the MAX_LOOPS iteration cap

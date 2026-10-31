@@ -4,10 +4,15 @@ Derive the **delta requirements** the issue implies — the gap between the
 project's documented current state and what the issue asks for — and write
 them as **Gherkin** into the requirements directory.
 
-The context handed to you is the project itself: the Gherkin oracle under
-`requirements/`, the arc42 markdown files, `README.md`, and the baseline diff
-(the issue's change set against the target branch, recorded by the baseline
-stage). Derive against all of it.
+The context handed to you is the project itself, in two parts. The
+Gherkin oracle is the requirements directory: you are told where it
+lives, not handed its files — decide which of its files the delta
+touches, and read those from the directory on demand. The rest of
+the context — the arc42 markdown files, `README.md`, and the baseline
+diff (the issue's change set against the target branch, recorded by
+the baseline stage) — is handed to you as named files to read as
+context before you answer; a directory is never one of them. Derive
+against all of it.
 
 Place each delta scenario in the file that owns its topic. The oracle is
 structured by topic, not by issue: each file is where a reader (or a

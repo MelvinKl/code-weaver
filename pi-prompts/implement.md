@@ -18,10 +18,24 @@ of open (`- [ ]`) and done (`- [x]`) tasks. Execute the plan.
    describe the code as it now is.
 5. **Mark the task done** — flip its checkbox to `- [x]` in the plan file. If
    the task is already implemented (a resume), just mark it done.
+6. **Tests reference the Gherkin scenario they arose from.** The suite
+   and the oracle join on the reference: a test that implements a
+   Gherkin scenario carries a reference to the scenario it arose from —
+   the machine form is the test's docstring citing the scenario as
+   `<feature file>::<scenario name>`, as in
+   `requirements/guard-rail.feature::Guard repairs are capped` — and a
+   test that is only for correctness carries no such reference. When the
+   run changed a Gherkin scenario in place, adjust every test that
+   references that changed scenario with it — the adjusted tests fulfil
+   the requirement as it now reads (the plan names the changed
+   requirements; the changed feature files are readable in the tree).
 
 Hard rules
-1. **Never edit `requirements/`.** An unfulfillable requirement loops back to
-   planning; the requirement file is never the one you change.
+1. **Never edit `requirements/`.** A requirement you cannot fulfil is
+   reported, not rewritten — the requirement file is never the one you
+   change: an edit of a requirement file is reverted in place by the
+   guard's pi repair call (the stage is not re-run and does not loop back to
+   planning), which keeps your implementation's work valid against this plan.
 2. **Edit only THIS issue's plan file.** Never touch any other plan.
 3. Smallest changes that fully execute the task — no drive-by refactors.
 4. Follow the project's existing conventions exactly.

@@ -86,11 +86,13 @@ def _secrets_entry(block: str, name: str) -> str:
 
 def test_factory_declares_the_providers_as_optional_secrets():
     """(configuration "The pi harness secrets ride the reusable workflow's
-    secrets block") the factory's workflow_call secrets: block carries the
-    four provider entries — each declared `required: false` (an unset
-    provider arrives empty and the setup stage treats it as an absent
-    provider, the repo file is the fallback) — and GH_TOKEN is the only
-    entry marked `required: true`."""
+    secrets block"; reference
+    `requirements/configuration.feature::The pi harness secrets ride the
+    reusable workflow's secrets block`) the factory's workflow_call
+    secrets: block carries the four provider entries — each declared
+    `required: false` (an unset provider arrives empty and the setup
+    stage treats it as an absent provider, the repo file is the
+    fallback) — and GH_TOKEN is the only entry marked `required: true`."""
     block = _workflow_call_secrets_block(_read(FACTORY))
     for name, _input_name in PROVIDERS:
         entry = _secrets_entry(block, name)
@@ -114,14 +116,16 @@ def _setup_pi_job(factory: str) -> str:
 
 def test_setup_pi_job_carries_the_providers_to_the_stage():
     """(configuration "The pi harness secrets ride the reusable workflow's
-    secrets block") the setup-pi job delivers the four providers to its
-    inlined setup-pi stage through the job's `CW_<name>` env: after the
-    consolidation the stage step is an ordinary job step (the composite
-    boundary the `with:` relay used to cross is gone), so the job env
-    reaches the stage's script directly and the stage code's
-    INPUT_*/CW_*/state-file chain resolves each provider from there; the
-    inlined step runs its script from the runtime tree the job stashed
-    from the called repo at the called ref."""
+    secrets block"; reference
+    `requirements/configuration.feature::The pi harness secrets ride the
+    reusable workflow's secrets block`) the setup-pi job delivers the
+    four providers to its inlined setup-pi stage through the job's
+    `CW_<name>` env: after the consolidation the stage step is an
+    ordinary job step (the composite boundary the `with:` relay used to
+    cross is gone), so the job env reaches the stage's script directly
+    and the stage code's INPUT_*/CW_*/state-file chain resolves each
+    provider from there; the inlined step runs its script from the
+    runtime tree the job stashed from the called repo at the called ref."""
     job = _setup_pi_job(_read(FACTORY))
     # the inlined stage step (the former composite action's steps, spliced
     # at the former site) runs its script from the stash
@@ -139,7 +143,12 @@ def test_setup_pi_job_carries_the_providers_to_the_stage():
 def test_no_provider_value_in_with_inputs_or_committed_files():
     """(configuration "The pi harness secrets ride the reusable workflow's
     secrets block" — "no harness secret value appears in with inputs or
-    committed files"; safety "Secrets are never plain inputs") a provider
+    committed files"; configuration "Secrets are never plain inputs";
+    reference
+    `requirements/configuration.feature::The pi harness secrets ride the
+    reusable workflow's secrets block`,
+    `requirements/configuration.feature::Secrets are never plain inputs`) a
+    provider
     secret name may be referenced — as a `secrets.` expression, a
     secrets-block entry or a `CW_`/`INPUT_` env var — but its content may
     not be committed: in the factory every occurrence of a provider name is

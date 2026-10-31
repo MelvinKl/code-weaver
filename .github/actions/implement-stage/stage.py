@@ -14,8 +14,8 @@ and the plans dir — so the allow entries carry two jobs:
   - the current issue's plan file: it is the one file inside the denied
     plans dir the implementation may edit (a live state tracker — it flips
     its own task checkboxes as it works); everything else under plans/ is
-    still a violation the guard reverts (implement: "implementation may
-    only edit the current issue's plan");
+    still a violation the guard repairs with a pi call (implement:
+    "implementation may only edit the current issue's plan");
   - `__pycache__`: component-matched, so pycache generated at any depth is
     admitted back over its deny. The implementation legitimately RUNS the
     suite (the implement template's verification step) and the guard must
@@ -32,9 +32,11 @@ then spent its whole loop budget re-creating files the guard deleted
 implementation ping-ponged `tests/` for the entire cap). The implementation
 has the job to implement the tests — and to create whatever new dirs and
 files the work needs — so the guard's job is to protect the protected set
-(requirements: an edit there loops back to the plan stage; the other
-issues' plans: a violation the guard reverts), not to guess which of the
-tree's pre-existing directories the work belongs in.
+(requirements: an edit there is repaired in place by the guard's pi call —
+the changed file named and reverted, the stage not re-run and no loop back
+to the plan stage; the other issues' plans: a violation the guard repairs
+the same way), not to guess which of the tree's
+pre-existing directories the work belongs in.
 """
 from __future__ import annotations
 
@@ -58,10 +60,11 @@ OPEN_TASK_RE = re.compile(r"^\s*-\s*\[\s*\]\s*")
 def protected_dirs() -> list[str]:
     """The dirs the implementation's guard DENIES (the inverted-allow deny
     set, passed as the `!` entries): the requirements dir (the Gherkin
-    oracle — an edit there loops back to the plan stage) and the plans dir
-    (only the current issue's plan file is re-allowed over it — main() adds
-    that one file to the allow set; every other plan is a violation the
-    guard reverts)."""
+    oracle — an edit there is repaired in place by the guard's pi call:
+    the changed file named and reverted, no loop back to the plan stage)
+    and the plans dir (only the current issue's plan file is re-allowed over
+    it — main() adds that one file to the allow set; every other plan is a
+    violation the guard repairs the same way)."""
     out = [common.env_dir("REQUIREMENTS_DIR"), common.env_dir("PLAN_DIR")]
     return [d for d in out if d]
 
@@ -116,48 +119,6 @@ def has_open_task(path: str) -> bool:
         return any(OPEN_TASK_RE.match(line) for line in f)
 
 
-def plan_loop_back(violations: list[str]) -> bool | None:
-    """The one violation class that loops back to planning: an edit inside
-    the requirements dir. (The current issue's plan is in the allow set — a
-    plan edit is never a violation here.)
-
-    The shared guard's external form prints its revert list but does not
-    return it (run_guard hands the stage a count, not files), so on that
-    path `violations` arrives empty and the hook re-derives the decision key
-    itself: while the requirements dir still differs from the stage
-    baseline, an implementation edit there is the standing loop-back trigger
-    and the plan regenerates before the implementation runs again. The
-    in-process fallback does hand the list over, where the filter at the top
-    is the same decision."""
-    req = common.env_dir("REQUIREMENTS_DIR")
-    if not req:
-        return None
-    protected = [v for v in violations if stages.under(v, req)]
-    if not protected:
-        changed = common.changed_files(stages.stage_baseline())
-        protected = [f for f in changed if stages.under(f, req)]
-    if not protected:
-        return None  # ordinary leak — the shared revert+re-run path handles it
-    plan_dir = common.env_dir("PLAN_DIR")
-    issue = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
-    allowed = stages.plan_stage_allow(issue, plan_dir)
-
-    def regenerate() -> None:
-        stages.run_generation_stage(
-            stage="stage 6 planning (re-run from implement)",
-            template="plan",
-            allow=allowed,
-            context=stages.changed_requirements_context(),
-        )
-
-    common.log("implement: off-limits edit inside the requirements dir → "
-               "looping back to the plan stage (stage 6), then implementing "
-               "again against the regenerated, requirement-faithful plan")
-    regenerate()
-    common.commit_all("implement: plan regenerated (loop-back)")
-    return True
-
-
 def main() -> None:
     common.install_crash_diagnostics("stage 8 implementation")
     plan_dir = common.env_dir("PLAN_DIR")
@@ -168,7 +129,7 @@ def main() -> None:
     # the arc42 docs, README, Makefile, new dirs…); ALLOW = the one file
     # inside the denied plans dir the implementation edits (its live state
     # tracker) + `__pycache__` (component-matched: the suite runs the
-    # implementation makes, the guard does not revert their byproducts).
+    # implementation makes, the guard never flags their byproducts).
     deny = protected_dirs()
     allow = ["__pycache__"]
     if current:
@@ -205,7 +166,6 @@ def main() -> None:
             deny=deny,
             context=context,
             prompt_file=build_target(issue, plan_dir),
-            on_violation=plan_loop_back,
             allow_noop=False,
         )
         after = set(common.changed_files(stages.baseline_sha()))
