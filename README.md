@@ -1,5 +1,26 @@
 # Code Weaver
 
+> **Warning — read before you use the factory in a target repo.**
+>
+> This warning is addressed to the maintainers of the repo a factory
+> run targets. It states three things you need before you consume the
+> workflow — where the workflow should be used, who can start a
+> factory run, and what a run consumes:
+>
+> 1. **Use the code-weaver workflow only in a private repo.** A run is
+>    started from the target repo's own issue surface, and a public
+>    repo's issue surface is public: hosting the workflow there hands
+>    run-starting to the people in point 2, at the cost of point 3.
+> 2. **Everyone who can create or tag issues in the target repo can
+>    create a workflow run of the factory.** A `labeled` issue event
+>    with the trigger label — or a manual dispatch with an issue number
+>    — starts a run; the trigger's only gate is the label, and it does
+>    not ask who added it.
+> 3. **Such a run consumes tokens and creates cost for the repo.**
+>    Every pi call the run makes spends tokens billed against the run's
+>    model configuration; the run's total cost and token usage are what
+>    the final report lists, on the PR and the issue.
+
 An **AI software factory that creates programs** — driven entirely by
 [GitHub Actions](https://github.com/features/actions), not a service. A
 maintainer adds the `ai-requirements` label to an issue in a target project, and
@@ -260,7 +281,7 @@ factory.
     release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
     embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 161 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 165 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -268,7 +289,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **161 Gherkin scenarios** — the oracle this
+`requirements/` holds **165 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

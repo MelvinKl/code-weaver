@@ -1,5 +1,8 @@
 # requirements/safety.feature
-# Secrets handling, branch hygiene, mandatory loop caps, audit trail.
+# Secrets handling, branch hygiene, mandatory loop caps, audit trail,
+# the README's prominent warning to use the factory in private repos only
+# (issue 77 — anyone who can create/tag issues can start runs that consume
+# tokens and create cost for the repo).
 
 Feature: Secrets and safety
   As the operator of the factory
@@ -122,3 +125,28 @@ Feature: Secrets and safety
     When the runner's action var is unset
     Then the run line falls back to the checkout-relative action path
     And the stage module starts from its real location
+
+  @safety
+  Scenario: The README carries a prominent warning at its top
+    Given the factory's README.md
+    When the opening of the README is read
+    Then a warning is presented there at the top, before the description of the factory
+    And the warning sits above the workflow's usage and consumption sections
+
+  @safety
+  Scenario: The README warning advises using the workflow only in a private repo
+    Given the warning at the top of the README
+    When a maintainer of a target repo reads it
+    Then it advises using the code-weaver workflow only in a private repo
+
+  @safety
+  Scenario: The README warning names who can start a factory run
+    Given the warning at the top of the README
+    When it is read
+    Then it states that everyone who can create or tag issues can create a workflow run of the factory
+
+  @safety
+  Scenario: The README warning states what such a run consumes
+    Given the warning at the top of the README
+    When it is read
+    Then it states that such a run consumes tokens and creates cost for the repo

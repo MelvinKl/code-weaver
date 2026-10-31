@@ -22,11 +22,11 @@ builders and the report stage fall back to that file, so the contract
 holds for both shapes.
 
 The repository's implementation plan (`PLAN.md`) and the Gherkin oracle
-(`requirements/` — 15 files, 161 scenarios, structured by topic: each
+(`requirements/` — 15 files, 165 scenarios, structured by topic: each
 file is named after the topic it covers) are sibling artefacts, not part of
 this set: the plan is the build tracker, the oracle is the requirements
 this code must fulfil (the factory's own stage 10 checks the implementation
-against every one of the 161 scenarios).
+against every one of the 165 scenarios).
 
 ## AI activity (code-weaver)
 
@@ -85,3 +85,13 @@ against every one of the 161 scenarios).
   - stage 1 trigger: issue #60 accepted (event issues, label gate passed)
   - stage 10 test-and-review: green — 9 scenarios fulfilled
   - stage 13 pr-gates: no PR-triggered workflow on this head (vacuously green)
+### 2026-10-31 15:26 UTC — code-weaver run for issue #77
+- result: success
+- PR: 78
+- **Total input tokens:** 307724
+- **Total output tokens:** 132810
+- **Total cost:** $0.3077 (model `Qwen3.8` @ $0.10/M input, $2.08/M output — rates from the repo file .pi/agent/models.json)
+- stages:
+  - stage 1 trigger: issue #77 accepted (event issues, label gate passed)
+  - stage 10 test-and-review: green — 19 scenarios fulfilled
+  - stage 13 pr-gates: all 1 green
