@@ -24,7 +24,17 @@ clones the factory repo at a second ref. Its `secrets:` block carries
 `GH_TOKEN` (the only required one) plus the four optional
 harness-provider secrets (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`,
 `PI_EXTENSION_ENV`) — a provider value never appears in a `with:` input
-or a committed file.
+or a committed file. The `with:` block may also declare the optional
+`dependency-install` input — the command the run's pipeline runs to
+install the target project's dependencies: project configuration, not a
+secret value (the chapter-3 constraint holds on the input channel), and
+not a fifth harness element — the harness table below stays the setup
+stage's four provider elements, the pi harness, while the
+dependency-install step targets the project's working environment. The
+run executes the declared command in the jobs whose stages consume it,
+after each job's checkout and before its stage; a target that leaves the
+input undeclared runs unchanged — the step is a no-op, and the run is
+unchanged by the mechanism's presence.
 
 **Upgrades are a ref bump.** `release.yml` fires on the main branch's
 advance: it tags the advance's head with the next single increasing

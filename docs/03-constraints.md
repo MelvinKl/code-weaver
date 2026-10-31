@@ -16,7 +16,16 @@
   reusable workflow's `secrets:` block only; no secret value ever appears
   in `with:` inputs or committed files — the four optional harness
   providers (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`, `PI_EXTENSION_ENV`)
-  ride the same block.
+  ride the same block. The optional `dependency-install` input rides the
+  `with:` block rather than this one — an install command is project
+  configuration, not a secret value, so the input channel is the
+  consistent one, and the value is deliberately not a fifth harness
+  element (the setup stage's four provider elements stay the pi harness,
+  not the project's working environment). The run executes the declared
+  command in the jobs whose stages consume it — after each job's checkout
+  and before its stage — and a target that leaves it undeclared runs
+  unchanged: the step is a no-op, and the run is unchanged by the
+  mechanism's presence.
 - **The requirements are read-only.** No stage may edit a file under the
   requirements dir: the guard repairs such edits in place with a pi call —
   the changed file named and reverted, the stage's own work told to stay

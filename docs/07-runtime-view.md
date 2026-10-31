@@ -18,7 +18,18 @@ dropping a value for one downstream job while the next job received it;
 `GITHUB_ENV`, fed by the trigger artifact's state files, is the per-job
 in-process channel). The stage records its stage baseline (the branch
 tip as the stage started) so its guard judges only that stage's work;
-earlier stages' committed outputs are never off-limits. The report job's
+earlier stages' committed outputs are never off-limits. The two
+consuming jobs (implement, review) additionally run the target's
+dependency-install step — the command the optional `dependency-install`
+input declares — after each of their checkouts of the AI branch and
+before its stage, once per consuming job (a checkout replaces the
+workspace, so a one-time install in one job's workspace cannot serve the
+next job's replaced workspace); the step precedes the job's
+stage-baseline recording, so the install's footprint is never counted as
+the stage's work by the guard. Where the input is empty the step is a
+no-op (it logs and exits without touching the workspace): a target that
+declares nothing runs unchanged — the run is unchanged by the
+mechanism's presence. The report job's
 inlined status-report step draws its plumbing names across the same stash
 boundary (chapter 6: the runtime tree in `$RUNNER_TEMP`): where the shared
 module resolves from the stashed tree the step's `import common` binds the

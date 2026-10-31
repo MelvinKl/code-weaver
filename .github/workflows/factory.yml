@@ -107,6 +107,11 @@ on:
         description: The target's workflow file name (without .yml) — used for the idempotency query
         type: string
         default: code-weaver
+      dependency-install:
+        description: The command the run's pipeline runs to install the target project's dependencies — executed in the jobs whose stages consume them (implement, test-and-review) after each job's checkout and before its stage; empty = no such step, the run is unchanged
+        type: string
+        required: false
+        default: ""
       factory-ref:
         # legacy no-op, kept declared: a with: block written for an
         # older version of this file passes this input, and the run must
@@ -4253,6 +4258,11 @@ jobs:
             echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
             echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
             echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap)"
+            if [ -z "${{ inputs.dependency-install }}" ]; then
+              echo "- dependency-install: not declared — no project-dependency-install step runs in the pipeline (the run is unchanged)"
+            else
+              echo "- dependency-install: \`${{ inputs.dependency-install }}\` — the run's pipeline runs it in the consuming stage jobs (implement, test-and-review), after each job's checkout and before its stage"
+            fi
           } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
           echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
             | tee "$RUNNER_TEMP/cw/stage-summary.txt"
@@ -4878,6 +4888,35 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
+      - name: Install the target project's dependencies (the dependency-install input)
+        # The declared project-dependency-install step: the reusable
+        # workflow's optional `dependency-install` input names a command,
+        # and the run's pipeline executes it here — in each consuming
+        # job, after that job's checkout replaced the workspace (chapter
+        # 7: a one-time install in one job's workspace cannot serve the
+        # next job's replaced workspace), so the install runs per
+        # consuming job — the implementation stage (stage 8) and the
+        # test-and-review stage's suite run (stage 10) see an environment
+        # the project's dependencies are installed in. The relay is the
+        # documented CW_<name> step env idiom (chapter 3), and the step
+        # precedes this job's stage-baseline recording, so the install's
+        # footprint is never counted as the stage's work by the guard.
+        # Where the input is empty the step is a no-op — it logs and
+        # exits 0 without touching the workspace: a target that declares
+        # no step runs unchanged (the run's stages, pull request and
+        # final status report are unchanged by the mechanism's presence).
+        # A non-empty command that exits non-zero fails the job before
+        # the stage (the documented fail-explicitly idiom) — the stage
+        # never runs against a broken environment.
+        env:
+          CW_DEPENDENCY_INSTALL: ${{ inputs.dependency-install }}
+        run: |
+          if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
+            echo "no project-dependency-install step is declared (the dependency-install input is empty) — the run proceeds unchanged"
+            exit 0
+          fi
+          echo "installing the target project's dependencies: $CW_DEPENDENCY_INSTALL"
+          bash -c "$CW_DEPENDENCY_INSTALL"
       - uses: actions/download-artifact@v8
         with:
           name: cw-plan
@@ -4982,6 +5021,35 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
+      - name: Install the target project's dependencies (the dependency-install input)
+        # The declared project-dependency-install step: the reusable
+        # workflow's optional `dependency-install` input names a command,
+        # and the run's pipeline executes it here — in each consuming
+        # job, after that job's checkout replaced the workspace (chapter
+        # 7: a one-time install in one job's workspace cannot serve the
+        # next job's replaced workspace), so the install runs per
+        # consuming job — the implementation stage (stage 8) and the
+        # test-and-review stage's suite run (stage 10) see an environment
+        # the project's dependencies are installed in. The relay is the
+        # documented CW_<name> step env idiom (chapter 3), and the step
+        # precedes this job's stage-baseline recording, so the install's
+        # footprint is never counted as the stage's work by the guard.
+        # Where the input is empty the step is a no-op — it logs and
+        # exits 0 without touching the workspace: a target that declares
+        # no step runs unchanged (the run's stages, pull request and
+        # final status report are unchanged by the mechanism's presence).
+        # A non-empty command that exits non-zero fails the job before
+        # the stage (the documented fail-explicitly idiom) — the stage
+        # never runs against a broken environment.
+        env:
+          CW_DEPENDENCY_INSTALL: ${{ inputs.dependency-install }}
+        run: |
+          if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
+            echo "no project-dependency-install step is declared (the dependency-install input is empty) — the run proceeds unchanged"
+            exit 0
+          fi
+          echo "installing the target project's dependencies: $CW_DEPENDENCY_INSTALL"
+          bash -c "$CW_DEPENDENCY_INSTALL"
       - uses: actions/download-artifact@v8
         with:
           name: cw-implement

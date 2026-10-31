@@ -13,7 +13,8 @@ jobs:
   factory:
     uses: MelvinKl/code-weaver/.github/workflows/factory.yml@7
     with: { issue-number: …, ai-requirements-label: ai-requirements,
-            target-branch: main, llm-model: …, runner: … }
+            target-branch: main, llm-model: …, runner: …,
+            dependency-install: … }
     secrets: { GH_TOKEN: ${{ secrets.GH_TOKEN }}, … }
 ```
 
@@ -21,6 +22,16 @@ The `secrets:` block also carries the run's four optional
 harness-provider secrets (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`,
 `PI_EXTENSION_ENV` — the run's pi harness, chapter 8); a provider value
 never appears in a `with:` input or a committed file.
+
+The `with:` block's optional `dependency-install` input declares the
+command the run's pipeline runs to install the target project's
+dependencies — project configuration, not a secret value, so it rides
+the input channel (chapter 3), not the `secrets:` block. The run
+executes it in the jobs whose stages consume it — after each job's
+checkout and before its stage; a target that leaves it undeclared runs
+unchanged: the step is a no-op, and the run is unchanged by the
+mechanism's presence (the stages, the pull request and the final status
+report all as if the mechanism were absent).
 
 The consumer workflow is the **only per-target code** — it stays short
 and stable (it declares the `labeled`-only issue trigger plus a manual

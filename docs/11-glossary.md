@@ -35,11 +35,20 @@
   / what the fix must do", the note on what the tests don't cover — is
   mirrored per iteration into the state dir and fed into the fixer: the
   fix directive names it by path, the fixer reads it on demand
-- **Oracle** — the Gherkin requirements under `requirements/` (15 files,
-  168 scenarios), structured by topic: each file is named after the topic
+- **Oracle** — the Gherkin requirements under `requirements/` (16 files,
+  172 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
+- **Project dependency-install step** — the command the target's
+  optional `dependency-install` input (the consumer workflow's `with:`
+  block) declares; the run's pipeline runs it in the two jobs whose
+  stages consume the project's dependencies (the `implement` job, stage
+  8; the `review` job, stage 10's `make test` suite run), after each
+  job's checkout and before its stage; a target that declares nothing
+  runs unchanged — where the input is empty the step is a no-op that
+  logs and exits without touching the workspace, and the run is
+  unchanged by the mechanism's presence
 - **Guard** — the shared "only X changed" check (one implementation,
   three call sites): collects working-tree changes against the stage
   baseline, compares them against the per-stage set, and repairs a

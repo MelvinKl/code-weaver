@@ -151,6 +151,7 @@ jobs:
       target-branch: main
       llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
+      dependency-install: make install  # the command that installs the target project's dependencies — omit the line where the target needs no such step (the run is unchanged)
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
@@ -217,6 +218,7 @@ never empty for a release that publishes changes.
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
 | `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
+| `dependency-install` | *(empty)* | the command the run's pipeline runs to install the target project's dependencies — executed in the jobs whose stages consume them (the implementation, the test-and-review's suite run), after each job's checkout and before its stage; empty = no such step, the run is unchanged |
 | `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is embedded in the workflow file, so the ref on the `uses:` line is the only pin a run makes (the factory project's own repo pins the public release line too — a run triggered in it works the code of the repo it was triggered in, and the dogfood exercises the published version its external targets get, chapter 8) |
 
 The **LLM backend is provided for the run** — via a GitHub secret or the
@@ -246,6 +248,20 @@ packages, and an absent MCP provider means the run's pi runs without MCP
 servers; the stage clears an element without a provider from the agent
 directory rather than inheriting the runner's pre-existing user-level
 configuration.
+
+**The target's dependencies are installed by the run, where the target
+declares it.** The optional `dependency-install` input (the consumption
+example above shows the declaration — one line in the `with:` block)
+names the command the run's pipeline runs to install the target
+project's dependencies: the run executes it in the jobs whose stages
+consume them — the implementation stage and the test-and-review stage's
+suite run — after each of those jobs' checkout of the AI branch and
+before its stage, so both stages see an environment the project's
+dependencies are installed in (a checkout replaces the workspace, so
+the step runs once per consuming job). A target that leaves the input
+empty (the default) runs unchanged: the step is a no-op that logs and
+exits without touching the workspace, and the run is unchanged by the
+mechanism's presence.
 
 The `gh` CLI is the factory's surviving runner pre-requisite (the trigger,
 pr-open and gates stages shell out to it); one hygiene rule keeps it
@@ -286,7 +302,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 168 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 172 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -294,7 +310,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **168 Gherkin scenarios** — the oracle this
+`requirements/` holds **172 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and
