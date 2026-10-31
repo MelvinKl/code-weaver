@@ -9,7 +9,7 @@ number series — they are not numbers — so the numbers of published
 releases never repeat and never decrease, and the older tags are left
 where they are (workflows pinned to them keep working).
 
-Three shapes, one rule:
+Four shapes, one rule:
 
   - `next_release_number(published)` — the pure computation of the next
     tag; `tests/test_release_contract.py` unit-tests it (auto-discovered
@@ -17,13 +17,21 @@ Three shapes, one rule:
     house CI's `pytest tests/`);
   - `published_at(tag_lines, sha)` — the guard's pure computation: the
     numbered tag names that point at a commit;
+  - `consumer_workflow_only(changed_files)` — the pre-publish skip's
+    pure computation: whether a push's change set is confined to the
+    consumer workflow file (a version is the factory workflow and its
+    embedded runtime tree — never the consumer's own workflow file, the
+    target's only per-target code);
   - the CLI form below — default: one published ref (a tag name) per
     line on stdin, the next tag on stdout (the release workflow pipes
     the remote's tag list into it); `--published-at <sha>`: the raw
     `git ls-remote --tags` line list on stdin, the numbered tag names
     pointing at `<sha>` on stdout (none → empty) — the release
     workflow's one-tag-per-commit guard reads the empty / non-empty
-    distinction.
+    distinction; `--changed-files`: one changed file name (repo-relative)
+    per line on stdin, the consumer workflow's path on stdout where the
+    change set is confined to that file (else empty) — the release
+    workflow's pre-publish skip reads the same distinction.
 
 Plain-stdlib on purpose: the `gh` CLI is a pre-requisite of the runner
 environment (`docs/08`) — and the workflow consumes it, not this
@@ -35,6 +43,13 @@ import re
 import sys
 
 _NUMBER_RE = re.compile(r"\d+")
+
+# The consumer's own workflow file — the target's only per-target code
+# (chapter 4). A version is the factory workflow and its embedded
+# runtime tree — never this file: a push whose change set is confined to
+# it changes nothing a published version carries, so the release flow
+# must publish no release for it (no tag, no release, no number spent).
+CONSUMER_WORKFLOW = ".github/workflows/code-weaver.yml"
 
 
 def next_release_number(published: list[str]) -> str:
@@ -82,23 +97,56 @@ def published_at(tag_lines: list[str], sha: str) -> list[str]:
     return sorted(names, key=int)
 
 
+def consumer_workflow_only(changed_files: list[str]) -> bool:
+    """Whether a push's change set is confined to the consumer workflow
+    — the release workflow's pre-publish skip predicate.
+
+    `changed_files` is the push's changed file names (repo-relative).
+    Confined means: at least one changed file, and every changed file
+    the consumer workflow file. The predicate is the release scenario's
+    confinement wording exactly — deliberately not generalised to "no
+    changed file reaches a version file": a change set that also touches
+    any other file (a version file or not) is not confined, and the
+    flow publishes the next release for it (a change on main whose files
+    are not confined to the consumer workflow still releases the next
+    version). An empty change set is not confined either — it names no
+    changed file at all: the no-op of a re-run at an unchanged HEAD is
+    the one-tag-per-commit guard's case, not this one. The release
+    workflow's pre-publish step pipes the names into the CLI's
+    `--changed-files` shape and reads the skip as the empty/non-empty
+    distinction the `--published-at` guard already uses."""
+    return bool(changed_files) and all(f == CONSUMER_WORKFLOW for f in changed_files)
+
+
 def main() -> None:
-    """The CLI form — two input shapes:
+    """The CLI form — three input shapes:
 
     - default: one published ref (a tag name) per line on stdin; the
       next single-number tag on stdout (no refs at all → `1`);
     - `--published-at <sha>`: the raw `git ls-remote --tags` line list
       on stdin; the numbered tag names pointing at `<sha>`, one per line
       (none → empty output). The release workflow's guard tests the
-      output's emptiness — non-empty, the flow exits before the tag."""
+      output's emptiness — non-empty, the flow exits before the tag;
+    - `--changed-files`: one changed file name (repo-relative) per line
+      on stdin; the consumer workflow's path on stdout where the change
+      set is confined to that file (else empty output). The release
+      workflow's pre-publish step tests the output's emptiness —
+      non-empty, the push changes nothing a published version carries,
+      and the flow exits before a number is materialised, a tag is
+      created, or a release is published."""
     args = sys.argv[1:]
     lines = [line.rstrip("\n") for line in sys.stdin if line.strip()]
     if "--published-at" in args:
         i = args.index("--published-at")
         if i + 1 >= len(args):
-            raise SystemExit("usage: release-number.py [--published-at <sha>]")
+            raise SystemExit(
+                "usage: release-number.py [--published-at <sha>] [--changed-files]")
         for name in published_at(lines, args[i + 1]):
             print(name)
+        return
+    if "--changed-files" in args:
+        if consumer_workflow_only(lines):
+            print(CONSUMER_WORKFLOW)
         return
     print(next_release_number(lines))
 

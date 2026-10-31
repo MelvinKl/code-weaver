@@ -18,6 +18,20 @@
 # duplicate version (a number spent on a commit already tagged) is what
 # a consumer pin written for that number would otherwise land on.
 #
+# The one push the flow does not publish: a push to main whose changed
+# files are confined to the consumer's own workflow file
+# (.github/workflows/code-weaver.yml — the target's only per-target
+# code). A version is the factory workflow and its embedded runtime
+# tree — never the consumer's own workflow file — so such a push
+# changes nothing a published version carries: the pre-publish step
+# (between the rewrite gate and Publish below) asks the shared-plumbing
+# helper whether the push's changed files are confined to that file and,
+# where they are, exits before a number is materialised, a tag is
+# created, or a release is published — no number spent on a version
+# whose content did not change. The trigger still fires on every main
+# advance — the skip is the no-op discipline above applied to a push
+# that changes nothing a version carries.
+#
 # The published version is one file: factory.yml is self-contained —
 # its stage steps are inlined, and its runtime tree (the .github
 # scripts, the stage scripts, the pi prompt templates) is embedded in
@@ -59,6 +73,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history in the object database — the same
+          # `fetch-depth: 0` idiom the factory workflow's own stage
+          # jobs use: the notes' range base is the predecessor
+          # release's tag, and `git describe` can name it only where
+          # the tag is fetched. A shallow checkout would name no tag
+          # and fall back to "the first commit," which its shallow
+          # clone reports as HEAD itself — an empty diff behind it —
+          # and full history is also what puts the *real* first
+          # commit at a first release's range base.
+          fetch-depth: 0
       - name: Verify the published file's rewrite is fresh
         # The release pipeline's rewrite of the published file is the
         # embedded runtime tree (the one-ref-is-one-version mechanism the
@@ -76,6 +101,38 @@ jobs:
             echo "::error::the committed factory.yml carries a stale embedded runtime tree — re-run \`make embed\` in the commit that changed the runtime tree and re-push; a stale version must not be published"
             exit 1
           }
+      - name: Skip a push that changes only the consumer workflow
+        # A version is the factory workflow and its embedded runtime
+        # tree — never the consumer's own workflow file
+        # (.github/workflows/code-weaver.yml, the target's only
+        # per-target code): a push whose changed files are confined to
+        # it changes nothing a published version carries, so it must
+        # spend no release number. The shared-plumbing helper's
+        # changed-files shape answers that — one changed file name per
+        # line on stdin, non-empty output the skip signal (the same
+        # empty/non-empty distinction the one-tag-per-commit guard in
+        # the Publish step reads). The push's base is the event's
+        # `before` sha — a push that creates the branch carries the zero
+        # sha, where the first commit is the base. A workflow_dispatch
+        # re-run is not a push (it has no `before` sha) and skips this
+        # check: its no-op protection stays the one-tag-per-commit guard
+        # in the Publish step (a re-run at an unchanged HEAD publishes
+        # nothing).
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            ZERO=0000000000000000000000000000000000000000
+            if [ -z "$GITHUB_EVENT_BEFORE" ] || [ "$GITHUB_EVENT_BEFORE" = "$ZERO" ]; then
+              BASE=$(git rev-list --max-parents=0 HEAD)
+            else
+              BASE="$GITHUB_EVENT_BEFORE"
+            fi
+            CHANGED=$(git diff --name-only "$BASE" HEAD)
+            SKIP=$(printf '%s\n' "$CHANGED" | python3 .github/scripts/release-number.py --changed-files)
+            if [ -n "$SKIP" ]; then
+              echo "the push changes only $SKIP — a published version is the factory workflow and its embedded runtime tree, never the consumer's own workflow file: no release is published and no number is spent"
+              exit 0
+            fi
+          fi
       - name: Publish the release
         env:
           # the gh CLI refuses to run in an Actions job unless GH_TOKEN is
@@ -94,11 +151,24 @@ jobs:
           TAGS=$(git ls-remote --tags origin \
             | awk -F'\t' 'substr($2, length($2)-2) != "^{}" { sub(/^refs\/tags\//, "", $2); print $2 }')
           NEXT=$(printf '%s\n' "$TAGS" | python3 .github/scripts/release-number.py)
-          PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          # The notes' range base is the predecessor release — the
+          # closest reachable tag of the new scheme. `--match '[0-9]*'`
+          # restricts the describe to that series: every new-scheme
+          # tag is a bare integer (no `v` prefix, no dots — the scheme
+          # the helper defines) and so starts with a digit, while every
+          # older `v`-prefixed semver tag stays out — an older tag can
+          # never name the reference.
+          PREV=$(git describe --match '[0-9]*' --tags --abbrev=0 2>/dev/null || true)
+          # A release with no predecessor: the range base is the first
+          # commit — the dichotomy the notes keep; the full-history
+          # checkout above makes it the real first commit (a shallow
+          # fetch would report HEAD itself).
           RANGEFROM=${PREV:-$(git rev-list --max-parents=0 HEAD)}
-          # The release notes' "changed since" list is computed against
-          # main's HEAD, so the notes list real main changes.
-          CHANGES=$(git diff --stat "$RANGEFROM" HEAD -- .github pi-prompts requirements | tail -n +2)
+          # The notes' list spans the whole tree — no pathspec subset
+          # of it: a push that changes files elsewhere (docs, README,
+          # tests, …) still publishes, and the list must name the real
+          # changes, never print empty.
+          CHANGES=$(git diff --stat "$RANGEFROM" HEAD | tail -n +2)
 
           # One tag per commit: a re-run of this flow at an unchanged
           # HEAD (a workflow-dispatch retry) would otherwise spend the

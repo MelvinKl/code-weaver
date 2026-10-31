@@ -35,7 +35,11 @@ the remote, so the push uploads only the tag object — no new commit
 content — and the default GITHUB_TOKEN publishes it: no special token, no
 secret. A re-run of the flow at an unchanged HEAD publishes nothing —
 one tag per commit, the number series advancing only when main does (the
-helper's guard), so a number is never spent on a duplicate version. The
+helper's guard), so a number is never spent on a duplicate version. A
+push whose changed files are confined to the consumer workflow publishes
+no release (no tag, no release, no number spent — the version it would
+have carried is unchanged: a version is the factory workflow and its
+embedded runtime tree, never the consumer's own workflow file). The
 workflow at a ref is self-contained and self-carrying — its stage
 steps are inlined in the file, and its runtime tree is embedded in the
 file (stage 1 materialises it; the trigger's artifact carries it to
@@ -45,7 +49,10 @@ artifact API would otherwise drop) — so a target's ref bump selects the
 whole version at once (the workflow file and the tree its steps execute
 are one version: the file's own); tags are
 immutable, so targets pinned to an older ref keep working, and bumping
-the ref is the only change a target ever makes. The factory project's
+the ref is the only change a target ever makes. A release's notes name
+the changes since the predecessor release (first commit only where
+there is no predecessor; never empty for a release that publishes
+changes). The factory project's
 own repo keeps the same pattern: its dogfood pins the public release
 line, and the ref bump is the upgrade of the machinery a run works with
 — while a run triggered in it still checks and works the triggered

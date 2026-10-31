@@ -196,7 +196,12 @@ workflow file and its runtime tree embedded in the file — as one version
 from the factory repo; a ref bump selects the whole version.
 **Every published version is a stable ref**: a push to the factory's `main`
 branch publishes the next single increasing number as a GitHub release;
-targets pinned to an older ref keep working.
+targets pinned to an older ref keep working. A push whose changed files
+are confined to the consumer workflow publishes no release (no tag, no
+release, no number spent — the version it would have carried is
+unchanged), and a release's notes name the changes since the predecessor
+release — the first commit only where there is no predecessor — and are
+never empty for a release that publishes changes.
 
 ## Inputs
 
@@ -260,7 +265,7 @@ factory.
   workflows/
     factory.yml        the 15-stage pipeline as one self-contained, self-carrying reusable workflow (the stage steps inlined in the file; the runtime tree embedded in it as a base64 tarball — one ref is one version; no composite actions)
     house-ci.yml       this repo's own gate (uv; compile+YAML+oracle+pytest)
-    release.yml        push to main → next single increasing number → GitHub release (the ref targets pin; the default GITHUB_TOKEN publishes the tag on main's HEAD — no special token)
+    release.yml        push to main → next single increasing number → GitHub release (a push whose changed files are confined to the consumer workflow publishes no release — no tag, no number spent; the ref targets pin; the default GITHUB_TOKEN publishes the tag on main's HEAD — no special token)
   actions/
     <stage>/           the stage's python script — the stage's STEPS are inlined in factory.yml (the workflow is self-contained: no composite actions to reference, no own-action ref for the release to rewrite, no runtime tree for a stage job to fetch — the file carries it embedded); each dir holds the script its inlined stage step runs
     setup-pi/          stage 2 — install pi for the run + write the provided harness + backend/model checks
@@ -278,10 +283,10 @@ factory.
     common.py          shared plumbing (state dir, caps, guard, pi, git)
     stages.py          the shared generation/review loop machinery
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
-    release-number.py  the next single increasing number of a release (release.yml pipes the tag list in)
+    release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (15 files, 165 scenarios)
+requirements/          the Gherkin oracle for THIS repo (15 files, 168 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -289,7 +294,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **165 Gherkin scenarios** — the oracle this
+`requirements/` holds **168 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and
