@@ -48,4 +48,4 @@ jobs:
       PI_MODELS: ${{ secrets.PI_MODELS }}
       PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
       PI_MCP: ${{ secrets.PI_MCP }}
-      PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
+      PI_EXTENSION_ENV: ${{ vars.PI_EXTENSION_ENV }}
