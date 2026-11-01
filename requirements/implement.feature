@@ -100,3 +100,11 @@ Feature: Implementation
     And everything else is admitted — the tests the implementation has the job to implement are never reverted
     And no other plan file is allowed
     And the requirements dir stays off-limits
+
+  @implement @brownfield
+  Scenario: A brown field run adjusts the tests without implementing code
+    Given a run whose requirements were extracted from the project's existing code
+    When the implement stage works the plan
+    Then the implementation changes no source code — the changed files are the tests and the issue's plan file
+    And the existing tests are adjusted to reference the requirements they describe
+    And each adjusted test that implements a scenario cites it in its docstring as <feature file>::<scenario name>

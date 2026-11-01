@@ -71,3 +71,11 @@ Feature: Planning
     When the plan-check stage runs
     Then only plans/N.md has changed
     And any other change is reverted and the plan stage re-runs
+
+  @plan @brownfield
+  Scenario: A brown field plan scopes its tasks to the test references
+    Given a run whose requirements were extracted from the project's existing code
+    When the plan stage runs pi with the plan prompt template
+    Then the plan names the extracted scenarios it must cover
+    And the plan's tasks are scoped to adjusting the tests to reference those scenarios
+    And no plan task implements code

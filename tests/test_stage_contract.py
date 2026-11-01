@@ -6,6 +6,20 @@ contract, and no-argument `test_` functions are auto-discovered by both
 runners (this runner and house CI's `pytest tests/`).
 
 The pins (one per scenario the fix loop had to fulfil):
+- the extract stage's entry logic branches on the target's requirements
+  directory: an empty issue body takes the "no delta requirements" stop
+  only where the target HAS a requirements directory (requirement-
+  extraction "An empty issue body does not produce invented requirements"
+  — adjusted: the new Given "the target project has a requirements
+  directory" narrows the stop's precondition), and a target without one
+  is a first factory run on that project — the stage proceeds to its
+  generation loop with the full-derivation prompt (derive the full
+  requirement set from the project's current code, documentation and
+  tests; a source the project lacks is skipped rather than failing; the
+  .feature files it writes create the requirements directory; the
+  template's first-run clause governs the shape) (requirement-extraction
+  "A first-time run without a requirements dir extracts the full
+  requirements" — new);
 - the extract stage is the `@`-file slice of the context contract —
   setup-pi "pi reads the project files as context"; requirement-extraction
   "requirements are derived from the project itself" — while the other
@@ -311,6 +325,231 @@ def test_extract_prompt_tolerates_arc42_structure_variance():
     assert "proceeds on the readable parts" in prompt
 
 
+def test_extract_first_run_without_requirements_dir_derives_full_requirements():
+    """(requirement-extraction "A first-time run without a requirements
+    dir extracts the full requirements" — new @brownfield scenario;
+    reference
+    `requirements/requirement-extraction.feature::A first-time run
+    without a requirements dir extracts the full requirements`) a target
+    without a requirements directory is a first factory run on that
+    project: the extract stage's entry logic does not take the no-delta
+    stop there (the stop is conditioned on the target having a
+    requirements directory — the sibling scenario's adjusted Given step
+    pins that other branch), runs its generation loop instead, and the
+    pi prompt it builds carries the full-derivation directive — derive
+    the full requirement set from the project's current code,
+    documentation and tests; a source the project lacks is skipped
+    rather than failing the extraction; the .feature files it writes
+    create the requirements directory — while the template's
+    first-run clause governs the shape of that work. The @-file slice
+    stays the handed context, a directory never among its entries, its
+    already-optional pieces skipped where absent (the sandbox's target
+    has no baseline diff, so none rides the slice)."""
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_extract_first_run",
+        os.path.join(ROOT, ".github", "actions", "extract-stage",
+                     "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-extract-first-run-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-extract-first-run-rt-")
+    # the target project: code, documentation and tests — but NO
+    # requirements directory (a first factory run on that project)
+    os.makedirs(os.path.join(ws, "src"))
+    with open(os.path.join(ws, "src", "app.py"), "w") as f:
+        f.write("print('a brownfield project')\n")
+    os.makedirs(os.path.join(ws, "docs"))
+    with open(os.path.join(ws, "docs", "01-introduction.md"), "w") as f:
+        f.write("# 1. Introduction\n\nThe project.\n")
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n\nThe project.\n")
+    os.makedirs(os.path.join(ws, "tests"))
+    with open(os.path.join(ws, "tests", "test_app.py"), "w") as f:
+        f.write("def test_it():\n    assert True\n")
+    # the trigger's state: an empty issue body — the case the standing
+    # no-delta stop was built for
+    os.makedirs(os.path.join(rt, "cw"))
+    with open(os.path.join(rt, "cw", "issue-body.md"), "w") as f:
+        f.write("")
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
+             "DOC_DIR")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        # the configured dir — absent in the target
+        "REQUIREMENTS_DIR": "requirements",
+        "DOC_DIR": "docs",
+    })
+    # the generation loop the stage would run, faked: it records the
+    # call and materialises the prompt file the loop builds (the loop
+    # calls the prompt builder every iteration)
+    calls = []
+
+    def fake_run_generation_stage(**kw):
+        calls.append(kw)
+        if callable(kw.get("prompt_file")):
+            kw["prompt_file"]()
+    orig = mod.stages.run_generation_stage
+    mod.stages.run_generation_stage = fake_run_generation_stage
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ws)
+    try:
+        mod.main()
+        # the stage did not take the no-delta stop — the stop is
+        # conditioned on the target having a requirements directory,
+        # and this target has none: the generation loop ran
+        assert calls, \
+            ("a first run proceeds to its generation loop instead of "
+             "the no-delta stop")
+        kw = calls[0]
+        assert kw["template"] == "requirements"
+        assert kw["allow"] == ["requirements"], \
+            ("the extract guard's allow set (the requirements dir) already "
+             "admits the files that create it")
+        assert kw["context_as_args"] is True
+        # the pi prompt it builds carries the full-derivation directive
+        prompt = open(os.path.join(rt, "cw", "issue-prompt.md"),
+                      encoding="utf-8").read()
+        assert ("This run is a first run on a target without a "
+                "requirements directory" in prompt), prompt
+        assert ("derive the project's **full** requirement set from the "
+                "project's current code, documentation and tests"
+                in prompt), prompt
+        assert ("a source the project does not have is skipped rather "
+                "than failing the extraction" in prompt), prompt
+        assert ("write the requirements as `.feature` files that create "
+                "the requirements directory" in prompt), prompt
+        # the template's first-run clause is what governs the shape of
+        # the work the directive names
+        template = _read("pi-prompts/requirements.md")
+        assert ("A first run on a target without a requirements "
+                "directory" in template)
+        # the @-file slice stays the handed context: every entry is a
+        # file that exists (a directory is never an @-argument), the
+        # oracle is not expanded into the slice, and the already-
+        # optional pieces absent in the target (its baseline diff) are
+        # skipped where absent
+        for c in kw["context"]:
+            assert os.path.isfile(os.path.join(ws, c)), \
+                (f"every @-file argument of the extract call is a file "
+                 f"that exists — a directory is never an @-argument, "
+                 f"got {c!r}")
+            assert not c.startswith("requirements"), \
+                f"the oracle is not expanded into the @-file slice: {c!r}"
+        assert not any(os.path.basename(c) == "baseline.diff"
+                       for c in kw["context"]), \
+            (f"an already-optional piece absent in the target is "
+             f"skipped where absent: {kw['context']!r}")
+        assert any(c.startswith("docs/") for c in kw["context"]), \
+            f"the arc42 markdown rides the handed context: {kw['context']!r}"
+        # the stop's report is not what the stage wrote
+        summary = os.path.join(rt, "cw", "stage-summary.txt")
+        text = open(summary, encoding="utf-8").read() \
+            if os.path.exists(summary) else ""
+        assert "no delta requirements" not in text, text
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        mod.stages.run_generation_stage = orig
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+
+
+def test_extract_empty_issue_body_stops_where_requirements_dir_exists():
+    """(requirement-extraction "An empty issue body does not produce
+    invented requirements" — adjusted; reference
+    `requirements/requirement-extraction.feature::An empty issue body
+    does not produce invented requirements`) the adjusted step is the
+    new Given "the target project has a requirements directory": it
+    narrows the stop's precondition — the empty-body no-delta stop
+    applies only where the target has a requirements directory, and
+    the scenario's Then outcomes are unchanged: no requirement file is
+    written, and the factory reports "no delta requirements" and stops
+    cleanly. No test in the suite cited the scenario before this delta,
+    so the adjusted requirement is pinned by this new test, not by an
+    edit to an older one."""
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_extract_empty_body",
+        os.path.join(ROOT, ".github", "actions", "extract-stage",
+                     "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-extract-empty-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-extract-empty-rt-")
+    # the target project HAS a requirements directory (the scenario's
+    # adjusted Given step) — the standing delta case
+    os.makedirs(os.path.join(ws, "requirements"))
+    feat = ("Feature: Guard rail\n"
+            "  Scenario: A standing scenario\n"
+            "    Given a\n    When b\n    Then c\n")
+    with open(os.path.join(ws, "requirements", "guard-rail.feature"),
+              "w") as f:
+        f.write(feat)
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n")
+    # the trigger's state: an empty issue body
+    os.makedirs(os.path.join(rt, "cw"))
+    with open(os.path.join(rt, "cw", "issue-body.md"), "w") as f:
+        f.write("")
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
+             "DOC_DIR")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "REQUIREMENTS_DIR": "requirements",
+        "DOC_DIR": "docs",
+    })
+    calls = []
+
+    def fake_run_generation_stage(**kw):
+        calls.append(kw)
+    orig = mod.stages.run_generation_stage
+    mod.stages.run_generation_stage = fake_run_generation_stage
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ws)
+    try:
+        mod.main()
+        # the stage stops before its generation loop — the empty-body
+        # stop takes the target having a requirements directory
+        assert not calls, \
+            ("the empty-body stop stops the stage before its generation "
+             "loop")
+        # it writes no requirement file: the oracle is untouched
+        assert open(os.path.join(ws, "requirements",
+                                 "guard-rail.feature")).read() == feat
+        assert [f for f in os.listdir(os.path.join(ws, "requirements"))
+                if f != "guard-rail.feature"] == [], \
+            "no requirement file is written"
+        # the clean stop reports "no delta requirements"
+        summary = os.path.join(rt, "cw", "stage-summary.txt")
+        assert "no delta requirements" in open(summary,
+                                               encoding="utf-8").read()
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        mod.stages.run_generation_stage = orig
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+
+
 def test_planner_context_falls_back_to_top_level_arc42():
     """(plan "the plan is grounded in the current architecture") the
     context builders reference the top-level PLAN.md as the arc42 set
@@ -451,6 +690,197 @@ def test_planner_instructions_carry_the_changed_requirement_delta():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def test_plan_prompt_clause_scopes_brownfield_tasks_to_test_references():
+    """(plan "A brown field plan scopes its tasks to the test references"
+    — new @brownfield scenario; reference
+    `requirements/plan.feature::A brown field plan scopes its tasks to the
+    test references`) the plan prompt template carries the brownfield
+    clause: where the run's delta is the brownfield shape — every
+    requirement file that changed against the baseline is *new* (the
+    extraction created the requirements directory, so the baseline
+    knows none of them) — the requirements were extracted from the
+    project's existing code, and the plan (a) names the extracted
+    scenarios it must cover and (b) scopes its tasks to adjusting the
+    tests to reference those scenarios, with no plan task that
+    implements code; where the delta is not that shape (a changed
+    existing file among the delta, as on the standing runs) the clause
+    does not apply — the standing instructions are exactly as they are
+    today."""
+    template = _read("pi-prompts/plan.md")
+    # the clause keys on the shape marker the target's prompt file writes
+    assert "marks the run's delta as the **brownfield\nshape**" in template
+    # the recognising rule: every changed requirement file is new against
+    # the baseline, because the extraction created the requirements dir
+    assert ("every requirement file that changed against the run's\n"
+            "baseline is *new*") in template
+    assert "the extraction created the requirements directory" in template
+    assert "so the baseline knows none of them" in template
+    # the scope's premise: the requirements were extracted from the
+    # project's existing code
+    assert ("the requirements were\n"
+            "extracted from the project's existing code") in template
+    # (a) the plan names the extracted scenarios it must cover
+    assert ("(a) the plan names the extracted scenarios it\n"
+            "must cover") in template
+    # (b) the plan's tasks are scoped to adjusting the tests to
+    # reference those scenarios
+    assert ("(b) the plan's tasks are scoped to adjusting the tests\n"
+            "to reference those scenarios") in template
+    # no plan task implements code
+    assert "no plan task implements code" in template
+    # where the delta is not that shape, the clause does not apply —
+    # the standing instructions govern
+    assert "Where the\ndelta is not that shape" in template
+    assert "this clause does not apply" in template
+
+
+def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
+    """(plan "A brown field plan scopes its tasks to the test references"
+    — new @brownfield scenario; reference
+    `requirements/plan.feature::A brown field plan scopes its tasks to the
+    test references`) the plan stage's prompt assembly attaches the
+    brownfield scope to the instructions it generates exactly when the
+    run's delta is the brownfield shape — every changed requirement
+    file is new against the baseline (the extraction created the
+    requirements directory, so the baseline knows none of them): the
+    generated target carries the brownfield scope — the requirements
+    were extracted from the project's existing code, the plan names the
+    extracted scenarios it must cover, its tasks are scoped to
+    adjusting the tests to reference those scenarios, no plan task
+    implements code — alongside the delta section. Where a changed
+    existing file is among the delta (the standing runs' shape), the
+    scope is not attached — the standing delta section stands alone,
+    exactly as the standing test pins it (its sandbox delta changes an
+    existing file and stays green unedited)."""
+    import shutil
+    import subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_plan_brownfield",
+        os.path.join(ROOT, ".github", "actions", "plan-stage", "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-plan-brownfield-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-plan-brownfield-rt-")
+    # the brownfield target: code, documentation and tests — but no
+    # requirements directory (the baseline knows none of its files)
+    os.makedirs(os.path.join(ws, "src"))
+    with open(os.path.join(ws, "src", "app.py"), "w") as f:
+        f.write("print('a brownfield project')\n")
+    os.makedirs(os.path.join(ws, "docs"))
+    with open(os.path.join(ws, "docs", "01-introduction.md"), "w") as f:
+        f.write("# 1. Introduction\n\nThe project.\n")
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n\nThe project.\n")
+    os.makedirs(os.path.join(ws, "tests"))
+    with open(os.path.join(ws, "tests", "test_app.py"), "w") as f:
+        f.write("def test_it():\n    assert True\n")
+    git_env = {**os.environ,
+               "GIT_AUTHOR_NAME": "cw-test", "GIT_AUTHOR_EMAIL": "cw@test",
+               "GIT_COMMITTER_NAME": "cw-test", "GIT_COMMITTER_EMAIL": "cw@test",
+               "HOME": ws}
+
+    def git(*a, check=True):
+        r = subprocess.run(["git", *a], cwd=ws, env=git_env,
+                           capture_output=True, text=True)
+        if check and r.returncode != 0:
+            raise AssertionError(f"git {a} failed: {r.stderr.strip()[:200]}")
+        return r
+
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-qm", "baseline")
+    # the baseline stage's state: the baseline ref recorded for the run
+    os.makedirs(os.path.join(rt, "cw"), exist_ok=True)
+    with open(os.path.join(rt, "cw", "baseline.sha"), "w") as f:
+        f.write(git("rev-parse", "HEAD").stdout.strip() + "\n")
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
+             "DOC_DIR", "PLAN_DIR")
+    saved = {k: os.environ.get(k) for k in keys}
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "REQUIREMENTS_DIR": "requirements",
+        "DOC_DIR": "docs",
+        "PLAN_DIR": "plans",
+    })
+    cwd = os.getcwd()
+    os.chdir(ws)
+    try:
+        # the extraction stage's committed work on a first run: it
+        # created the requirements directory, so every changed
+        # requirement file is new against the baseline (the delta is
+        # the brownfield shape)
+        os.makedirs(os.path.join(ws, "requirements"))
+        with open(os.path.join(ws, "requirements", "overview.feature"),
+                  "w") as f:
+            f.write("Feature: Overview\n"
+                    "  Scenario: A first extracted scenario\n"
+                    "    Given a\n    When b\n    Then c\n")
+        with open(os.path.join(ws, "requirements", "safety.feature"),
+                  "w") as f:
+            f.write("Feature: Safety\n"
+                    "  Scenario: A second extracted scenario\n"
+                    "    Given a\n    When b\n    Then c\n")
+        git("add", "-A")
+        git("commit", "-qm", "stage 4 requirements-extraction: generated")
+        assert mod.delta_is_brownfield() is True
+        # the generated target: the brownfield scope alongside the
+        # delta section
+        pf = mod.build_target("42", "plans")
+        prompt = open(pf, encoding="utf-8").read()
+        # the delta section names every changed (new) requirement file
+        assert "## The requirement delta (your task's input)" in prompt
+        assert "requirements/overview.feature" in prompt, prompt
+        assert "requirements/safety.feature" in prompt, prompt
+        # the brownfield scope is attached — the shape marker, the
+        # recognition rule it states, and the scope the new scenario
+        # demands
+        assert ("## The run's delta is the brownfield shape"
+                in prompt), prompt
+        assert ("Every requirement file that changed against the run's "
+                "baseline is new" in prompt), prompt
+        assert ("the requirements were extracted from the project's "
+                "existing code" in prompt), prompt
+        assert ("the plan names the extracted scenarios it must cover"
+                in prompt), prompt
+        assert ("the plan's tasks are scoped to adjusting the tests to "
+                "reference those scenarios" in prompt), prompt
+        assert "no plan task implements code" in prompt, prompt
+        # the marker keys on the template's brownfield clause — the
+        # instructions handed to pi (the template plus the target)
+        # govern the plan through it
+        assert ("The brownfield clause of your instructions governs"
+                in prompt), prompt
+        assert "brownfield" in _read("pi-prompts/plan.md")
+        # a standing run over the now-known oracle: the baseline knows
+        # the requirements directory, and its delta changes an existing
+        # file in place — not the all-new shape, so the scope is not
+        # attached and the standing instructions stand
+        with open(os.path.join(ws, "requirements", "overview.feature"),
+                  "a") as f:
+            f.write("  Scenario: A standing change\n"
+                    "    Given x\n    When y\n    Then z\n")
+        git("add", "-A")
+        git("commit", "-qm", "stage 4 requirements-extraction: generated")
+        with open(os.path.join(rt, "cw", "baseline.sha"), "w") as f:
+            f.write(git("rev-parse", "HEAD~1").stdout.strip() + "\n")
+        assert mod.delta_is_brownfield() is False
+        pf2 = mod.build_target("42", "plans")
+        prompt2 = open(pf2, encoding="utf-8").read()
+        assert "## The requirement delta (your task's input)" in prompt2
+        assert "requirements/overview.feature" in prompt2, prompt2
+        assert "## The run's delta is the brownfield shape" not in prompt2
+    finally:
+        os.chdir(cwd)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
 
 
 def test_consumer_workflow_pins_owner_and_version_tag():
@@ -2592,6 +3022,69 @@ def test_implement_instructions_prescribe_the_test_reference():
     assert "references that changed scenario with it" in prompt
     assert "the adjusted tests fulfil" in prompt
     assert "the requirement as it now reads" in prompt
+
+
+def test_implement_instructions_prescribe_the_brownfield_work():
+    """(implement "A brown field run adjusts the tests without
+    implementing code" — new @brownfield scenario; reference
+    `requirements/implement.feature::A brown field run adjusts the
+    tests without implementing code`) on a run whose requirements
+    were extracted from the project's existing code, the implement
+    prompt template's brownfield clause prescribes the work the
+    scenario demands: where the plan the stage works is a
+    brownfield plan — its tasks are all about adjusting the
+    tests to reference the extracted scenarios, none implements
+    code (the plan stage's brownfield scope makes the plan read
+    that way) — the implementation changes no source code, the
+    changed files are the tests and the issue's plan file; the
+    existing tests are adjusted to reference the requirements
+    they describe; each adjusted test that implements a scenario
+    cites it in its docstring as `<feature file>::<scenario
+    name>` — the machine form the template already prescribes
+    for generated tests, applied to *adjusted* existing tests;
+    where the plan is not a brownfield plan, the clause does not
+    apply — the standing instructions govern. No guard change
+    rides with the clause — the inverted allow already admits
+    the brownfield change set (the tests, and the plan file
+    re-allowed over the denied plans dir)."""
+    prompt = _read("pi-prompts/implement.md")
+    # the clause is the implement prompt's item 7 — the standing
+    # items 1-6 and the hard rules stand unchanged
+    assert "7. **A brownfield plan scopes your work to the" in prompt
+    # the clause keys on the plan the stage works being a brownfield
+    # plan — its tasks are all about adjusting tests to reference
+    # the extracted scenarios, none implements code
+    assert ("Where the plan you are working is a brownfield plan — its\n"
+            "   tasks are all about adjusting tests to reference the\n"
+            "   extracted scenarios, none implements code") in prompt
+    # the premise: the plan stage's brownfield scope makes the plan
+    # read that way
+    assert ("(the plan\n   stage's brownfield scope makes the plan read"
+            " that way)") in prompt
+    # the implementation changes no source code — the changed files
+    # are the tests and the issue's plan file
+    assert ("your implementation changes **no source code**: the changed\n"
+            "   files are the tests and the issue's plan file") in prompt
+    # the existing tests are adjusted to reference the requirements
+    # they describe
+    assert ("You adjust\n   the existing tests to reference the"
+            " requirements\n   they describe") in prompt
+    # each adjusted test that implements a scenario cites it in its
+    # docstring as `<feature file>::<scenario name>` — the machine
+    # form item 6 prescribes for generated tests, applied to
+    # adjusted existing tests
+    assert ("each adjusted test that implements a\n"
+            "   scenario cites it in its docstring as\n"
+            "   `<feature file>::<scenario name>` — the machine form"
+            " item 6") in prompt
+    assert ("prescribes for generated tests, applied to *adjusted*\n"
+            "   existing tests.") in prompt
+    # where the plan is not a brownfield plan, the clause does not
+    # apply — the standing instructions govern
+    assert ("Where the plan is not a brownfield plan\n"
+            "   (a task implements code, as on the standing runs),"
+            " this\n   clause does not apply — the standing"
+            " instructions govern.") in prompt
 
 
 def test_tests_that_implement_scenarios_reference_them():

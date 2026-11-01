@@ -47,6 +47,7 @@ Feature: Requirement extraction
   @extraction
   Scenario: An empty issue body does not produce invented requirements
     Given the issue body is empty or describes no change
+    And the target project has a requirements directory
     When the extraction stage runs
     Then no requirement file is written
     And the factory reports "no delta requirements" and stops cleanly
@@ -111,3 +112,12 @@ Feature: Requirement extraction
     And the stage does not fail on the grounds of a broken environment
     And the partial output is committed and judged like any other iteration
     And the loop retries the model within its bounded budget
+
+  @extraction @brownfield
+  Scenario: A first-time run without a requirements dir extracts the full requirements
+    Given the target project has no requirements directory
+    And the run is the first factory run on that project
+    When the extraction stage runs
+    Then pi derives the full requirement set from the project's current code, documentation and tests
+    And a source the project does not have is skipped rather than failing the extraction
+    And the requirements are written as .feature files that create the requirements directory

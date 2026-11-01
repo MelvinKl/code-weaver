@@ -8,7 +8,16 @@ those files changed — the delta the plan must cover rides the stage's
 instructions (the baseline diff scoped to the changed files); the changed
 files themselves ride the path-referenced context slice (pi reads them on
 demand), and the whole Gherkin oracle is not handed to it in full (the
-no-injection rule). The guard verifies only that one plan file changed;
+no-injection rule). Where the run's delta is the brownfield shape —
+every changed requirement file new against the baseline (the extraction
+created the requirements directory, so the baseline knows none of
+them) — the target attaches the brownfield clause: the requirements
+were extracted from the project's existing code, the plan names the
+extracted scenarios it must cover, its tasks are scoped to adjusting the
+tests to reference those scenarios, and no plan task implements code;
+where a changed existing file is among the delta (the standing runs),
+the clause is not attached. The guard verifies only that one plan file
+changed;
 any other change is reverted by the guard's pi call and the plan stage
 re-runs — the guard records the cleared repair in the state dir, and the
 stage's loop machinery claims it and re-runs the generation, the guard
@@ -38,6 +47,45 @@ def project_context() -> list[str]:
     instructions (the prompt file); the files stay path-referenced here, and
     pi reads them on demand."""
     return stages.changed_requirements_context()
+
+
+def delta_is_brownfield() -> bool:
+    """The recognising rule the plan and implement stages share: the run's
+    delta is the brownfield shape when **every** requirement file that
+    changed against the baseline is *new* (the extraction created the
+    requirements directory, so the baseline knows none of them — the
+    full-derivation shape, as opposed to the standing in-place delta).
+    A run with no changed requirement file is not that shape — there is
+    no delta to plan."""
+    files = stages.changed_requirement_files()
+    if not files:
+        return False
+    baseline = stages.baseline_sha()
+    for f in files:
+        if subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
+                          cwd=common.repo(), capture_output=True).returncode == 0:
+            return False
+    return True
+
+
+# The brownfield marker the target writes when the run's delta is the
+# brownfield shape: it marks the shape the template's brownfield clause
+# keys on, and restates the scope that clause governs — the requirements
+# were extracted from the project's existing code, the plan names the
+# extracted scenarios it must cover, its tasks are scoped to adjusting
+# the tests to reference those scenarios, and no plan task implements
+# code — so the instructions handed to pi carry the scope either way.
+BROWNFIELD_MARKER = (
+    "## The run's delta is the brownfield shape\n\n"
+    "Every requirement file that changed against the run's baseline is "
+    "new — the extraction created the requirements directory, so the "
+    "baseline knows none of them. The brownfield clause of your "
+    "instructions governs this run: the requirements were extracted "
+    "from the project's existing code, so (a) the plan names the "
+    "extracted scenarios it must cover, and (b) the plan's tasks are "
+    "scoped to adjusting the tests to reference those scenarios — no "
+    "plan task implements code.\n"
+)
 
 
 def requirement_delta() -> tuple[list[str], str]:
@@ -92,7 +140,10 @@ def build_target(issue: str, plan_dir: str) -> str:
     per issue" rule, and it carries the requirement delta: which
     requirement files changed since the baseline and what those files
     changed (the baseline diff scoped to them — the delta the plan must
-    cover). The changed files stay referenced by path in the call's
+    cover). Where the delta is the brownfield shape (every changed
+    requirement file new against the baseline), the target also attaches
+    the brownfield marker — the scope the template's brownfield clause
+    governs. The changed files stay referenced by path in the call's
     context; the instructions carry the delta, never the whole oracle.
     Rebuilt every run so a re-run overwrites the same file."""
     pf = common.state_file("plan-target.md")
@@ -109,6 +160,12 @@ def build_target(issue: str, plan_dir: str) -> str:
                 "NOT create an overall/aggregate plan: every issue gets its "
                 "own single plan file.\n")
         f.write(delta_section())
+        # The brownfield scope attaches only where the delta is the
+        # all-new-files shape — where a changed existing file is among the
+        # delta (the standing runs), the instructions are exactly the
+        # standing ones and the marker is not written.
+        if delta_is_brownfield():
+            f.write(BROWNFIELD_MARKER)
     return pf
 
 

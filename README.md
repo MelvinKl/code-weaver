@@ -56,9 +56,12 @@ this repo's reusable workflow takes over:
    parts); the result is the delta placed by topic — the existing topic
    file extended in place, a new file only for a topic no file yet covers,
    never named after an issue — a changed existing file that no longer
-   parses is a guard violation, reverted and re-run — and an empty body
-   writes nothing; the result is validated with Cucumber's official parser
-   (skipped-not-failed where the parser port is absent);
+   parses is a guard violation, reverted and re-run — an empty body writes
+   nothing and the factory stops cleanly there, where the target has a
+   requirements directory; a first run on a target without one derives the
+   full requirements set from the project's code, documentation and tests
+   and creates the directory; the result is validated with Cucumber's
+   official parser (skipped-not-failed where the parser port is absent);
 5. **requirement check** — the shared guard: only the requirements dir may
    have changed (and the delta's shape is pinned to the topic placement —
    extended existing topic files, new files only for uncovered topics,
@@ -70,7 +73,13 @@ this repo's reusable workflow takes over:
    top-level `PLAN.md` where a target has no doc dir); the instructions
    carry the delta — which requirement files changed and what those files
    changed — the files ride the path-referenced context (read on demand,
-   never embedded; the whole oracle is not injected into the planner);
+   never embedded; the whole oracle is not injected into the planner) — and
+   where the run's delta is the brownfield shape (every changed requirement
+   file new against the baseline — the extraction created the requirements
+   directory, so the baseline knows none of them), the instructions attach
+   the brownfield scope: the plan names the extracted scenarios it must
+   cover and scopes its tasks to adjusting the tests to reference those
+   scenarios — no plan task implements code;
 7. **plan check** — same guard idiom — a change outside the one allowed
    plan file is reverted by the guard's pi call and the plan stage re-runs
    (the guard re-checks the re-run; only the plan file is left changed; a
@@ -79,7 +88,12 @@ this repo's reusable workflow takes over:
    scenario cites it in its docstring as `<feature file>::<scenario name>`;
    a correctness-only test cites nothing — the reference is the join the
    review stage and the suite read), the arc42 docs kept complete, README
-   current;
+   current — and, where the plan is a brownfield plan, the run adjusts the
+   tests without implementing code: no source code changes (the changed
+   files are the tests and the issue's plan file), the existing tests are
+   adjusted to reference the requirements they describe, and each adjusted
+   test that implements a scenario cites it in its docstring as
+   `<feature file>::<scenario name>`;
 9. **implement check** — same guard, run INVERTED: the implementation's
    lane is everything EXCEPT the protected set (requirements and plans) —
    it has the job to implement the tests, and the guard must not re-litigate
@@ -302,7 +316,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 172 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 175 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -310,7 +324,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **172 Gherkin scenarios** — the oracle this
+`requirements/` holds **175 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

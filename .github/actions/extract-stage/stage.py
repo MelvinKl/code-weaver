@@ -4,7 +4,14 @@
   pi (requirements.md prompt, issue body as the prompt, the project files as
   context) derives the delta requirements for the issue and writes them as
   Gherkin into the requirements dir, placed by topic — an existing topic file
-  extended in place, a new file only for a topic no file yet covers; the guard
+  extended in place, a new file only for a topic no file yet covers. A target
+  without a requirements directory is a first factory run on that project: the
+  entry logic takes its first-run branch there (the full-derivation prompt —
+  pi derives the full requirement set from the project's current code,
+  documentation and tests, a source the project does not have is skipped
+  rather than failing, and the .feature files it writes create the directory);
+  the empty-body "no delta requirements" stop applies only where a
+  requirements directory exists. The guard
   (the one shared idiom) then verifies that ONLY the requirements dir changed
   — a leak is repaired in place by the guard's pi call (the off-limits files
   named, told to be reverted, the stage's own work told to stay valid) and a
@@ -28,6 +35,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(action_dir)), "s
 
 import common
 import stages
+
+# The full-derivation prompt a first run on a target without a requirements
+# directory hands pi: the first-run marker plus the directive the template's
+# first-run clause governs (derive the full requirement set from the
+# project's current code, documentation and tests — a source the project does
+# not have is skipped rather than failing — write the requirements as
+# .feature files that create the directory). The issue's header and body ride
+# below it where the trigger carries them (build_prompt appends them).
+FIRST_RUN_PROMPT = (
+    "# This run is a first run on a target without a requirements "
+    "directory\n\n"
+    "The target project has no requirements directory yet, so there is no "
+    "existing oracle to derive a delta against. The first-run clause of "
+    "your instructions governs this run: derive the project's **full** "
+    "requirement set from the project's current code, documentation and "
+    "tests — a source the project does not have is skipped rather than "
+    "failing the extraction — and write the requirements as `.feature` "
+    "files that create the requirements directory.\n"
+)
 
 
 def existing_context() -> list[str]:
@@ -156,17 +182,30 @@ def main() -> None:
     common.install_crash_diagnostics("stage 4 requirements-extraction")
     req = common.env_dir("REQUIREMENTS_DIR")
     body = common.state_file("issue-body.md")
-    # A missing body and an empty body are the same case: no change is
-    # described, so there are no delta requirements. The stage writes nothing
-    # and stops cleanly — handing pi a blank issue would invite it to invent
-    # requirements out of silence.
-    if not os.path.exists(body) or not open(body, encoding="utf-8").read().strip():
+    body_empty = (not os.path.exists(body)
+                  or not open(body, encoding="utf-8").read().strip())
+    # The empty-body stop is conditioned on the target project HAVING a
+    # requirements directory: a missing body and an empty body are the same
+    # case there — no change is described, so there are no delta
+    # requirements, and the stage writes nothing and stops cleanly (handing
+    # pi a blank issue would invite it to invent requirements out of
+    # silence). A target WITHOUT a requirements directory is a first factory
+    # run on that project: the stage proceeds to its generation loop instead
+    # of stopping, with the full-derivation prompt — the requirements it
+    # derives are written as .feature files that create the directory.
+    first_run = bool(req) and not os.path.isdir(req)
+    if not first_run and body_empty:
         common.log("stage 4: issue body is empty — no delta requirements; the "
                    "stage writes nothing and stops cleanly")
         with open(common.state_file("stage-summary.txt"), "a", encoding="utf-8") as f:
             f.write("stage 4-5 requirement extraction: no delta requirements "
                     "(empty issue body)\n")
         return
+    if first_run:
+        common.log("stage 4: the target has no requirements directory — a "
+                   "first factory run on that project; the extraction derives "
+                   "the full requirement set, and the generated .feature "
+                   "files create the directory")
 
     def build_prompt():
         # The model places the delta by topic — extending the existing topic
@@ -178,12 +217,30 @@ def main() -> None:
         # context — not as file names. Rebuilt every iteration: after a
         # failed validation the validator's verdict is appended, so the model
         # repairs its own Gherkin against the exact complaint.
-        if not os.path.exists(body):
-            return None
-        text = open(body, encoding="utf-8").read()
+        # A first run (the target has no requirements directory) writes the
+        # full-derivation prompt instead: there is no oracle to derive a
+        # delta against, so the prompt carries the first-run marker and the
+        # directive the template's first-run clause governs, the issue's
+        # header and body riding below it where the trigger carries them.
         num = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
         title = common.cw_state("issue-title") or common.cw_input_opt("issue-title") or ""
         pf = common.state_file("issue-prompt.md")
+        if first_run:
+            text = (open(body, encoding="utf-8").read()
+                    if os.path.exists(body) else "")
+            with open(pf, "w", encoding="utf-8") as f:
+                f.write(FIRST_RUN_PROMPT)
+                if text.strip():
+                    head = "GitHub issue"
+                    if num:
+                        head += f" #{num}"
+                    if title:
+                        head += f": {title}"
+                    f.write("\n\n" + head + "\n\n" + text + "\n")
+            return pf
+        if not os.path.exists(body):
+            return None
+        text = open(body, encoding="utf-8").read()
         with open(pf, "w", encoding="utf-8") as f:
             head = "GitHub issue"
             if num:

@@ -30,6 +30,22 @@ of open (`- [ ]`) and done (`- [x]`) tasks. Execute the plan.
    the requirement as it now reads (the plan names the changed
    requirements; the changed feature files are readable in the tree).
 
+7. **A brownfield plan scopes your work to the test references.**
+   Where the plan you are working is a brownfield plan — its
+   tasks are all about adjusting tests to reference the
+   extracted scenarios, none implements code (the plan
+   stage's brownfield scope makes the plan read that way) —
+   your implementation changes **no source code**: the changed
+   files are the tests and the issue's plan file. You adjust
+   the existing tests to reference the requirements
+   they describe, and each adjusted test that implements a
+   scenario cites it in its docstring as
+   `<feature file>::<scenario name>` — the machine form item 6
+   prescribes for generated tests, applied to *adjusted*
+   existing tests. Where the plan is not a brownfield plan
+   (a task implements code, as on the standing runs), this
+   clause does not apply — the standing instructions govern.
+
 Hard rules
 1. **Never edit `requirements/`.** A requirement you cannot fulfil is
    reported, not rewritten — the requirement file is never the one you

@@ -8,6 +8,19 @@ needs the files around a change; the whole existing oracle is not handed to
 you, so plan the delta your instructions carry, not the oracle. Do not create
 any other plan or an aggregate plan.
 
+Where your output target marks the run's delta as the **brownfield
+shape** — every requirement file that changed against the run's
+baseline is *new*: the extraction created the requirements directory,
+so the baseline knows none of them (the full-derivation shape, as
+opposed to the standing in-place delta) — the requirements were
+extracted from the project's existing code, and the plan you write
+scopes itself to them: (a) the plan names the extracted scenarios it
+must cover, and (b) the plan's tasks are scoped to adjusting the tests
+to reference those scenarios — no plan task implements code. Where the
+delta is not that shape (a changed existing file among the delta, as on
+the standing runs), this clause does not apply — the standing
+instructions govern.
+
 Write it in **Jira-ticket style**: one issue with `Summary`, `Description`,
 `Acceptance Criteria` (each mapped to the Gherkin scenario it fulfills), and a
 **Tasks** section — an ordered, atomic, independently-achievable checkbox

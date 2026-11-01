@@ -14,6 +14,23 @@ the baseline stage) — is handed to you as named files to read as
 context before you answer; a directory is never one of them. Derive
 against all of it.
 
+A first run on a target without a requirements directory: where your
+output target marks the run as a **first run** — the target project has
+no requirements directory yet, so there is no existing oracle to derive
+a delta against — the delta form gives way to the full-derivation form:
+you derive the project's **full** requirement set from the project's
+current code, documentation and tests, and a source the project does not
+have is **skipped rather than failing** the extraction (the
+skipped-not-failed tolerance of the arc42 structure-variance rule, from
+chapters to sources). The requirements are written as `.feature` files
+that **create** the requirements directory, placed by topic — every
+topic file is a new one, since no existing file covers a topic yet. The
+project's code and test trees are reached by your read tool on demand —
+a directory is never one of the `@`-file arguments, so they are never
+among them; the `@`-file slice (the arc42 markdown, the README, the
+baseline diff) stays the handed context, its already-optional pieces
+skipped where absent.
+
 Place each delta scenario in the file that owns its topic. The oracle is
 structured by topic, not by issue: each file is where a reader (or a
 search) goes for that topic. So **extend the existing topic file** when one
