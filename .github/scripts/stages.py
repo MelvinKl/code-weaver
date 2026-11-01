@@ -258,7 +258,8 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                          allow_noop: bool = True,
                          context_as_args: bool = False,
                          deny: list[str] | tuple[str, ...] = (),
-                         rerun_on_repair: bool = False) -> None:
+                         rerun_on_repair: bool = False,
+                         completion_line=None) -> None:
     """generate → commit → guard → (clean, or a violation the guard's
     repair call cleared in place: post_ok check / break; a repair cap
     exhausted without clearing the violation: the guard exits the stage
@@ -295,7 +296,20 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
     stages' machinery leaves the record unclaimed and their stages complete
     without re-running (guard-rail: the leaking stage is repaired by the pi
     call, not restarted; a requirement edit during implementation is
-    reverted in place)."""
+    reverted in place).
+
+    `completion_line` (default: None) is the caller's own completion-line
+    hook — a zero-argument callable that returns the line to log where the
+    shared loop's own completion line would go (or None to log nothing
+    there). None keeps the loop's plain "{stage}: clean — stage complete"
+    form — the single-call stages (extract, plan, review) keep exactly that
+    line when the loop comes back clean. A caller with a richer completion
+    supplies its own form — the implement stage's per-step completion: after
+    each clean call it counts the plan file's checkboxes, and while any step
+    remains open it logs the per-step line ("clean — step <done>/<total> of
+    the plan done; <remaining> step(s) remain") instead of a stage
+    completion. The shared loop does not force one completion wording on
+    every caller."""
     baseline = stage_baseline()
     i = 0
     empty = 0
@@ -441,7 +455,12 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
             if post_ok is not None and post_ok() is False:
                 i += 1
                 continue
-            common.log(f"{stage}: clean — stage complete")
+            if completion_line is None:
+                common.log(f"{stage}: clean — stage complete")
+            else:
+                line = completion_line()
+                if line:
+                    common.log(line)
             return
         except Exception:
             import traceback

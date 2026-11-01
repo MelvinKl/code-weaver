@@ -2,10 +2,33 @@
 """Stage 8+9 — implementation + implement check.
 
 The plan file `PLAN_DIR/<issue_number>.md` (see plan-stage) is a Jira-ticket
-state tracker: a checklist of tasks, each open (`- [ ]`) or done (`- [x]`).
-Each invocation of this stage works on the NEXT OPEN task — implements it and
-marks it done — and the per-task loop below calls again until every task is
+state tracker: a checklist of steps, each open (`- [ ]`) or done (`- [x]`),
+and the code that reads the plan keys on the checkbox, not the word.
+Each invocation of this stage works on the NEXT OPEN step — implements it and
+marks it done — and the per-step loop below calls again until every step is
 done (or a cap is hit).
+
+Completion logging is per step while steps remain open: after each clean
+generation call the stage counts the plan file's checkboxes and, while any
+step remains open, logs the per-step line ("stage 8 implementation: clean —
+step <done>/<total> of the plan done; <remaining> step(s) remain") — that
+form rides the shared generation loop's completion-line hook (the loop's
+plain "clean — stage complete" form stays the default for the single-call
+stages). Only when the per-step loop exits with no open steps left — a plan
+already fully tracked when the stage starts, and a plan made fully tracked by
+the last call, one form on both exit paths — does the stage log "stage 8
+implementation: all <total> plan steps done — stage complete", the only
+line it prints that calls the stage complete.
+
+The per-step state also rides the stage-summary channel (the state-dir
+`stage-summary.txt` the report stage merges — state rides artifacts, never
+the repo tree): one "stage 8 implementation: step <k>/<n> done" line per
+step a call finishes, and a "stage 8 implementation: stage complete" line
+on the per-step loop's exit — written only for a plan fully tracked, so a
+run that stops with steps still open (a cap) leaves the per-step lines
+without it. The report stage renders from those lines: a stage that will
+re-run (per-step lines without a completion line) is reported per step, and
+a stage that is done is reported "stage complete".
 
 The guard runs INVERTED-ALLOW (the guard's `!` denied-set marker): the
 implementation's lane is everything EXCEPT the protected set — requirements
@@ -13,7 +36,7 @@ and the plans dir — so the allow entries carry two jobs:
 
   - the current issue's plan file: it is the one file inside the denied
     plans dir the implementation may edit (a live state tracker — it flips
-    its own task checkboxes as it works); everything else under plans/ is
+    its own step checkboxes as it works); everything else under plans/ is
     still a violation the guard repairs with a pi call (implement:
     "implementation may only edit the current issue's plan");
   - `__pycache__`: component-matched, so pycache generated at any depth is
@@ -53,8 +76,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(action_dir)), "s
 import common
 import stages
 
-# an open task in a Jira-ticket-style plan checklist
+# an open step in a Jira-ticket-style plan checklist
 OPEN_TASK_RE = re.compile(r"^\s*-\s*\[\s*\]\s*")
+# a done step in the same checklist form (`- [x]`) — the reader keys on the
+# checkbox, not the word: a plan file whose unit word is reworded parses
+# identically
+DONE_TASK_RE = re.compile(r"^\s*-\s*\[\s*[xX]\s*\]\s*")
 
 
 def protected_dirs() -> list[str]:
@@ -112,11 +139,30 @@ def build_target(issue: str, plan_dir: str) -> str:
 
 
 def has_open_task(path: str) -> bool:
-    """True if the plan still has an open (`- [ ]`) task to work on."""
+    """True if the plan still has an open (`- [ ]`) step to work on."""
     if not (path and os.path.isfile(path)):
         return False
     with open(path, encoding="utf-8") as f:
         return any(OPEN_TASK_RE.match(line) for line in f)
+
+
+def count_plan_steps(path: str) -> tuple[int, int]:
+    """(done, total) — the plan file's checkbox counts: every checklist
+    line is a step, done when it carries the done checkbox (`- [x]`),
+    open when it carries the open one (`- [ ]`). The reader keys on the
+    checkbox, not the word, so a plan file whose unit word is reworded
+    still parses — its total is the done + open checkboxes."""
+    done = total = 0
+    if not (path and os.path.isfile(path)):
+        return 0, 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if DONE_TASK_RE.match(line):
+                done += 1
+                total += 1
+            elif OPEN_TASK_RE.match(line):
+                total += 1
+    return done, total
 
 
 def main() -> None:
@@ -147,16 +193,66 @@ def main() -> None:
     # project costs far too many tokens); pi reads what it needs on demand.
     inject = [current] if current else []
 
-    # One task per invocation, looped until the plan is fully tracked out or
+    # One step per invocation, looped until the plan is fully tracked out or
     # a cap is reached. `allow_noop=False` so an empty model response is a
-    # wedged model (there is still an open task), never a false "already done".
+    # wedged model (there is still an open step), never a false "already done".
+    # The completion-line hook below is this stage's own per-step completion:
+    # the shared loop calls it where its plain "clean — stage complete" form
+    # would go — after each clean call it counts the plan file's checkboxes,
+    # and while any step remains open it logs the per-step line instead of a
+    # stage completion. All steps done → the hook logs nothing: the loop's
+    # exit check below prints the all-steps-done line on both exit paths (a
+    # plan already fully tracked when the stage starts, and a plan made fully
+    # tracked by the last call), and that is the only line this stage prints
+    # that calls the stage complete. The hook also records the per-step
+    # state on the stage-summary channel (the state dir the report stage
+    # merges — state rides artifacts, never the repo tree): one "stage 8
+    # implementation: step <k>/<n> done" line per step the call finished;
+    # the exit check below appends the "stage complete" line for a plan
+    # made fully tracked, and a run that stops with steps still open
+    # (a cap) carries the per-step lines without it.
+    # The plan's done count before the stage's first call — the hook
+    # advances it after each completed call, so each call's diff names
+    # exactly the steps THAT call finished (steps a previous run already
+    # did — a re-run resumes where the last run left off — are not steps
+    # this run finished).
+    done_before, _total_start = count_plan_steps(current)
+
+    def per_step_line() -> str | None:
+        nonlocal done_before
+        done, total = count_plan_steps(current)
+        if done > done_before:
+            for k in range(done_before + 1, done + 1):
+                with open(common.state_file("stage-summary.txt"), "a",
+                          encoding="utf-8") as f:
+                    f.write(f"stage 8 implementation: step {k}/{total} "
+                            f"done\n")
+        done_before = done
+        if total - done > 0:
+            return (f"stage 8 implementation: clean — step {done}/{total} "
+                    f"of the plan done; {total - done} step(s) remain")
+        return None
+
     i = 0
     no_progress = 0
     while True:
         common.caps_ok(i)
         if not (current and has_open_task(current)):
-            common.log("stage 8 implementation: no open tasks remain — the plan "
-                       f"({current}) is fully tracked; stage complete")
+            # the per-step loop's exit: the plan has no open steps left.
+            # One form on both exit paths (a plan already fully tracked
+            # when the stage starts, and a plan made fully tracked by the
+            # last call) — the full step count, the only line that calls
+            # the stage complete
+            _, total = count_plan_steps(current)
+            common.log(f"stage 8 implementation: all {total} plan steps "
+                       f"done — stage complete")
+            # that completion rides the stage-summary channel too — the
+            # only point that writes the line: a run that stops with steps
+            # still open (a cap) leaves the per-step lines without it, and
+            # the report renders that stage as one that will re-run
+            with open(common.state_file("stage-summary.txt"), "a",
+                      encoding="utf-8") as f:
+                f.write("stage 8 implementation: stage complete\n")
             return
         before = set(common.changed_files(stages.baseline_sha()))
         stages.run_generation_stage(
@@ -167,6 +263,7 @@ def main() -> None:
             context=context,
             prompt_file=build_target(issue, plan_dir),
             allow_noop=False,
+            completion_line=per_step_line,
         )
         after = set(common.changed_files(stages.baseline_sha()))
         if not (after - before):

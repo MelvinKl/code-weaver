@@ -12,6 +12,8 @@ Feature: Reporting
     Given the pipeline reached the report stage
     When the report stage runs
     Then the PR description carries the run status, the source issue and every stage outcome
+    And a stage that will re-run is reported per step — "step <k>/<n> done" for each of its finished steps
+    And a stage that is done is reported "stage complete"
     And no separate report file is written into the repo
 
   @report

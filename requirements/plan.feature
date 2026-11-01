@@ -49,14 +49,14 @@ Feature: Planning
     Given a plan file for the issue
     When the plan is read
     Then it has a Jira-issue structure (Summary, Description, Acceptance Criteria mapped to the scenarios)
-    And it lists an ordered, atomic Tasks checklist as checkboxes so the implementation works one task at a time
+    And it lists an ordered, atomic Steps checklist as checkboxes so the implementation works one step at a time
 
   @plan
   Scenario: The plan describes how the requirements are fulfilled
     Given a plan file covering the issue's requirement changes
     When the plan is read
-    Then for each task it names the requirement(s) it fulfils
-    And it lists the file-level changes and the architecture slices the task touches
+    Then for each step it names the requirement(s) it fulfils
+    And it lists the file-level changes and the architecture slices the step touches
 
   @plan
   Scenario: The plan is grounded in the current architecture
@@ -73,9 +73,9 @@ Feature: Planning
     And any other change is reverted and the plan stage re-runs
 
   @plan @brownfield
-  Scenario: A brown field plan scopes its tasks to the test references
+  Scenario: A brown field plan scopes its steps to the test references
     Given a run whose requirements were extracted from the project's existing code
     When the plan stage runs pi with the plan prompt template
     Then the plan names the extracted scenarios it must cover
-    And the plan's tasks are scoped to adjusting the tests to reference those scenarios
-    And no plan task implements code
+    And the plan's steps are scoped to adjusting the tests to reference those scenarios
+    And no plan step implements code

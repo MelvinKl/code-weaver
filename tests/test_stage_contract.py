@@ -146,7 +146,15 @@ The pins (one per scenario the fix loop had to fulfil):
   runs keep the gate polling until they complete (pr-and-gates "all
   PR-triggered workflows must be green", "the gate sees the PR's runs on
   a busy repo", "a head with no PR-triggered workflow is vacuously
-  green").
+  green");
+- no test in the suite spawns the real git binary: the factory's python
+  routes every git call through one mockable function (the shared
+  module's git_exec — each inline workflow step carries its own copy of
+  the same one-function shape), and the sandboxes mock that one function
+  with an in-test fake model of a git repository (test-and-review "tests
+  never invoke the real git binary") — a test's git child on the runner
+  would read the runner's git configuration and could touch a real
+  repository's state.
 """
 from __future__ import annotations
 
@@ -154,6 +162,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import types
@@ -164,6 +173,309 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 def _read(relpath):
     with open(os.path.join(ROOT, relpath), encoding="utf-8") as f:
         return f.read()
+
+
+# ── The in-test fake git ──────────────────────────────────────────────
+#
+# No test in this suite may invoke the real git binary (test-and-review
+# "tests never invoke the real git binary"): a test's git child would
+# read the runner's git configuration, and a test must never touch real
+# repository state. The factory's production code routes every git call
+# through one mockable function — common.git_exec, the factory's single
+# git entry point (each inline workflow step carries its own copy of the
+# same one-function shape) — and the sandboxes mock that one function
+# with this small in-memory model of a git repository: commits as
+# file-content snapshots, the worktree as the real temp files the test
+# writes. The production code under test runs its real logic against the
+# fake; no process is ever spawned for a git call.
+
+class _FakeRepo:
+    """A model of one git repository: `commits` maps a sha to the tree
+    it holds ({relpath: content}), `heads` lists the shas in commit
+    order (HEAD = the last), `index` is the tracked set. The worktree is
+    the real directory tree the test writes under `root` — the model
+    reads it for the worktree side of every comparison."""
+
+    def __init__(self, root):
+        self.root = root
+        self.commits = {}
+        self.heads = []
+        self.index = set()
+        self._n = 0
+
+    def _read(self, rel):
+        with open(os.path.join(self.root, rel), "rb") as f:
+            return f.read().decode("utf-8", "replace")
+
+    def worktree_files(self):
+        out = []
+        for dirpath, dirnames, filenames in os.walk(self.root):
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+            for fn in filenames:
+                out.append(os.path.relpath(os.path.join(dirpath, fn),
+                                            self.root).replace(os.sep, "/"))
+        return sorted(out)
+
+    def _resolve(self, ref):
+        if ref == "HEAD":
+            return self.heads[-1] if self.heads else None
+        if ref.startswith("HEAD~") and ref[5:].isdigit():
+            i = len(self.heads) - 1 - int(ref[5:])
+            return self.heads[i] if 0 <= i < len(self.heads) else None
+        return ref if ref in self.commits else None
+
+    def _changed(self, ref_tree, paths):
+        """(kind, path) pairs for the files that differ between the ref's
+        tree and the worktree over the pathset — git's diff-against-a-
+        commit compares the union of the commit's tree and the index: a
+        file the ref knew is modified or deleted, a tracked file the ref
+        did not know is new; an untracked file is not part of a diff
+        against a commit at all."""
+        out = []
+        for p in sorted(set(ref_tree) | self.index):
+            if paths and not any(s == "." or p == s or p.startswith(s + "/")
+                                 for s in paths):
+                continue
+            if p in ref_tree:
+                if not os.path.exists(os.path.join(self.root, p)):
+                    out.append(("D", p))
+                elif self._read(p) != ref_tree[p]:
+                    out.append(("M", p))
+            else:
+                out.append(("A", p))
+        return out
+
+    def _diff_text(self, ref_tree, paths):
+        import difflib
+        blocks = []
+        for kind, p in self._changed(ref_tree, paths):
+            old = ref_tree.get(p)
+            new = (self._read(p) if os.path.isfile(os.path.join(self.root, p))
+                   else None)
+            if kind == "A":
+                blocks.append(
+                    f"diff --git a/{p} b/{p}\nnew file mode 100644\n"
+                    f"--- /dev/null\n+++ b/{p}\n"
+                    + "".join("+" + ln + "\n"
+                              for ln in (new or "").splitlines()))
+            elif kind == "D":
+                blocks.append(
+                    f"diff --git a/{p} b/{p}\ndeleted file mode 100644\n"
+                    f"--- a/{p}\n+++ /dev/null\n"
+                    + "".join("-" + ln + "\n"
+                              for ln in (old or "").splitlines()))
+            else:
+                blocks.append(
+                    f"diff --git a/{p} b/{p}\n"
+                    + "\n".join(difflib.unified_diff(
+                        (old or "").splitlines(), (new or "").splitlines(),
+                        fromfile=f"a/{p}", tofile=f"b/{p}",
+                        lineterm="")))
+        return "\n".join(b.rstrip("\n") for b in blocks)
+
+    def exec(self, argv, **kw):
+        """The mock installed over the factory's single git entry point:
+        handles the subset of git the factory's code and the sandboxes'
+        fixtures call, and returns a CompletedProcess the way
+        subprocess.run would. A subcommand the model does not cover fails
+        loudly (the gap is a test bug, not a silent pass)."""
+        cmd = [str(a) for a in argv]
+        out, err, code = "", "", 0
+        sub = cmd[0] if cmd else ""
+        if sub in ("init", "config", "fetch", "push", "branch"):
+            pass
+        elif sub == "add":
+            if "-A" in cmd or "--all" in cmd:
+                self.index |= set(self.worktree_files())
+            else:
+                paths = [a for a in cmd[1:]
+                         if not a.startswith("-") and a != "--"]
+                for s in paths:
+                    self.index |= {p for p in self.worktree_files()
+                                   if p == s or p.startswith(s + "/")}
+        elif sub == "commit":
+            self._n += 1
+            sha = format(self._n, "040x")
+            self.commits[sha] = {
+                p: self._read(p) for p in sorted(self.index)
+                if os.path.isfile(os.path.join(self.root, p))}
+            self.heads.append(sha)
+        elif sub == "rev-parse":
+            ref = cmd[1] if len(cmd) > 1 else ""
+            sha = self._resolve(ref)
+            if sha is None:
+                code, err = 128, f"unknown revision {ref!r} (fake model)"
+            else:
+                out = sha + "\n"
+        elif sub == "diff":
+            args = [a for a in cmd[1:] if a != "--"]
+            name_only = "--name-only" in args
+            rest = [a for a in args if a != "--name-only"]
+            ref = rest[0] if rest else "HEAD"
+            paths = rest[1:]
+            sha = self._resolve(ref)
+            if sha is None:
+                code, err = 128, f"unknown revision {ref!r} (fake model)"
+            else:
+                ch = self._changed(self.commits[sha], paths)
+                if name_only:
+                    out = ("\n".join(p for _, p in ch) + "\n") if ch else ""
+                else:
+                    out = self._diff_text(self.commits[sha], paths) \
+                        if ch else ""
+        elif sub == "ls-files":
+            files = self.worktree_files()
+            if "--others" in cmd:
+                out = "\n".join(p for p in files if p not in self.index)
+                if out:
+                    out += "\n"
+            else:
+                paths = [a for a in cmd[1:]
+                         if not a.startswith("-") and a != "--"]
+                matched = [p for p in sorted(self.index)
+                           if any(s == "." or p == s
+                                   or p.startswith(s + "/")
+                                  for s in paths)]
+                if matched:
+                    out = "\n".join(matched) + "\n"
+                else:
+                    # git ls-files exits 1 when the pathspec matches
+                    # nothing
+                    code = 1
+        elif sub == "cat-file":
+            ref, _, path = (cmd[2] if len(cmd) > 2 else "").partition(":")
+            sha = (self._resolve(ref) if ref else
+                   (self.heads[-1] if self.heads else None))
+            tree = self.commits.get(sha or "", {})
+            known = (path == ""
+                     or any(p == path or p.startswith(path + "/")
+                            for p in tree))
+            code = 0 if known else 1
+        elif sub == "show":
+            ref, _, path = (cmd[1] if len(cmd) > 1 else "").partition(":")
+            tree = self.commits.get(self._resolve(ref) or "", {})
+            if path in tree:
+                out = tree[path]
+            else:
+                code, err = 1, f"ambiguous or nonexistent object {cmd[1]!r}"
+        elif sub == "checkout":
+            ref = cmd[1]
+            path = (cmd[cmd.index("--") + 1] if "--" in cmd else
+                    (cmd[2] if len(cmd) > 2 else ""))
+            tree = self.commits.get(self._resolve(ref) or "", {})
+            targets = [p for p in tree
+                       if p == path or p.startswith(path + "/")]
+            if not targets:
+                code, err = 1, f"pathspec '{path}' did not match (fake model)"
+            for p in targets:
+                full = os.path.join(self.root, p)
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, "w") as f:
+                    f.write(tree[p])
+        elif sub == "clean":
+            paths = [a for a in cmd[1:] if not a.startswith("-") and a != "--"]
+            for p in self.worktree_files():
+                if p in self.index:
+                    continue
+                if any(p == s or p.startswith(s + "/") for s in paths):
+                    os.remove(os.path.join(self.root, p))
+        elif sub == "rm":
+            import shutil as _sh
+            paths = [a for a in cmd[1:] if not a.startswith("-") and a != "--"]
+            for p in sorted(self.index):
+                if not any(p == s or p.startswith(s + "/") for s in paths):
+                    continue
+                self.index.discard(p)
+                full = os.path.join(self.root, p)
+                if os.path.isdir(full):
+                    _sh.rmtree(full, ignore_errors=True)
+                elif os.path.exists(full):
+                    os.remove(full)
+        elif sub == "status":
+            head_tree = self.commits.get(self._resolve("HEAD") or "", {})
+            lines = []
+            for p in sorted(self.index):
+                full = os.path.join(self.root, p)
+                if not os.path.exists(full):
+                    lines.append(f" D {p}")
+                elif p not in head_tree or self._read(p) != head_tree[p]:
+                    lines.append(("A " if p not in head_tree else " M ") + p)
+            for p in self.worktree_files():
+                if p not in self.index:
+                    lines.append(f"?? {p}")
+            out = "\n".join(lines)
+            if out:
+                out += "\n"
+        else:
+            code, err = 129, (f"the fake git model does not cover `git "
+                               f"{sub}` — a test's git call bypassed the "
+                               "sandbox's fake model")
+        return subprocess.CompletedProcess(cmd, code, out, err)
+
+
+# root (realpath) → model: the sandboxes register the workspace their
+# fixture builds, so a git call routed to the shared mock resolves the
+# repository its cwd lives in
+_FAKE_REPOS = {}
+
+
+def _fake_git_exec(argv, **kw):
+    """The mock installed over the factory's single git entry point.
+    Routes the call to the fake model of the repository the call's cwd
+    lives in; a call whose cwd carries no model is a test wiring bug — it
+    fails loudly rather than silently spawning the real git binary."""
+    root = os.path.realpath(kw.get("cwd") or os.getcwd())
+    repo = _FAKE_REPOS.get(root)
+    if repo is None:
+        return subprocess.CompletedProcess(
+            list(argv), 128, "",
+            f"fake git: no repository model for cwd {root!r} — a git "
+            "call bypassed the sandbox's fake model")
+    return repo.exec(list(argv), **kw)
+
+
+def _patch_git_exec():
+    """Point the factory's single git entry point at the in-test fake on
+    every loaded module that carries one: the shared module under
+    whatever name the sandbox's import created (plus the spec-loaded
+    copies), and the guard-check entry script's self-contained fallback
+    copy. Returns the restore function the sandbox's cleanup calls.
+    A call through an unpatched path would spawn the real git binary —
+    the loud failure in _fake_git_exec is the backstop for the module-
+    object paths the sandbox's own code takes."""
+    patched = []
+    for m in list(sys.modules.values()):
+        f = (getattr(m, "__file__", "") or "").replace(os.sep, "/")
+        # the shared module (under whatever name a sandbox's import created
+        # or a spec load used) and the guard-check entry script — both the
+        # repo's and a tree copy the sandbox lays out outside .github/
+        if not (f.endswith(".github/scripts/common.py")
+                or f.endswith("guard-check/guard-check.py")):
+            continue
+        if not hasattr(m, "git_exec"):
+            continue
+        patched.append((m, m.git_exec))
+        m.git_exec = _fake_git_exec
+
+    def restore():
+        for m, orig in patched:
+            m.git_exec = orig
+    return restore
+
+
+def _write_baseline_snapshot(fake, rt):
+    """Mirror the model's baseline (HEAD) tree into the state dir as
+    cw/baseline-tree/ — the fixture half of the fake `pi`'s revert: the
+    fake restores the snapshot onto the named paths without a git child.
+    The guard's repair commit runs after the revert, so the snapshot is
+    the baseline's content, not the repaired tree's."""
+    snap = os.path.join(rt, "cw", "baseline-tree")
+    tree = fake.commits.get(fake.heads[-1] or "", {})
+    for rel, content in tree.items():
+        p = os.path.join(snap, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
 
 
 def test_extract_stage_uses_file_argument_context():
@@ -582,7 +894,6 @@ def test_planner_instructions_carry_the_changed_requirement_delta():
     plain paths, read on demand — and the whole existing oracle is not
     injected into the planner."""
     import shutil
-    import subprocess
     spec = importlib.util.spec_from_file_location(
         "cw_plan_stage",
         os.path.join(ROOT, ".github", "actions", "plan-stage", "stage.py"))
@@ -612,22 +923,17 @@ def test_planner_instructions_carry_the_changed_requirement_delta():
         f.write("# 1. Introduction\n\nThe project.\n")
     with open(os.path.join(ws, "README.md"), "w") as f:
         f.write("# code-weaver\n\nThe factory.\n")
-    git_env = {**os.environ,
-               "GIT_AUTHOR_NAME": "cw-test", "GIT_AUTHOR_EMAIL": "cw@test",
-               "GIT_COMMITTER_NAME": "cw-test", "GIT_COMMITTER_EMAIL": "cw@test",
-               "HOME": ws}
-
-    def git(*a, check=True):
-        r = subprocess.run(["git", *a], cwd=ws, env=git_env,
-                           capture_output=True, text=True)
-        if check and r.returncode != 0:
-            raise AssertionError(f"git {a} failed: {r.stderr.strip()[:200]}")
-        return r
-
-    git("init", "-q")
-    git("add", "-A")
-    git("commit", "-qm", "baseline")
-    base_sha = git("rev-parse", "HEAD").stdout.strip()
+    # the sandbox's fake model stands in for the git binary: the factory's
+    # single git entry point is mocked, so no git process is spawned
+    fake = _FakeRepo(ws)
+    ws_key = os.path.realpath(ws)
+    _FAKE_REPOS[ws_key] = fake
+    restore_git = _patch_git_exec()
+    fake.exec(["init", "-q"])
+    fake.exec(["add", "-A"])
+    fake.exec(["commit", "-qm", "baseline"])
+    base_sha = fake.exec(["rev-parse", "HEAD"]).stdout.strip()
+    assert base_sha, "the sandbox's fake baseline commit failed"
     # the baseline stage's state: the baseline ref recorded for the run
     os.makedirs(os.path.join(rt, "cw"), exist_ok=True)
     with open(os.path.join(rt, "cw", "baseline.sha"), "w") as f:
@@ -636,8 +942,8 @@ def test_planner_instructions_carry_the_changed_requirement_delta():
     with open(os.path.join(ws, "requirements", "guard-rail.feature"), "a") as f:
         f.write("  Scenario: The changed scenario\n"
                 "    Given x\n    When y\n    Then z\n")
-    git("add", "-A")
-    git("commit", "-qm", "stage 4 requirements-extraction: generated")
+    fake.exec(["add", "-A"])
+    fake.exec(["commit", "-qm", "stage 4 requirements-extraction: generated"])
     keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
              "DOC_DIR", "PLAN_DIR")
     saved = {k: os.environ.get(k) for k in keys}
@@ -690,20 +996,22 @@ def test_planner_instructions_carry_the_changed_requirement_delta():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        restore_git()
+        _FAKE_REPOS.pop(ws_key, None)
 
 
 def test_plan_prompt_clause_scopes_brownfield_tasks_to_test_references():
-    """(plan "A brown field plan scopes its tasks to the test references"
+    """(plan "A brown field plan scopes its steps to the test references"
     — new @brownfield scenario; reference
-    `requirements/plan.feature::A brown field plan scopes its tasks to the
+    `requirements/plan.feature::A brown field plan scopes its steps to the
     test references`) the plan prompt template carries the brownfield
     clause: where the run's delta is the brownfield shape — every
     requirement file that changed against the baseline is *new* (the
     extraction created the requirements directory, so the baseline
     knows none of them) — the requirements were extracted from the
     project's existing code, and the plan (a) names the extracted
-    scenarios it must cover and (b) scopes its tasks to adjusting the
-    tests to reference those scenarios, with no plan task that
+    scenarios it must cover and (b) scopes its steps to adjusting the
+    tests to reference those scenarios, with no plan step that
     implements code; where the delta is not that shape (a changed
     existing file among the delta, as on the standing runs) the clause
     does not apply — the standing instructions are exactly as they are
@@ -724,12 +1032,12 @@ def test_plan_prompt_clause_scopes_brownfield_tasks_to_test_references():
     # (a) the plan names the extracted scenarios it must cover
     assert ("(a) the plan names the extracted scenarios it\n"
             "must cover") in template
-    # (b) the plan's tasks are scoped to adjusting the tests to
+    # (b) the plan's steps are scoped to adjusting the tests to
     # reference those scenarios
-    assert ("(b) the plan's tasks are scoped to adjusting the tests\n"
+    assert ("(b) the plan's steps are scoped to adjusting the tests\n"
             "to reference those scenarios") in template
-    # no plan task implements code
-    assert "no plan task implements code" in template
+    # no plan step implements code
+    assert "no plan step implements code" in template
     # where the delta is not that shape, the clause does not apply —
     # the standing instructions govern
     assert "Where the\ndelta is not that shape" in template
@@ -737,9 +1045,9 @@ def test_plan_prompt_clause_scopes_brownfield_tasks_to_test_references():
 
 
 def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
-    """(plan "A brown field plan scopes its tasks to the test references"
+    """(plan "A brown field plan scopes its steps to the test references"
     — new @brownfield scenario; reference
-    `requirements/plan.feature::A brown field plan scopes its tasks to the
+    `requirements/plan.feature::A brown field plan scopes its steps to the
     test references`) the plan stage's prompt assembly attaches the
     brownfield scope to the instructions it generates exactly when the
     run's delta is the brownfield shape — every changed requirement
@@ -747,15 +1055,14 @@ def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
     requirements directory, so the baseline knows none of them): the
     generated target carries the brownfield scope — the requirements
     were extracted from the project's existing code, the plan names the
-    extracted scenarios it must cover, its tasks are scoped to
-    adjusting the tests to reference those scenarios, no plan task
+    extracted scenarios it must cover, its steps are scoped to
+    adjusting the tests to reference those scenarios, no plan step
     implements code — alongside the delta section. Where a changed
     existing file is among the delta (the standing runs' shape), the
     scope is not attached — the standing delta section stands alone,
     exactly as the standing test pins it (its sandbox delta changes an
     existing file and stays green unedited)."""
     import shutil
-    import subprocess
     spec = importlib.util.spec_from_file_location(
         "cw_plan_brownfield",
         os.path.join(ROOT, ".github", "actions", "plan-stage", "stage.py"))
@@ -776,25 +1083,19 @@ def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
     os.makedirs(os.path.join(ws, "tests"))
     with open(os.path.join(ws, "tests", "test_app.py"), "w") as f:
         f.write("def test_it():\n    assert True\n")
-    git_env = {**os.environ,
-               "GIT_AUTHOR_NAME": "cw-test", "GIT_AUTHOR_EMAIL": "cw@test",
-               "GIT_COMMITTER_NAME": "cw-test", "GIT_COMMITTER_EMAIL": "cw@test",
-               "HOME": ws}
-
-    def git(*a, check=True):
-        r = subprocess.run(["git", *a], cwd=ws, env=git_env,
-                           capture_output=True, text=True)
-        if check and r.returncode != 0:
-            raise AssertionError(f"git {a} failed: {r.stderr.strip()[:200]}")
-        return r
-
-    git("init", "-q")
-    git("add", "-A")
-    git("commit", "-qm", "baseline")
+    # the sandbox's fake model stands in for the git binary: the factory's
+    # single git entry point is mocked, so no git process is spawned
+    fake = _FakeRepo(ws)
+    ws_key = os.path.realpath(ws)
+    _FAKE_REPOS[ws_key] = fake
+    restore_git = _patch_git_exec()
+    fake.exec(["init", "-q"])
+    fake.exec(["add", "-A"])
+    fake.exec(["commit", "-qm", "baseline"])
     # the baseline stage's state: the baseline ref recorded for the run
     os.makedirs(os.path.join(rt, "cw"), exist_ok=True)
     with open(os.path.join(rt, "cw", "baseline.sha"), "w") as f:
-        f.write(git("rev-parse", "HEAD").stdout.strip() + "\n")
+        f.write(fake.exec(["rev-parse", "HEAD"]).stdout.strip() + "\n")
     keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
              "DOC_DIR", "PLAN_DIR")
     saved = {k: os.environ.get(k) for k in keys}
@@ -823,8 +1124,9 @@ def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
             f.write("Feature: Safety\n"
                     "  Scenario: A second extracted scenario\n"
                     "    Given a\n    When b\n    Then c\n")
-        git("add", "-A")
-        git("commit", "-qm", "stage 4 requirements-extraction: generated")
+        fake.exec(["add", "-A"])
+        fake.exec(["commit", "-qm",
+                  "stage 4 requirements-extraction: generated"])
         assert mod.delta_is_brownfield() is True
         # the generated target: the brownfield scope alongside the
         # delta section
@@ -845,9 +1147,9 @@ def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
                 "existing code" in prompt), prompt
         assert ("the plan names the extracted scenarios it must cover"
                 in prompt), prompt
-        assert ("the plan's tasks are scoped to adjusting the tests to "
+        assert ("the plan's steps are scoped to adjusting the tests to "
                 "reference those scenarios" in prompt), prompt
-        assert "no plan task implements code" in prompt, prompt
+        assert "no plan step implements code" in prompt, prompt
         # the marker keys on the template's brownfield clause — the
         # instructions handed to pi (the template plus the target)
         # govern the plan through it
@@ -862,10 +1164,11 @@ def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
                   "a") as f:
             f.write("  Scenario: A standing change\n"
                     "    Given x\n    When y\n    Then z\n")
-        git("add", "-A")
-        git("commit", "-qm", "stage 4 requirements-extraction: generated")
+        fake.exec(["add", "-A"])
+        fake.exec(["commit", "-qm",
+                  "stage 4 requirements-extraction: generated"])
         with open(os.path.join(rt, "cw", "baseline.sha"), "w") as f:
-            f.write(git("rev-parse", "HEAD~1").stdout.strip() + "\n")
+            f.write(fake.exec(["rev-parse", "HEAD~1"]).stdout.strip() + "\n")
         assert mod.delta_is_brownfield() is False
         pf2 = mod.build_target("42", "plans")
         prompt2 = open(pf2, encoding="utf-8").read()
@@ -881,6 +1184,8 @@ def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
                 os.environ[k] = v
         shutil.rmtree(ws, ignore_errors=True)
         shutil.rmtree(rt, ignore_errors=True)
+        restore_git()
+        _FAKE_REPOS.pop(ws_key, None)
 
 
 def test_consumer_workflow_pins_owner_and_version_tag():
@@ -1296,11 +1601,14 @@ def test_pr_body_fallback_describes_the_issue():
     changed against the baseline (and only those), and carries no
     resolved-configuration dump."""
     import shutil
-    import subprocess
     import tempfile
     src = _pr_fallback_source()
     ws = tempfile.mkdtemp(prefix="cw-pr-ws-")
     rt = tempfile.mkdtemp(prefix="cw-pr-rt-")
+    # the step's diff block runs only where the workspace is a git
+    # checkout: the marker dir makes the sandbox carry that shape (the
+    # fake model needs no .git of its own)
+    os.makedirs(os.path.join(ws, ".git"), exist_ok=True)
     trig = os.path.join(rt, "cw", "state", "trigger")
     os.makedirs(trig)
     os.makedirs(os.path.join(ws, "requirements"))
@@ -1308,31 +1616,26 @@ def test_pr_body_fallback_describes_the_issue():
         f.write("Feature: Topic\n"
                 "  Scenario: A standing scenario\n"
                 "    Given a\n    When b\n    Then c\n")
-    git_env = {**os.environ,
-               "GIT_AUTHOR_NAME": "cw-test", "GIT_AUTHOR_EMAIL": "cw@test",
-               "GIT_COMMITTER_NAME": "cw-test", "GIT_COMMITTER_EMAIL": "cw@test",
-               "HOME": ws}
-
-    def git(*a, check=True):
-        r = subprocess.run(["git", *a], cwd=ws, env=git_env,
-                           capture_output=True, text=True)
-        if check and r.returncode != 0:
-            raise AssertionError(f"git {a} failed: {r.stderr.strip()[:200]}")
-        return r
-
-    git("init", "-q")
-    git("add", "-A")
-    git("commit", "-qm", "baseline")
-    base_sha = git("rev-parse", "HEAD").stdout.strip()
+    # the sandbox's fake model stands in for the git binary: the step's
+    # own single git entry point is injected with it (a test never spawns
+    # the real git binary)
+    fake = _FakeRepo(ws)
+    ws_key = os.path.realpath(ws)
+    _FAKE_REPOS[ws_key] = fake
+    restore_git = _patch_git_exec()
+    fake.exec(["init", "-q"])
+    fake.exec(["add", "-A"])
+    fake.exec(["commit", "-qm", "baseline"])
+    base_sha = fake.exec(["rev-parse", "HEAD"]).stdout.strip()
     # the run's delta: the issue's plan + a new scenario in the topic file
     os.makedirs(os.path.join(ws, "plans"))
     with open(os.path.join(ws, "plans", "42.md"), "w") as f:
-        f.write("# Issue #42 — the test plan\n\n**Tasks**\n\n- [x] build the thing\n")
+        f.write("# Issue #42 — the test plan\n\n**Steps**\n\n- [x] build the thing\n")
     with open(os.path.join(ws, "requirements", "topic.feature"), "a") as f:
         f.write("  Scenario: The changed scenario\n"
                 "    Given x\n    When y\n    Then z\n")
-    git("add", "-A")
-    git("commit", "-qm", "delta")
+    fake.exec(["add", "-A"])
+    fake.exec(["commit", "-qm", "delta"])
     with open(os.path.join(trig, "issue-number.txt"), "w") as f:
         f.write("42\n")
     with open(os.path.join(trig, "issue-title.txt"), "w") as f:
@@ -1361,7 +1664,8 @@ def test_pr_body_fallback_describes_the_issue():
     sys.argv = ["python3", out]
     try:
         exec(compile(src, "<factory.yml pr fallback step>", "exec"),
-             {"__name__": "cw_pr_fallback_test"})
+             {"__name__": "cw_pr_fallback_test",
+              "git_exec": _fake_git_exec})
         body = open(out, encoding="utf-8").read()
     finally:
         sys.argv, sys.excepthook = argv_saved, hook
@@ -1372,6 +1676,8 @@ def test_pr_body_fallback_describes_the_issue():
                 os.environ[k] = v
         shutil.rmtree(ws, ignore_errors=True)
         shutil.rmtree(rt, ignore_errors=True)
+        restore_git()
+        _FAKE_REPOS.pop(ws_key, None)
     # names the issue from the trigger's state files (the env was empty)
     assert "#42" in body and "The test issue" in body, body
     # embeds the plan — what the run set out to build
@@ -1471,7 +1777,8 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
                        ledger=None, model="Ornith-1.5-35B-A3B",
                        view_body="## Progress so far",
                        shared_module="fallback",
-                       models_config=None, pi_models_env=None):
+                       models_config=None, pi_models_env=None,
+                       stage_summary=None):
     """Exec the report action's inline python in a sandbox: a plain temp
     workspace (no git repo, no doc dir, no PLAN.md — the arc42-activity
     path has nothing to touch), a temp RUNNER_TEMP carrying the merged
@@ -1499,7 +1806,10 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
     module's definitions bind the body's five plumbing names (the import
     path task 1's test pins). The `common` module is popped from
     sys.modules either way: a module another test module cached would
-    satisfy the import in place of the tree."""
+    satisfy the import in place of the tree. `stage_summary` overrides the
+    stage-summary fixture the sandbox writes (the merged summary lines the
+    report stage renders its stage-outcome table from); the default is the
+    standing one-line form (the extract stage's completion line)."""
     import shutil
     import tempfile
     ws = tempfile.mkdtemp(prefix="cw-report-ws-")
@@ -1516,7 +1826,8 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
                 f"- LLM model (which configured model): `{model}`\n"
                 f"- caps: max-loops=`5` (0 = no cap)\n")
     with open(os.path.join(cw, "stage-summary.txt"), "w", encoding="utf-8") as f:
-        f.write("stage 4 extract: clean — stage complete\n")
+        f.write(stage_summary if stage_summary is not None
+                else "stage 4 extract: clean — stage complete\n")
     if models_config is not None:
         # the run's model configuration as the repo-file provider — the
         # .pi/agent/models.json the report job resolves in the workspace
@@ -2083,6 +2394,68 @@ def test_failed_run_leaves_the_source_issue_open():
     assert not closed, "a failed run must not close the source issue"
 
 
+def test_report_renders_stage_outcomes_per_step_and_stage_complete():
+    """(reporting "The final status report is the PR" — the two And lines
+    this run's delta adds to the scenario: a stage that will re-run is
+    reported per step — "step <k>/<n> done" for each of its finished
+    steps — and a stage that is done is reported "stage complete"; the
+    scenario's standing lines — run status, source issue, every stage
+    outcome, no report file in the repo — stand; reference
+    `requirements/reporting.feature::The final status report is the PR`)
+    the report stage's stage-outcome assembly renders from the recorded
+    stage-summary lines (the state dir the report job downloads — state
+    rides artifacts, never the repo tree): the implement stage records its
+    per-step state on that channel — one "stage 8 implementation: step
+    <k>/<n> done" line per step it finished, a "stage complete" line only
+    when its plan is fully tracked. A stage that will re-run (per-step
+    lines without a completion line) is reported per step on both report
+    surfaces the report completes — the PR body's stage-outcomes table and,
+    in the self-contained form, the issue comment — "step <k>/<n> done"
+    for each of its finished steps; a stage that is done (its summary
+    carries a completion line) is reported "stage complete", its per-step
+    lines staying out of the outcome."""
+    # the implement stage will re-run: its per-step lines are recorded and
+    # no completion line (its plan left steps open, so the per-step loop
+    # never exited fully tracked) — while the extract stage's summary
+    # carries its completion line (a stage that is done)
+    pr_body, comment, _closed = _run_report_action(stage_summary=(
+        "stage 4 extract: clean — stage complete\n"
+        "stage 8 implementation: step 1/3 done\n"
+        "stage 8 implementation: step 2/3 done\n"))
+    for surface in (pr_body, comment):
+        assert "### Stage outcomes" in surface, surface
+        # a stage that is done: reported "stage complete"
+        assert "stage 4 extract: clean — stage complete" in surface, \
+            f"a done stage is reported 'stage complete': {surface!r}"
+        # a stage that will re-run: reported per step — "step <k>/<n>
+        # done" for each of its finished steps
+        assert "stage 8 implementation: step 1/3 done" in surface, surface
+        assert "stage 8 implementation: step 2/3 done" in surface, surface
+        # …and that stage carries no completion line of its own
+        assert "stage 8 implementation: stage complete" not in surface, \
+            (f"a stage that will re-run carries no completion line: "
+             f"{surface!r}")
+    # …and the complement: the implement stage fully tracked its plan —
+    # its summary carries the per-step lines AND its completion line — so
+    # it is a stage that is done, reported "stage complete": the
+    # per-step lines stay out of the outcome
+    pr_body, comment, _closed = _run_report_action(stage_summary=(
+        "stage 4 extract: clean — stage complete\n"
+        "stage 8 implementation: step 1/3 done\n"
+        "stage 8 implementation: step 2/3 done\n"
+        "stage 8 implementation: step 3/3 done\n"
+        "stage 8 implementation: stage complete\n"))
+    for surface in (pr_body, comment):
+        assert "### Stage outcomes" in surface, surface
+        assert "stage 8 implementation: stage complete" in surface, \
+            f"a stage that is done is reported 'stage complete': {surface!r}"
+        for k in (1, 2, 3):
+            assert f"step {k}/3 done" not in surface, \
+                (f"a done stage's per-step lines stay out of the outcome: "
+                 f"{surface!r}")
+        assert "stage 4 extract: clean — stage complete" in surface, surface
+
+
 def test_validator_skips_when_parser_port_absent():
     """(test-and-review "the suite runs on an interpreter without
     pytest"; reference
@@ -2402,10 +2775,13 @@ def test_implement_guard_protects_requirements_and_other_plans():
 # "revert-second" — the second call only; "noop" — never), and
 # closes with a usage-carrying JSONL event stream (a message_end
 # with input/output usage, then agent_settled) the way a real
-# `pi --mode json` call's stdout reads.
+# `pi --mode json` call's stdout reads. The revert restores the
+# fixture's baseline-tree snapshot onto the named paths — the
+# revert's file mechanics without a git child (the fake `pi` is a
+# subprocess, and a subprocess cannot see the in-process mock).
 _FAKE_PI = (
         "#!" + sys.executable + "\n"
-        "import json, os, subprocess, sys\n"
+        "import json, os, re, shutil, sys\n"
         "ins = sys.argv[-1]\n"
         "sd = os.path.join(os.environ['RUNNER_TEMP'], 'cw')\n"
         "os.makedirs(sd, exist_ok=True)\n"
@@ -2418,31 +2794,24 @@ _FAKE_PI = (
         "    f.write(str(n))\n"
         "mode = os.environ.get('FAKE_PI_MODE', 'noop')\n"
         "if mode == 'revert' or (mode == 'revert-second' and n >= 2):\n"
-        "    import re\n"
         "    ws = os.environ['GITHUB_WORKSPACE']\n"
-        "    m = re.search(r'baseline `([^`]+)`', ins)\n"
-        "    baseline = m.group(1) if m else 'HEAD'\n"
+        "    snap_root = os.path.join(sd, 'baseline-tree')\n"
         "    for fm in re.finditer(r'  - (\\S+)', ins):\n"
         "        p = fm.group(1)\n"
         "        full = os.path.join(ws, p)\n"
-        "        known = subprocess.run(\n"
-        "            ['git', 'cat-file', '-e', baseline + ':' + p],\n"
-        "            cwd=ws, capture_output=True).returncode == 0\n"
-        "        if known:\n"
-        "            subprocess.run(['git', 'checkout', baseline, '--', p],\n"
-        "                           cwd=ws, check=True)\n"
-        "        elif os.path.isdir(full):\n"
-        "            subprocess.run(['git', 'clean', '-fdq', '--', p],\n"
-        "                           cwd=ws)\n"
-        "        elif os.path.exists(full):\n"
-        "            tracked = subprocess.run(\n"
-        "                ['git', 'ls-files', '--', p],\n"
-        "                cwd=ws, capture_output=True).stdout.strip()\n"
-        "            if tracked:\n"
-        "                subprocess.run(['git', 'rm', '-f', '--', p],\n"
-        "                                cwd=ws, check=True)\n"
+        "        snap = os.path.join(snap_root, p)\n"
+        "        if os.path.exists(snap):\n"
+        "            if os.path.isdir(snap):\n"
+        "                shutil.rmtree(full, ignore_errors=True)\n"
+        "                shutil.copytree(snap, full)\n"
         "            else:\n"
-        "                os.remove(full)\n"
+        "                os.makedirs(os.path.dirname(full) or '.',\n"
+        "                            exist_ok=True)\n"
+        "                shutil.copyfile(snap, full)\n"
+        "        elif os.path.isdir(full):\n"
+        "            shutil.rmtree(full)\n"
+        "        elif os.path.exists(full):\n"
+        "            os.remove(full)\n"
         "print(json.dumps({'type': 'message_end', 'message': {\n"
         "    'role': 'assistant',\n"
         "    'content': 'the named files are reverted',\n"
@@ -2455,24 +2824,26 @@ def _guard_repair_sandbox(allow, deny, mode, max_loops,
                           stage="stage 6 planning", template="plan",
                           leak=True):
     """A sandbox that exercises the shared guard's repair loop end to end:
-    a temp git repo with a committed baseline (a requirements feature file,
-    the issue's plan file, a src file), the scenario's leak (an off-limits
-    edit in the requirements dir) applied to the working tree on top of the
+    a temp workspace the sandbox's fake model tracks as a git repo (a
+    committed baseline — a requirements feature file, the issue's plan
+    file, a src file), the scenario's leak (an off-limits edit in the
+    requirements dir) applied to the working tree on top of the
     stage's own allowed work, and a fake `pi` on
     PATH that records each call's instructions to the state dir and
     performs the revert they name when its mode says so ("revert" — every
     call; "revert-second" — the second call only; "noop" — never). The
     canonical guard (common.guard, imported in-process) then runs its real
-    detection + repair loop against a real baseline and a real working tree
-    with no model in the middle. Returns a namespace: repo (the repo
-    dir), rt (the state-dir root), baseline (the baseline sha), mod (the
-    common module), result (the guard's GuardResult — None when the guard
-    exited the stage instead), exit_code (the SystemExit the guard
-    raised), calls (the recorded repair-call instructions), fail_reason
-    (the failure report the guard wrote to the state dir, if any) and
-    cleanup (restore the env and remove the temp dirs)."""
+    detection + repair loop against the fake baseline and working tree
+    with no model in the middle and no git process spawned (the guard's
+    git traffic rides the mocked single entry point). Returns a namespace:
+    repo (the repo dir), rt (the state-dir root), baseline (the baseline
+    sha), mod (the common module), result (the guard's GuardResult — None
+    when the guard exited the stage instead), exit_code (the SystemExit
+    the guard raised), calls (the recorded repair-call instructions),
+    fail_reason (the failure report the guard wrote to the state dir, if
+    any) and cleanup (restore the env, the git-exec mock and remove the
+    temp dirs)."""
     import shutil
-    import subprocess
     import tempfile
     repo = tempfile.mkdtemp(prefix="cw-guard-repo-")
     rt = tempfile.mkdtemp(prefix="cw-guard-rt-")
@@ -2484,26 +2855,26 @@ def _guard_repair_sandbox(allow, deny, mode, max_loops,
         f.write("Feature: baseline\n  Scenario: the baseline scenario\n"
                 "    Given the baseline tree\n")
     with open(os.path.join(repo, "plans", "69.md"), "w") as f:
-        f.write("# Issue 69\n- [ ] a task\n")
+        f.write("# Issue 69\n- [ ] a step\n")
     with open(os.path.join(repo, "src", "app.py"), "w") as f:
         f.write("print('baseline')\n")
 
-    def g(*a):
-        return subprocess.run(["git", *a], cwd=repo, capture_output=True,
-                              text=True)
-    g("init", "-q")
-    g("config", "user.email", "guard@sandbox")
-    g("config", "user.name", "guard sandbox")
-    g("add", "-A")
-    g("commit", "-q", "-m", "baseline")
-    baseline = g("rev-parse", "HEAD").stdout.strip()
-    assert baseline, "the sandbox baseline commit failed"
+    ws_fake = _FakeRepo(repo)
+    repo_key = os.path.realpath(repo)
+    _FAKE_REPOS[repo_key] = ws_fake
+    ws_fake.exec(["init", "-q"])
+    ws_fake.exec(["add", "-A"])
+    ws_fake.exec(["commit", "-q", "-m", "baseline"])
+    baseline = ws_fake.exec(["rev-parse", "HEAD"]).stdout.strip()
+    assert baseline, "the sandbox's fake baseline commit failed"
+    # the fake `pi`'s revert restores this snapshot of the baseline tree
+    _write_baseline_snapshot(ws_fake, rt)
 
     # the stage's own work (an allowed change to the plan file) plus — when
     # the scenario asks for the leak — an off-limits edit in the
     # requirements dir
     with open(os.path.join(repo, "plans", "69.md"), "a") as f:
-        f.write("- [x] a task\n")
+        f.write("- [x] a step\n")
     if leak:
         with open(os.path.join(repo, "requirements", "guard-rail.feature"),
                   "a") as f:
@@ -2518,10 +2889,6 @@ def _guard_repair_sandbox(allow, deny, mode, max_loops,
     keys = ("GITHUB_WORKSPACE", "RUNNER_TEMP", "LLM_MODEL", "MAX_LOOPS",
             "PATH", "FAKE_PI_MODE")
     saved = {k: os.environ.get(k) for k in keys}
-    saved_gitcfg = {k: v for k, v in os.environ.items()
-                    if k.startswith("GIT_CONFIG_")}
-    for k in saved_gitcfg:
-        os.environ.pop(k)
     os.environ.update({
         "GITHUB_WORKSPACE": repo,
         "RUNNER_TEMP": rt,
@@ -2537,6 +2904,9 @@ def _guard_repair_sandbox(allow, deny, mode, max_loops,
     mod = importlib.util.module_from_spec(spec)
     sys.modules["cw_common_guard_sandbox"] = mod
     spec.loader.exec_module(mod)
+    # the guard's git traffic (the detection's diff + ls-files, the repair
+    # commit) rides the mocked single entry point — the fake model
+    restore_git = _patch_git_exec()
 
     ns = {"repo": repo, "rt": rt, "fake": fake, "baseline": baseline,
           "mod": mod, "result": None, "exit_code": None, "calls": "",
@@ -2563,8 +2933,9 @@ def _guard_repair_sandbox(allow, deny, mode, max_loops,
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        for k in saved_gitcfg:
-            os.environ[k] = saved_gitcfg[k]
+        restore_git()
+        sys.modules.pop("cw_common_guard_sandbox", None)
+        _FAKE_REPOS.pop(repo_key, None)
         for d in (repo, rt, fake):
             shutil.rmtree(d, ignore_errors=True)
     ns["cleanup"] = cleanup
@@ -2631,7 +3002,7 @@ def test_guard_repairs_a_violation_with_a_pi_call():
         assert "a leak" not in feat, \
             "the off-limits change is reverted in place"
         plan = open(os.path.join(ns["repo"], "plans", "69.md")).read()
-        assert "- [x] a task" in plan, \
+        assert "- [x] a step" in plan, \
             "the allowed changes stay intact"
         # the finished repair call appends its usage to the run's ledger
         # (the new call kind rides the documented pi-call machinery)
@@ -2675,18 +3046,22 @@ def test_guard_repairs_a_violation_with_a_pi_call():
 
 def _guard_fallback_sandbox(allow, deny, mode, max_loops,
                             stage="stage 6 planning", template="plan"):
-    """The fallback-form twin of _guard_repair_sandbox: the same temp git
-    repo (a committed baseline, the stage's own allowed work, the
-    off-limits leak) and the same fake `pi` on PATH, but the guard runs as
-    the SELF-CONTAINED fallback — a copy of guard-check.py laid out where
-    the sibling scripts/ dir is absent (the degenerate sparse checkout the
-    fallback exists for), run as a subprocess the way run_guard runs the
-    canonical external script. Returns a namespace: repo (the repo dir),
-    rt (the state-dir root), baseline, returncode (the guard CLI's exit),
-    out (its captured stdout — the narrative run_guard relays), err, and
-    cleanup (restore the env and remove the temp dirs)."""
+    """The fallback-form twin of _guard_repair_sandbox: the same temp
+    workspace (the sandbox's fake model tracks it as a git repo — a
+    committed baseline, the stage's own allowed work, the off-limits
+    leak) and the same fake `pi` on PATH, but the guard runs as the
+    SELF-CONTAINED fallback — the guard-check.py entry script laid out
+    where the sibling scripts/ dir is absent (the degenerate sparse
+    checkout the fallback exists for), driven in-process against the
+    mocked single git entry point: its _load() finds no canonical
+    common.py and defines the inline fallback, and the process boundary
+    a subprocess form would carry is exactly what the mock exists to
+    remove — a test never spawns the real git binary. Returns a
+    namespace: repo (the repo dir), rt (the state-dir root), baseline,
+    returncode (the guard CLI's exit), out (its captured stdout — the
+    narrative run_guard relays), err, and cleanup (restore the env, the
+    git-exec mock and remove the temp dirs)."""
     import shutil
-    import subprocess
     import tempfile
     repo = tempfile.mkdtemp(prefix="cw-guardfb-repo-")
     rt = tempfile.mkdtemp(prefix="cw-guardfb-rt-")
@@ -2700,25 +3075,25 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
         f.write("Feature: baseline\n  Scenario: the baseline scenario\n"
                 "    Given the baseline tree\n")
     with open(os.path.join(repo, "plans", "69.md"), "w") as f:
-        f.write("# Issue 69\n- [ ] a task\n")
+        f.write("# Issue 69\n- [ ] a step\n")
     with open(os.path.join(repo, "src", "app.py"), "w") as f:
         f.write("print('baseline')\n")
 
-    def g(*a):
-        return subprocess.run(["git", *a], cwd=repo, capture_output=True,
-                              text=True)
-    g("init", "-q")
-    g("config", "user.email", "guard@sandbox")
-    g("config", "user.name", "guard sandbox")
-    g("add", "-A")
-    g("commit", "-q", "-m", "baseline")
-    baseline = g("rev-parse", "HEAD").stdout.strip()
-    assert baseline, "the sandbox baseline commit failed"
+    ws_fake = _FakeRepo(repo)
+    repo_key = os.path.realpath(repo)
+    _FAKE_REPOS[repo_key] = ws_fake
+    ws_fake.exec(["init", "-q"])
+    ws_fake.exec(["add", "-A"])
+    ws_fake.exec(["commit", "-q", "-m", "baseline"])
+    baseline = ws_fake.exec(["rev-parse", "HEAD"]).stdout.strip()
+    assert baseline, "the sandbox's fake baseline commit failed"
+    # the fake `pi`'s revert restores this snapshot of the baseline tree
+    _write_baseline_snapshot(ws_fake, rt)
 
     # the stage's own work (an allowed change to the plan file) plus the
     # scenario's leak (an off-limits edit in the requirements dir)
     with open(os.path.join(repo, "plans", "69.md"), "a") as f:
-        f.write("- [x] a task\n")
+        f.write("- [x] a step\n")
     with open(os.path.join(repo, "requirements", "guard-rail.feature"),
               "a") as f:
         f.write("  Scenario: a leak\n"
@@ -2740,10 +3115,6 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
     keys = ("GITHUB_WORKSPACE", "RUNNER_TEMP", "LLM_MODEL", "MAX_LOOPS",
             "PATH", "FAKE_PI_MODE")
     saved = {k: os.environ.get(k) for k in keys}
-    saved_gitcfg = {k: v for k, v in os.environ.items()
-                    if k.startswith("GIT_CONFIG_")}
-    for k in saved_gitcfg:
-        os.environ.pop(k)
     os.environ.update({
         "GITHUB_WORKSPACE": repo,
         "RUNNER_TEMP": rt,
@@ -2753,16 +3124,35 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
         "FAKE_PI_MODE": mode,
     })
 
-    args = [sys.executable, os.path.join(tree, "guard-check",
-                                         "guard-check.py"), baseline,
-            *allow]
+    # the entry script runs in-process against the mocked single git entry
+    # point: the tree copy has no sibling scripts dir, so its _load() takes
+    # the fallback branch — the code path a `python3 guard-check.py`
+    # subprocess would run, minus the process boundary the mock removes
+    spec = importlib.util.spec_from_file_location(
+        "cw_guardcheck_fallback",
+        os.path.join(tree, "guard-check", "guard-check.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_guardcheck_fallback"] = mod
+    spec.loader.exec_module(mod)
+    restore_git = _patch_git_exec()
+    argv_saved = sys.argv
+    sys.argv = [os.path.join(tree, "guard-check", "guard-check.py"),
+                baseline, *allow]
     if deny:
-        args += ["!", *deny]
-    r = subprocess.run(args, cwd=repo, capture_output=True, text=True)
-
-    ns = {"repo": repo, "rt": rt, "fake": fake, "tree": tree,
-          "baseline": baseline, "returncode": r.returncode,
-          "out": r.stdout, "err": r.stderr}
+        sys.argv += ["!", *deny]
+    exit_code = None
+    try:
+        mod._load()()
+    except SystemExit as e:
+        exit_code = e.code if isinstance(e.code, int) else (
+            0 if e.code is None else 1)
+    finally:
+        sys.argv = argv_saved
+    ns = {"repo": repo, "rt": rt, "fake": fake, "ws_fake": ws_fake,
+          "tree": tree,
+          "baseline": baseline,
+          "returncode": exit_code if exit_code is not None else 0,
+          "out": "", "err": ""}
 
     def cleanup():
         for k, v in saved.items():
@@ -2770,8 +3160,9 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        for k in saved_gitcfg:
-            os.environ[k] = saved_gitcfg[k]
+        restore_git()
+        sys.modules.pop("cw_guardcheck_fallback", None)
+        _FAKE_REPOS.pop(repo_key, None)
         for d in (repo, rt, fake, tree):
             shutil.rmtree(d, ignore_errors=True)
     ns["cleanup"] = cleanup
@@ -2812,13 +3203,11 @@ def test_guard_fallback_matches_the_canonical_repair():
         assert "a leak" not in feat, \
             "the off-limits change is reverted in place"
         plan = open(os.path.join(ns["repo"], "plans", "69.md")).read()
-        assert "- [x] a task" in plan, \
+        assert "- [x] a step" in plan, \
             "the allowed changes stay intact"
 
         def show(ref, path):
-            r = subprocess.run(["git", "show", f"{ref}:{path}"],
-                               cwd=ns["repo"], capture_output=True,
-                               text=True)
+            r = ns["ws_fake"].exec(["show", f"{ref}:{path}"])
             return r.stdout if r.returncode == 0 else None
 
         # the reverts are committed to the branch — the off-limits file
@@ -2828,7 +3217,7 @@ def test_guard_fallback_matches_the_canonical_repair():
         assert show("HEAD", "requirements/guard-rail.feature") == \
             show(ns["baseline"], "requirements/guard-rail.feature"), \
             "the cleared repair's reverts are committed to the branch"
-        assert "- [x] a task" in (show("HEAD", "plans/69.md") or ""), \
+        assert "- [x] a step" in (show("HEAD", "plans/69.md") or ""), \
             "the stage's own work is committed alongside the reverts"
         # the cleared-repair record names the files the call reverted
         record = open(os.path.join(ns["rt"], "cw",
@@ -2883,7 +3272,7 @@ def test_plan_stage_may_only_touch_its_own_plan_file():
         assert "a leak" not in feat, \
             "any other change is reverted"
         plan = open(os.path.join(ns["repo"], "plans", "69.md")).read()
-        assert "- [x] a task" in plan, \
+        assert "- [x] a step" in plan, \
             "the plan file (the stage's own work) stays intact"
         marker = os.path.join(ns["rt"], "cw", "stage-guard-repaired.txt")
         assert os.path.exists(marker), \
@@ -2972,7 +3361,7 @@ def test_implement_stage_has_no_plan_loop_back():
         assert ns["exit_code"] is None and ns["result"].ok, \
             "a requirements-dir violation at the implement check is repaired in place"
         plan = open(os.path.join(ns["repo"], "plans", "69.md")).read()
-        assert plan == "# Issue 69\n- [ ] a task\n- [x] a task\n", \
+        assert plan == "# Issue 69\n- [ ] a step\n- [x] a step\n", \
             "the plan file is not regenerated — no loop back to the plan stage"
         feat = open(os.path.join(ns["repo"], "requirements",
                                  "guard-rail.feature")).read()
@@ -2984,6 +3373,452 @@ def test_implement_stage_has_no_plan_loop_back():
             "the call keeps the stage's own work valid against the task its initial instructions gave it"
     finally:
         ns["cleanup"]()
+
+
+# The fake `pi` the implement-stage sandbox puts on PATH: it plays the
+# implementer's one-step-per-call contract — it works the plan file named
+# in the target instructions (the prompt's "open exactly this plan file"
+# fence, or the plan's `@`-argument where the call injects it), flipping
+# the plan's first open `- [ ]` step to `- [x]` (one step per invocation,
+# the template's work-one-open-step rule), and closes with a
+# usage-carrying JSONL event stream (a message_end with input/output
+# usage, then agent_settled) the way a real `pi --mode json` call's stdout
+# reads.
+_FAKE_PI_IMPLEMENT = (
+        "#!" + sys.executable + "\n"
+        "import json, os, re, sys\n"
+        "ws = os.environ['GITHUB_WORKSPACE']\n"
+        "sd = os.path.join(os.environ['RUNNER_TEMP'], 'cw')\n"
+        "os.makedirs(sd, exist_ok=True)\n"
+        "cf = os.path.join(sd, 'fake-pi-count.txt')\n"
+        "n = (int(open(cf).read().strip() or 0)\n"
+        "      if os.path.exists(cf) else 0) + 1\n"
+        "with open(cf, 'w') as f:\n"
+        "    f.write(str(n))\n"
+        "arg = sys.argv[-1]\n"
+        "plan_rel = arg[1:] if arg.startswith('@') else None\n"
+        "if plan_rel is None:\n"
+        "    m = re.search(r'```\\n\\s*(plans/[\\w.-]+\\.md)\\n\\s*```', arg)\n"
+        "    if m:\n"
+        "        plan_rel = m.group(1)\n"
+        "if plan_rel is not None:\n"
+        "    plan = os.path.join(ws, plan_rel)\n"
+        "    if os.path.isfile(plan):\n"
+        "        lines = open(plan, encoding='utf-8').read().splitlines()\n"
+        "        for i, l in enumerate(lines):\n"
+        "            if re.match(r'^\\s*-\\s*\\[\\s*\\]\\s*', l):\n"
+        "                lines[i] = l.replace('- [ ]', '- [x]', 1)\n"
+        "                break\n"
+        "        open(plan, 'w', encoding='utf-8').write('\\n'.join(lines) + '\\n')\n"
+        "print(json.dumps({'type': 'message_end', 'message': {\n"
+        "    'role': 'assistant',\n"
+        "    'content': 'one open plan step implemented and marked done',\n"
+        "    'usage': {'input': 5, 'output': 3}}}))\n"
+        "print(json.dumps({'type': 'agent_settled'}))\n"
+)
+
+
+def _implement_stage_sandbox(plan_text):
+    """Run the implement stage against a sandboxed plan file: a temp
+    workspace (GITHUB_WORKSPACE) the sandbox's fake model tracks as a git
+    repo, whose plan file holds the given checklist, a
+    temp RUNNER_TEMP state dir (the trigger's issue-number state file, the
+    baseline's sha under both the run's and the stage's baseline state
+    names), and the fake implementer `pi` on PATH. The stage's real
+    generation loop, guard call and completion logging run un-faked (the
+    stage's git traffic rides the mocked single entry point — no git
+    process is spawned). The
+    stage's own log is the mirror every common.log line lands in
+    (stage-console.log in the state dir — the runner's job log is a ghost
+    on this build). Returns a namespace: repo, rt, mod (the implement
+    stage module), baseline, and cleanup (restore the env, the git-exec
+    mock and the sys.modules entries, and remove the temp dirs)."""
+    import shutil
+    import tempfile
+    repo = tempfile.mkdtemp(prefix="cw-implement-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-implement-rt-")
+    fake = tempfile.mkdtemp(prefix="cw-implement-fake-")
+    os.makedirs(os.path.join(repo, "plans"))
+    with open(os.path.join(repo, "plans", "74.md"), "w", encoding="utf-8") as f:
+        f.write(plan_text)
+    ws_fake = _FakeRepo(repo)
+    repo_key = os.path.realpath(repo)
+    _FAKE_REPOS[repo_key] = ws_fake
+    ws_fake.exec(["init", "-q"])
+    ws_fake.exec(["add", "-A"])
+    ws_fake.exec(["commit", "-qm", "baseline"])
+    baseline = ws_fake.exec(["rev-parse", "HEAD"]).stdout.strip()
+    assert baseline, "the sandbox's fake baseline commit failed"
+    cw = os.path.join(rt, "cw")
+    os.makedirs(os.path.join(cw, "state", "trigger"))
+    with open(os.path.join(cw, "baseline.sha"), "w") as f:
+        f.write(baseline + "\n")
+    with open(os.path.join(cw, "stage-baseline.sha"), "w") as f:
+        f.write(baseline + "\n")
+    with open(os.path.join(cw, "state", "trigger", "issue-number.txt"),
+              "w") as f:
+        f.write("74\n")
+    os.makedirs(os.path.join(fake, "bin"))
+    with open(os.path.join(fake, "bin", "pi"), "w") as f:
+        f.write(_FAKE_PI_IMPLEMENT)
+    os.chmod(os.path.join(fake, "bin", "pi"), 0o755)
+    keys = ("GITHUB_WORKSPACE", "RUNNER_TEMP", "LLM_MODEL", "MAX_LOOPS",
+            "PATH", "PLAN_DIR", "REQUIREMENTS_DIR", "DOC_DIR",
+            "BASELINE_REF", "CW_ISSUE_NUMBER", "INPUT_ISSUE_NUMBER")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "GITHUB_WORKSPACE": repo,
+        "RUNNER_TEMP": rt,
+        "LLM_MODEL": "fake-model",
+        "MAX_LOOPS": "5",
+        "PATH": os.path.join(fake, "bin") + os.pathsep + (saved["PATH"] or ""),
+        "PLAN_DIR": "plans",
+        "REQUIREMENTS_DIR": "requirements",
+    })
+    saved_mods = {k: sys.modules.get(k) for k in ("common", "stages")}
+    spec = importlib.util.spec_from_file_location(
+        "cw_implement_stage_sandbox",
+        os.path.join(ROOT, ".github", "actions", "implement-stage",
+                     "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_implement_stage_sandbox"] = mod
+    spec.loader.exec_module(mod)
+    # the stage's git traffic (guard detection, the stage's own commit)
+    # rides the mocked single entry point — the fake model
+    restore_git = _patch_git_exec()
+
+    def cleanup():
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        for k, v in saved_mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        sys.modules.pop("cw_implement_stage_sandbox", None)
+        restore_git()
+        _FAKE_REPOS.pop(repo_key, None)
+        for d in (repo, rt, fake):
+            shutil.rmtree(d, ignore_errors=True)
+
+    return {"repo": repo, "rt": rt, "mod": mod, "baseline": baseline,
+            "cleanup": cleanup}
+
+
+def test_implement_logs_per_step_line_on_clean_call():
+    """(implement "A clean call with steps still open logs the per-step
+    line, not a stage completion" — new scenario; reference
+    `requirements/implement.feature::A clean call with steps still open
+    logs the per-step line, not a stage completion`) the plan file has
+    open (`- [ ]`) and done (`- [x]`) steps, and a clean generation call
+    inside the implement stage has just marked a step done (one step per
+    invocation — the sandbox's fake `pi` flips the plan's first open
+    checkbox): the implement stage logs the per-step line, "stage 8
+    implementation: clean — step <done>/<total> of the plan done;
+    <remaining> step(s) remain", with done, total and remaining counted
+    from the plan file's checkboxes (the sandbox plan holds one done step
+    and two open ones — the call leaves 2 of 3 done, 1 remaining), and no
+    "stage complete" is printed by the stage while any step of its plan
+    remains open — every stage-complete line in the stage's log is the
+    full-step-count exit line, which lands only after the per-step line,
+    once the loop's exit check finds no open step left. The shared
+    generation loop carries the hook the per-step line rides — its plain
+    completion form is not what the implement caller gets."""
+    ns = _implement_stage_sandbox(
+        "# Issue 74\n\n## Steps\n\n"
+        "- [x] a done step\n"
+        "- [ ] an open step one\n"
+        "- [ ] an open step two\n")
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ns["repo"])
+    try:
+        ns["mod"].main()
+        console = open(os.path.join(ns["rt"], "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        lines = [l for l in console.splitlines() if l.strip()]
+        per_step = ("stage 8 implementation: clean — step 2/3 of the plan "
+                    "done; 1 step(s) remain")
+        all_done = ("stage 8 implementation: all 3 plan steps done — "
+                    "stage complete")
+        # the clean call that marked a step done logs the per-step line —
+        # done, total and remaining counted from the plan file's checkboxes
+        assert per_step in lines, console
+        # …and no "stage complete" while any step of the plan remains open:
+        # every stage-complete line the stage prints is the full-count exit
+        # line, and it lands only after the per-step line
+        assert all_done in lines, console
+        assert lines.index(per_step) < lines.index(all_done)
+        for l in lines:
+            if "stage complete" in l:
+                assert l == all_done, \
+                    f"a stage-complete line while a step may still be open: {l!r}"
+        # the loop kept working open steps until the plan was fully tracked
+        plan = open(os.path.join(ns["repo"], "plans", "74.md"),
+                    encoding="utf-8").read()
+        assert "- [ ]" not in plan, plan
+        assert plan.count("- [x]") == 3, plan
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        ns["cleanup"]()
+
+
+def test_implement_fully_tracked_plan_logs_full_step_count():
+    """(implement "A fully tracked plan logs the full step count before
+    the stage completes" — new scenario; reference
+    `requirements/implement.feature::A fully tracked plan logs the full
+    step count before the stage completes`) a plan the implement stage
+    finds with no open (`- [ ]`) steps left exits its per-step loop on
+    the open-step check — without consuming a generation call (the
+    sandbox's fake `pi` is never invoked) — and logs the full step count
+    before the stage completes: "stage 8 implementation: all <total> plan
+    steps done — stage complete" with the plan's total step count (the
+    sandbox plan holds three steps, all done), and that is the only line
+    the stage prints that calls the stage complete — one form on both
+    exit paths (a plan already fully tracked when the stage starts, and a
+    plan made fully tracked by the last call), no per-step line in the
+    stage's log."""
+    ns = _implement_stage_sandbox(
+        "# Issue 74\n\n## Steps\n\n"
+        "- [x] a done step\n"
+        "- [x] a done step two\n"
+        "- [x] a done step three\n")
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ns["repo"])
+    try:
+        ns["mod"].main()
+        console = open(os.path.join(ns["rt"], "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        lines = [l for l in console.splitlines() if l.strip()]
+        all_done = ("stage 8 implementation: all 3 plan steps done — "
+                    "stage complete")
+        # exiting the per-step loop logs the full step count — the plan's
+        # total step count (three steps, all done)
+        assert all_done in lines, console
+        # …and that is the only line the stage prints that calls the stage
+        # complete, with no per-step line in the log
+        for l in lines:
+            if "stage complete" in l:
+                assert l == all_done, \
+                    f"an unexpected stage-complete line: {l!r}"
+        assert not any("of the plan done" in l for l in lines), \
+            "no per-step line — the plan has no open steps left"
+        # the exit is the loop's open-step check — no generation call
+        # behind it (the fake `pi` was never invoked)
+        cf = os.path.join(ns["rt"], "cw", "fake-pi-count.txt")
+        assert not os.path.exists(cf) or open(cf).read().strip() == "0", \
+            "a fully tracked plan exits the per-step loop without a pi call"
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        ns["cleanup"]()
+
+
+def test_single_call_stages_keep_plain_completion_line():
+    """(implement "The single-call stages keep the plain completion
+    line" — new scenario; reference
+    `requirements/implement.feature::The single-call stages keep the plain
+    completion line`) the extract, plan or review stage completes in a
+    single generation call, and when the shared generation loop comes
+    back clean for it, it logs the plain "clean — stage complete" line
+    for that stage: the loop's completion-line hook defaults to that
+    plain form, and the per-step completion label is the implement
+    stage's own — the shared loop does not force one wording on every
+    caller. The plan stage's real entry (its single-call shape: one
+    generation call through the shared loop) run in the stage sandbox
+    (a temp workspace + state dir, a fake `pi` on PATH that writes the
+    stage's one allowed plan file and closes with a settled JSONL event
+    stream) logs exactly the plain line for its stage when the loop comes
+    back clean — and no per-step form anywhere in the stage's log."""
+    import shutil
+    import tempfile
+    spec = importlib.util.spec_from_file_location(
+        "cw_plan_stage_sandbox",
+        os.path.join(ROOT, ".github", "actions", "plan-stage", "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_plan_stage_sandbox"] = mod
+    spec.loader.exec_module(mod)
+    # the stage's git traffic (the guard call in its loop) rides the
+    # mocked single entry point — the fake model, no git process spawned
+    restore_git = _patch_git_exec()
+    ws = tempfile.mkdtemp(prefix="cw-plan-plain-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-plan-plain-rt-")
+    fake = tempfile.mkdtemp(prefix="cw-plan-plain-fake-")
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n")
+    ws_fake = _FakeRepo(ws)
+    ws_key = os.path.realpath(ws)
+    _FAKE_REPOS[ws_key] = ws_fake
+    ws_fake.exec(["init", "-q"])
+    ws_fake.exec(["add", "-A"])
+    ws_fake.exec(["commit", "-qm", "baseline"])
+    baseline = ws_fake.exec(["rev-parse", "HEAD"]).stdout.strip()
+    assert baseline, "the sandbox's fake baseline commit failed"
+    cw = os.path.join(rt, "cw")
+    os.makedirs(os.path.join(cw, "state", "trigger"))
+    with open(os.path.join(cw, "baseline.sha"), "w") as f:
+        f.write(baseline + "\n")
+    with open(os.path.join(cw, "stage-baseline.sha"), "w") as f:
+        f.write(baseline + "\n")
+    with open(os.path.join(cw, "state", "trigger", "issue-number.txt"),
+              "w") as f:
+        f.write("74\n")
+    os.makedirs(os.path.join(fake, "bin"))
+    # the fake `pi` plays the planner: it writes the plan file and closes
+    # with a usage-carrying JSONL event stream the way a real
+    # `pi --mode json` call's stdout reads
+    with open(os.path.join(fake, "bin", "pi"), "w") as f:
+        f.write("#!" + sys.executable + "\n"
+                "import json, os\n"
+                "ws = os.environ['GITHUB_WORKSPACE']\n"
+                "os.makedirs(os.path.join(ws, 'plans'), exist_ok=True)\n"
+                "with open(os.path.join(ws, 'plans', '74.md'), 'w',\n"
+                "          encoding='utf-8') as f:\n"
+                "    f.write('# Issue 74\\n\\n## Steps\\n\\n- [ ] a step\\n')\n"
+                "print(json.dumps({'type': 'message_end', 'message': {\n"
+                "    'role': 'assistant',\n"
+                "    'content': 'the plan is written',\n"
+                "    'usage': {'input': 4, 'output': 2}}}))\n"
+                "print(json.dumps({'type': 'agent_settled'}))\n")
+    os.chmod(os.path.join(fake, "bin", "pi"), 0o755)
+    keys = ("GITHUB_WORKSPACE", "RUNNER_TEMP", "LLM_MODEL", "MAX_LOOPS",
+            "PATH", "PLAN_DIR", "REQUIREMENTS_DIR", "DOC_DIR",
+            "BASELINE_REF", "CW_ISSUE_NUMBER", "INPUT_ISSUE_NUMBER")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "GITHUB_WORKSPACE": ws,
+        "RUNNER_TEMP": rt,
+        "LLM_MODEL": "fake-model",
+        "MAX_LOOPS": "5",
+        "PATH": os.path.join(fake, "bin") + os.pathsep + (saved["PATH"] or ""),
+        "PLAN_DIR": "plans",
+    })
+    saved_mods = {k: sys.modules.get(k) for k in ("common", "stages")}
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ws)
+    try:
+        mod.main()
+        console = open(os.path.join(rt, "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        lines = [l for l in console.splitlines() if l.strip()]
+        # the shared loop comes back clean for the single-call stage — it
+        # logs the plain line for that stage…
+        assert "stage 6 planning: clean — stage complete" in lines, console
+        # …exactly that plain form: the only completion line in the
+        # stage's log (the per-step completion label is the implement
+        # stage's own hook — no per-step form rides the single-call stages)
+        for l in lines:
+            if "stage complete" in l:
+                assert l == "stage 6 planning: clean — stage complete", \
+                    f"an unexpected completion line: {l!r}"
+        assert not any("of the plan done" in l for l in lines), \
+            "no per-step form — the shared loop's plain form is the default"
+        # the stage completed on its single generation call: the plan file
+        # the fake `pi` wrote landed, committed, guard-clean
+        assert os.path.isfile(os.path.join(ws, "plans", "74.md"))
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        for k, v in saved_mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        sys.modules.pop("cw_plan_stage_sandbox", None)
+        restore_git()
+        _FAKE_REPOS.pop(ws_key, None)
+        for d in (ws, rt, fake):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def test_templates_plans_and_logs_agree_on_step_wording():
+    """(implement "The templates, the plan files and the stage log agree
+    on one word for the plan's units" — new scenario; reference
+    `requirements/implement.feature::The templates, the plan files and
+    the stage log agree on one word for the plan's units`) one word for
+    the plan's checklist units — "step" — across every plan-facing
+    surface: the planner template prescribes the plan's section heading
+    "Steps" and its units as steps, the implementer template calls the
+    units steps, the implement stage's log lines use "steps", and the
+    checkbox form (`- [ ]` for an open unit, `- [x]` for a done one) is
+    unchanged — the code that reads the plan keys on the checkbox, not
+    the word: a plan file whose unit word is reworded parses identically
+    (the reader's done/total counts and its open-step check come out the
+    same for a plan whose units are called steps and for one whose units
+    are called something else)."""
+    import shutil
+    import tempfile
+    # the planner template prescribes the plan's section heading
+    # "Steps" and its units as steps
+    plan = _read("pi-prompts/plan.md")
+    assert ("**Steps** section — an ordered, atomic, "
+            "independently-achievable checkbox\n"
+            "checklist (`- [ ] <step>`)") in plan
+    assert "Each step states, in order:" in plan
+    assert ("The implementation stage reads the Steps checklist "
+            "top-to-bottom, one step at a\ntime") in plan
+    # the implementer template calls the plan's units steps
+    implement = _read("pi-prompts/implement.md")
+    assert ("its **Steps** section is an ordered checklist\n"
+            "of open (`- [ ]`) and done (`- [x]`) steps") in implement
+    assert "first `- [ ]` step (from the top)" in implement
+    assert ("**Mark the step done** — flip its checkbox to `- [x]` in "
+            "the plan file.") in implement
+    # the implement stage's log lines use "steps": the per-step line
+    # while steps remain open, the full-step-count line the stage's
+    # completion exit prints (the only line that calls the stage
+    # complete), and the per-step state the stage records on the
+    # stage-summary channel
+    stage = _read(".github/actions/implement-stage/stage.py")
+    assert 'f"stage 8 implementation: clean — step {done}/{total} "' in stage
+    assert 'f"of the plan done; {total - done} step(s) remain")' in stage
+    assert 'f"stage 8 implementation: all {total} plan steps "' in stage
+    assert 'f"done — stage complete")' in stage
+    assert 'f"stage 8 implementation: step {k}/{total} "' in stage
+    # the checkbox form is unchanged and the reader keys on the
+    # checkbox, not the word: a plan file whose unit word is reworded
+    # parses identically
+    spec = importlib.util.spec_from_file_location(
+        "cw_implement_step_wording",
+        os.path.join(ROOT, ".github", "actions", "implement-stage",
+                     "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    saved_mods = {k: sys.modules.get(k) for k in ("common", "stages")}
+    ws = tempfile.mkdtemp(prefix="cw-implement-wording-")
+    try:
+        spec.loader.exec_module(mod)
+        for name, unit in (("steps.md", "step"), ("reworded.md", "task")):
+            with open(os.path.join(ws, name), "w", encoding="utf-8") as f:
+                f.write(f"# Issue 75\n\n## Steps\n"
+                        f"\n- [x] a done {unit}\n"
+                        f"- [ ] an open {unit}\n")
+            path = os.path.join(ws, name)
+            assert mod.count_plan_steps(path) == (1, 2), \
+                f"the plan reader counts the plan's checkboxes, {name!r}"
+            assert mod.has_open_task(path) is True, \
+                f"the open checkbox still reads as an open unit, {name!r}"
+        # both plans parse identically — the word is not the key
+        assert (mod.count_plan_steps(os.path.join(ws, "steps.md")) ==
+                mod.count_plan_steps(os.path.join(ws, "reworded.md")))
+    finally:
+        for k, v in saved_mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
 
 
 def test_implement_instructions_prescribe_the_test_reference():
@@ -3032,7 +3867,7 @@ def test_implement_instructions_prescribe_the_brownfield_work():
     were extracted from the project's existing code, the implement
     prompt template's brownfield clause prescribes the work the
     scenario demands: where the plan the stage works is a
-    brownfield plan — its tasks are all about adjusting the
+    brownfield plan — its steps are all about adjusting the
     tests to reference the extracted scenarios, none implements
     code (the plan stage's brownfield scope makes the plan read
     that way) — the implementation changes no source code, the
@@ -3052,10 +3887,10 @@ def test_implement_instructions_prescribe_the_brownfield_work():
     # items 1-6 and the hard rules stand unchanged
     assert "7. **A brownfield plan scopes your work to the" in prompt
     # the clause keys on the plan the stage works being a brownfield
-    # plan — its tasks are all about adjusting tests to reference
+    # plan — its steps are all about adjusting tests to reference
     # the extracted scenarios, none implements code
     assert ("Where the plan you are working is a brownfield plan — its\n"
-            "   tasks are all about adjusting tests to reference the\n"
+            "   steps are all about adjusting tests to reference the\n"
             "   extracted scenarios, none implements code") in prompt
     # the premise: the plan stage's brownfield scope makes the plan
     # read that way
@@ -3082,7 +3917,7 @@ def test_implement_instructions_prescribe_the_brownfield_work():
     # where the plan is not a brownfield plan, the clause does not
     # apply — the standing instructions govern
     assert ("Where the plan is not a brownfield plan\n"
-            "   (a task implements code, as on the standing runs),"
+            "   (a step implements code, as on the standing runs),"
             " this\n   clause does not apply — the standing"
             " instructions govern.") in prompt
 
@@ -3360,3 +4195,76 @@ def test_gates_stage_polls_in_progress_runs_to_green():
         f"the gate waits out the in-progress run and then passes: {summary!r}"
     assert len(urls) >= 2, \
         "the gate must re-poll until every run has completed"
+
+
+def test_tests_never_invoke_the_real_git_binary():
+    """(test-and-review "Tests never invoke the real git binary"; reference
+    `requirements/test-and-review.feature::Tests never invoke the real
+    git binary`) the factory's python routes every git call through one
+    mockable function — the shared module's git_exec, the factory's
+    single git entry point (each inline workflow step's own-interpreter
+    python carries its own copy of the same one-function shape) — and no
+    test spawns the real git binary: a test's git child on the runner
+    would read the runner's git configuration and could touch a real
+    repository's state, so the sandboxes mock that one function with the
+    in-test fake model of a git repo (the guard and stage sandboxes above
+    are the behavioural proof — they run the production code end to end
+    against the fake). This test pins the shape statically: a direct git
+    call is a subprocess.run whose argument list starts with the "git"
+    literal; the one-function shape calls git_exec([...]) instead (the
+    entry-point definition's own subprocess.run(["git"] + argv) is a
+    list-plus-args, not the direct-call shape)."""
+    import ast
+    import pathlib
+
+    def direct_git_calls(src: str, where: str):
+        calls = []
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if not (isinstance(f, ast.Attribute) and f.attr == "run"
+                    and isinstance(f.value, ast.Name)
+                    and f.value.id == "subprocess"):
+                continue
+            a0 = node.args[0] if node.args else None
+            if (isinstance(a0, ast.List) and a0.elts
+                    and isinstance(a0.elts[0], ast.Constant)
+                    and a0.elts[0].value == "git"):
+                calls.append(f"{where}:{node.lineno}")
+        return calls
+
+    bad = []
+    # the factory's python — every script the stages import or run
+    for p in sorted(pathlib.Path(ROOT, ".github").rglob("*.py")):
+        bad += direct_git_calls(p.read_text(),
+                                os.path.relpath(p, ROOT))
+    # the workflow's inline python: the entry-point definitions write
+    # ["git"] + argv, so any line starting a git argument list with a
+    # comma — or a run call that does — is a bypass of the one function
+    yml = _read(".github/workflows/factory.yml")
+    bad += [f".github/workflows/factory.yml:{i}"
+            for i, ln in enumerate(yml.splitlines(), 1)
+            if re.search(r"^\s*[\"']git[\"']\s*,", ln)
+            or re.search(r"subprocess\.run\(\s*[\"']git[\"']\s*,", ln)]
+    assert not bad, (
+        "the factory's python calls the git binary directly — every git "
+        "call must route through the one mockable function the tests "
+        "mock: " + ", ".join(bad))
+    # and no test spawns the real git binary either: the suite's git
+    # traffic is the sandboxes' fake model, installed as the mock for the
+    # one function the production code calls
+    for p in sorted(pathlib.Path(ROOT, "tests").glob("*.py")):
+        bad += direct_git_calls(p.read_text(), f"tests/{p.name}")
+    assert not bad, (
+        "a test spawns the real git binary — it must mock the factory's "
+        "one git entry point with the in-test fake: " + ", ".join(bad))
+    # the oracle scenario is implemented: a test in the suite cites it in
+    # the machine form (whitespace collapsed — the docstring wraps)
+    cite = ("requirements/test-and-review.feature::Tests never invoke "
+            "the real git binary")
+    assert any(cite in " ".join((ast.get_docstring(node) or "").split())
+               for node in ast.parse(_read("tests/test_stage_contract.py")).body
+               if isinstance(node, ast.FunctionDef)
+               and node.name.startswith("test_")), \
+        "no test cites the scenario in the machine form"

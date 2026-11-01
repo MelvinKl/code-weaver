@@ -78,12 +78,14 @@ def _revert(f: str, baseline: str) -> None:
     restore its baseline content; a file the stage added → remove it from
     the tree (committed or not)."""
     p = os.path.join(common.repo(), f)
-    if subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
-                      cwd=common.repo(), capture_output=True).returncode == 0:
-        subprocess.run(["git", "checkout", baseline, "--", f], cwd=common.repo(), check=False)
-    elif subprocess.run(["git", "ls-files", "--", f], cwd=common.repo(),
-                        capture_output=True).stdout.strip():
-        subprocess.run(["git", "rm", "-f", "--", f], cwd=common.repo(), check=False)
+    if common.git_exec(["cat-file", "-e", f"{baseline}:{f}"],
+                       cwd=common.repo(),
+                       capture_output=True).returncode == 0:
+        common.git_exec(["checkout", baseline, "--", f],
+                        cwd=common.repo(), check=False)
+    elif common.git_exec(["ls-files", "--", f], cwd=common.repo(),
+                         capture_output=True).stdout.strip():
+        common.git_exec(["rm", "-f", "--", f], cwd=common.repo(), check=False)
     elif os.path.exists(p):
         os.remove(p)
 
@@ -114,8 +116,9 @@ def post_ok() -> bool:
     for f in changed:
         if not stages.under(f, req) or not f.endswith(".feature"):
             continue
-        existed = subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
-                                 cwd=common.repo(), capture_output=True).returncode == 0
+        existed = common.git_exec(["cat-file", "-e", f"{baseline}:{f}"],
+                                  cwd=common.repo(),
+                                  capture_output=True).returncode == 0
         if existed and not os.path.exists(os.path.join(common.repo(), f)):
             # A deleted topic file is a violation: the delta places scenarios
             # (extending a topic file, creating one for an uncovered topic),

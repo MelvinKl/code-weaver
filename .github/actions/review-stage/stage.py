@@ -364,10 +364,10 @@ def review(i: int, test_out: str):
             with open(common.state_file(f"review-verdict-{i}.txt"), "w",
                       encoding="utf-8") as fh:
                 fh.write(t)
-            if subprocess.run(["git", "ls-files", "--", f], cwd=common.repo(),
-                              capture_output=True).stdout.strip():
-                subprocess.run(["git", "rm", "-f", "--", f], cwd=common.repo(),
-                               check=False)
+            if common.git_exec(["ls-files", "--", f], cwd=common.repo(),
+                               capture_output=True).stdout.strip():
+                common.git_exec(["rm", "-f", "--", f], cwd=common.repo(),
+                                check=False)
             else:
                 p = os.path.join(common.repo(), f)
                 if os.path.exists(p):

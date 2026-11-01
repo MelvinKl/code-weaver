@@ -15,19 +15,19 @@ so the baseline knows none of them (the full-derivation shape, as
 opposed to the standing in-place delta) — the requirements were
 extracted from the project's existing code, and the plan you write
 scopes itself to them: (a) the plan names the extracted scenarios it
-must cover, and (b) the plan's tasks are scoped to adjusting the tests
-to reference those scenarios — no plan task implements code. Where the
+must cover, and (b) the plan's steps are scoped to adjusting the tests
+to reference those scenarios — no plan step implements code. Where the
 delta is not that shape (a changed existing file among the delta, as on
 the standing runs), this clause does not apply — the standing
 instructions govern.
 
 Write it in **Jira-ticket style**: one issue with `Summary`, `Description`,
 `Acceptance Criteria` (each mapped to the Gherkin scenario it fulfills), and a
-**Tasks** section — an ordered, atomic, independently-achievable checkbox
-checklist (`- [ ] <task>`). Keep each task a **broad goal**, not a file-level
+**Steps** section — an ordered, atomic, independently-achievable checkbox
+checklist (`- [ ] <step>`). Keep each step a **broad goal**, not a file-level
 recipe — just enough to split the work and to know which tests are required.
-Each task states, in order:
-1. **The goal and its requirements** — what the task accomplishes as a broad
+Each step states, in order:
+1. **The goal and its requirements** — what the step accomplishes as a broad
    outcome. Name which Gherkin requirement(s) it fulfils, and for each whether
    it is a **new** requirement (no existing scenario covers it) or an
    **adjusted** existing requirement (a scenario the change alters).
@@ -42,8 +42,8 @@ Each task states, in order:
    goal touches or must preserve, at a conceptual level only; call out and
    justify any contradiction with the arc42. Do not specify file-level changes.
 
-The implementation stage reads the Tasks checklist top-to-bottom, one task at a
-time, flipping each to `- [x]` when done — so keep tasks broad, individually
+The implementation stage reads the Steps checklist top-to-bottom, one step at a
+time, flipping each to `- [x]` when done — so keep steps broad, individually
 achievable, and ordered.
 
 Hard rules

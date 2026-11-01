@@ -454,12 +454,12 @@ def pi_invoke(
 def changed_files(baseline: str) -> list[str]:
     """Tracked changes against the baseline + untracked files (the plan §4.1
     idiom, in Python)."""
-    tracked = subprocess.run(
-        ["git", "diff", "--name-only", baseline, "--", "."],
+    tracked = git_exec(
+        ["diff", "--name-only", baseline, "--", "."],
         cwd=repo(), capture_output=True, text=True, check=True,
     ).stdout.splitlines()
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
+    untracked = git_exec(
+        ["ls-files", "--others", "--exclude-standard"],
         cwd=repo(), capture_output=True, text=True, check=True,
     ).stdout.splitlines()
     return sorted(set(tracked + untracked))
@@ -745,21 +745,19 @@ def guard(baseline: str, allow: list[str] | tuple[str, ...],
 
 def commit_all(message: str) -> bool:
     """Commit whatever the stage produced (empty = no-op)."""
-    subprocess.run(["git", "add", "-A"], cwd=repo(), check=True)
-    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=repo(), capture_output=True, text=True)
+    git_exec(["add", "-A"], cwd=repo(), check=True)
+    dirty = git_exec(["status", "--porcelain"], cwd=repo(),
+                     capture_output=True, text=True)
     if not dirty.stdout.strip():
         return False
-    subprocess.run(
-        ["git", "commit", "-q", "-m", message],
-        cwd=repo(), check=True,
-    )
+    git_exec(["commit", "-q", "-m", message], cwd=repo(), check=True)
     return True
 
 
 def push_branch(branch: str, force: bool = True) -> None:
     token = os.environ.get("GH_TOKEN", "")
     origin = f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}"
-    args = ["git", "push"]
+    args = ["push"]
     if force:
         args.append("--force")
     args += ["origin", branch]
@@ -778,12 +776,29 @@ def push_branch(branch: str, force: bool = True) -> None:
         "GIT_CONFIG_KEY_0": "http.https://github.com/.cookie",
         "GIT_CONFIG_VALUE_0": "",
     })
-    r = subprocess.run(args, cwd=repo(), capture_output=True, text=True,
-                       env=env)
+    r = git_exec(args, cwd=repo(), capture_output=True, text=True, env=env)
     # rewrite any token in the URL back out of the log
     if r.returncode != 0:
         clean = (r.stderr or r.stdout).replace(token, "***") if token else (r.stderr or "")
         raise RuntimeError(f"git push failed: {clean.strip()[:300]}")
+
+
+def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """The factory's single git entry point.
+
+    Every git call in the factory's python routes through this one
+    function: it takes the git arguments plus every extra parameter a
+    git child may need (cwd, env, check, capture_output, text,
+    timeout) and hands them straight to subprocess.run. The test suite
+    mocks this one function — a mock here keeps the whole suite off the
+    real git binary (a test that spawned real git would read the
+    runner's git configuration and could touch a real repository's
+    state, which no test may do: test-and-review "tests never invoke
+    the real git binary"). Each inline workflow step's python runs in
+    its own interpreter and carries the same one-function shape with
+    its own copy.
+    """
+    return subprocess.run(["git"] + list(argv), **kwargs)
 
 
 def git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
@@ -792,8 +807,8 @@ def git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     # child otherwise.
     env = {k: v for k, v in os.environ.items()
            if not k.startswith("GIT_CONFIG_")}
-    return subprocess.run(["git"] + args, cwd=repo(), capture_output=True,
-                          text=True, check=check, env=env)
+    return git_exec(args, cwd=repo(), capture_output=True, text=True,
+                    check=check, env=env)
 
 
 def action_path() -> str:

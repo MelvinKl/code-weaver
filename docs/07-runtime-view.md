@@ -91,7 +91,12 @@ total output tokens and total cost in every case — derived from the
 per-call usage records in the state dir (each stage's artifact carries the
 cumulative ledger), so a run that stopped early in a failed stage is
 reported with the usage and cost of the pi calls made before the stop, and
-a stage that never ran contributes nothing. The report stage re-reads the
+a stage that never ran contributes nothing. The stage outcomes the report
+lists render from the stages' recorded summary lines: a stage that is done
+is reported "stage complete" (its per-step lines stay out of the outcome),
+and a stage that will re-run — the implement stage's per-step
+"step <k>/<n> done" lines recorded without a completion line — is reported
+per step for each of its finished steps. The report stage re-reads the
 PR after editing its body and keeps the pointer comment ("final status is
 in the PR body") only where that completion verified; where it could not
 be applied — the PR was already merged, or the edit was refused on both

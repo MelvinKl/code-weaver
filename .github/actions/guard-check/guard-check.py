@@ -36,6 +36,15 @@ import os
 import sys
 
 
+def git_exec(argv: list, **kwargs):
+    """This script's single git entry point — the same one-function shape
+    the shared module carries (the test suite mocks that one function, so
+    no test ever spawns the real git binary). The canonical path calls
+    common's copy; the inline fallback below calls this one."""
+    import subprocess
+    return subprocess.run(["git"] + list(argv), **kwargs)
+
+
 def _load():
     here = os.path.dirname(os.path.abspath(__file__))
     scripts = os.path.join(os.path.dirname(os.path.dirname(here)), "scripts")
@@ -49,12 +58,12 @@ def _load():
     import subprocess
 
     def changed_files(baseline: str):
-        tracked = subprocess.run(
-            ["git", "diff", "--name-only", baseline, "--", "."],
+        tracked = git_exec(
+            ["diff", "--name-only", baseline, "--", "."],
             cwd=os.environ["GITHUB_WORKSPACE"], capture_output=True, text=True, check=True,
         ).stdout.splitlines()
-        untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
+        untracked = git_exec(
+            ["ls-files", "--others", "--exclude-standard"],
             cwd=os.environ["GITHUB_WORKSPACE"], capture_output=True, text=True, check=True,
         ).stdout.splitlines()
         return sorted(set(tracked + untracked))
@@ -228,15 +237,15 @@ def _load():
                 # machinery claims the record to re-run the plan stage's
                 # generation (the other stages' machinery leaves it
                 # unclaimed)
-                subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
-                dirty = subprocess.run(
-                    ["git", "status", "--porcelain"], cwd=ws,
+                git_exec(["add", "-A"], cwd=ws, check=True)
+                dirty = git_exec(
+                    ["status", "--porcelain"], cwd=ws,
                     capture_output=True, text=True)
                 if dirty.stdout.strip():
-                    subprocess.run(
-                        ["git", "commit", "-q",
+                    git_exec(
+                        ["commit", "-q",
                          "-m", "guard repair: off-limits changes "
-                               "reverted in place"],
+                                "reverted in place"],
                         cwd=ws, check=True)
                 try:
                     with open(os.path.join(sd,

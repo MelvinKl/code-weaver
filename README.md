@@ -78,8 +78,8 @@ this repo's reusable workflow takes over:
    file new against the baseline — the extraction created the requirements
    directory, so the baseline knows none of them), the instructions attach
    the brownfield scope: the plan names the extracted scenarios it must
-   cover and scopes its tasks to adjusting the tests to reference those
-   scenarios — no plan task implements code;
+   cover and scopes its steps to adjusting the tests to reference those
+   scenarios — no plan step implements code;
 7. **plan check** — same guard idiom — a change outside the one allowed
    plan file is reverted by the guard's pi call and the plan stage re-runs
    (the guard re-checks the re-run; only the plan file is left changed; a
@@ -100,7 +100,7 @@ this repo's reusable workflow takes over:
    where the implementation creates its new code or test dirs (a whitelist
    snapshotted at stage start used to revert a brand-new `tests/` dir every
    iteration); inside the denied sets, exactly the current issue's plan file
-   is re-allowed (the plan is a live state tracker: finished tasks are
+   is re-allowed (the plan is a live state tracker: finished steps are
    marked done) — never another issue's plan; a requirement edited
    here **is repaired in place — the guard's pi call reverts it; the stage
    is not re-run** (no loop back to the plan stage);
@@ -316,7 +316,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 175 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 180 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -324,7 +324,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **175 Gherkin scenarios** — the oracle this
+`requirements/` holds **180 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

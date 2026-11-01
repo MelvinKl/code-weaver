@@ -100,3 +100,11 @@ Feature: Test and review loop
     When the implementation works the changed requirement
     Then every test that references the changed scenario is adjusted with it
     And the adjusted tests fulfil the requirement as it now reads
+
+  @safety
+  Scenario: Tests never invoke the real git binary
+    Given the factory's python routes every git call through one mockable function
+    And the test suite under tests/
+    When a test exercises code that calls git
+    Then the test mocks that one function with an in-test fake
+    And no test spawns the real git executable — the suite never reads the runner's git configuration and can never touch a real repository's state

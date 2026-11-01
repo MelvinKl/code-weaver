@@ -13,8 +13,8 @@ every changed requirement file new against the baseline (the extraction
 created the requirements directory, so the baseline knows none of
 them) — the target attaches the brownfield clause: the requirements
 were extracted from the project's existing code, the plan names the
-extracted scenarios it must cover, its tasks are scoped to adjusting the
-tests to reference those scenarios, and no plan task implements code;
+extracted scenarios it must cover, its steps are scoped to adjusting the
+tests to reference those scenarios, and no plan step implements code;
 where a changed existing file is among the delta (the standing runs),
 the clause is not attached. The guard verifies only that one plan file
 changed;
@@ -27,7 +27,6 @@ file").
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
 # The action directory comes from this file's own location: on this
@@ -62,8 +61,9 @@ def delta_is_brownfield() -> bool:
         return False
     baseline = stages.baseline_sha()
     for f in files:
-        if subprocess.run(["git", "cat-file", "-e", f"{baseline}:{f}"],
-                          cwd=common.repo(), capture_output=True).returncode == 0:
+        if common.git_exec(["cat-file", "-e", f"{baseline}:{f}"],
+                           cwd=common.repo(),
+                           capture_output=True).returncode == 0:
             return False
     return True
 
@@ -72,8 +72,8 @@ def delta_is_brownfield() -> bool:
 # brownfield shape: it marks the shape the template's brownfield clause
 # keys on, and restates the scope that clause governs — the requirements
 # were extracted from the project's existing code, the plan names the
-# extracted scenarios it must cover, its tasks are scoped to adjusting
-# the tests to reference those scenarios, and no plan task implements
+# extracted scenarios it must cover, its steps are scoped to adjusting
+# the tests to reference those scenarios, and no plan step implements
 # code — so the instructions handed to pi carry the scope either way.
 BROWNFIELD_MARKER = (
     "## The run's delta is the brownfield shape\n\n"
@@ -82,9 +82,9 @@ BROWNFIELD_MARKER = (
     "baseline knows none of them. The brownfield clause of your "
     "instructions governs this run: the requirements were extracted "
     "from the project's existing code, so (a) the plan names the "
-    "extracted scenarios it must cover, and (b) the plan's tasks are "
+    "extracted scenarios it must cover, and (b) the plan's steps are "
     "scoped to adjusting the tests to reference those scenarios — no "
-    "plan task implements code.\n"
+    "plan step implements code.\n"
 )
 
 
@@ -100,10 +100,9 @@ def requirement_delta() -> tuple[list[str], str]:
     files = stages.changed_requirement_files()
     if not files:
         return files, ""
-    diff = subprocess.run(
-        ["git", "diff", stages.baseline_sha(), "--", *files],
-        cwd=common.repo(), capture_output=True, text=True,
-        check=False,
+    diff = common.git_exec(
+        ["diff", stages.baseline_sha(), "--", *files],
+        cwd=common.repo(), capture_output=True, text=True, check=False,
     ).stdout
     return files, diff
 
