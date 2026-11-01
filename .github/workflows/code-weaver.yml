@@ -45,7 +45,7 @@ jobs:
       # empty and stage 2 treats it as an absent provider (the repo's
       # .pi/agent/models.json, .pi/settings.json and .pi/mcp.json are the
       # fallbacks); never a plain input
-      PI_MODELS: ${{ secrets.PI_MODELS }}
-      PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
+      PI_MODELS: ${{ vars.PI_MODELS }}
+      PI_SETTINGS: ${{ vars.PI_SETTINGS }}
       PI_MCP: ${{ secrets.PI_MCP }}
       PI_EXTENSION_ENV: ${{ vars.PI_EXTENSION_ENV }}
