@@ -112,6 +112,11 @@ on:
         type: string
         required: false
         default: ""
+      dependency-upgrade:
+        description: Whether the run's pipeline runs the dependency-upgrade stage — the stage upgrades the target project's dependencies to newer versions, before the implementation stage; "off" = the pipeline runs without the stage (the run's stages, pull request and final status report are unchanged)
+        type: string
+        required: false
+        default: "on"
       factory-ref:
         # legacy no-op, kept declared: a with: block written for an
         # older version of this file passes this input, and the run must
@@ -4622,6 +4627,11 @@ jobs:
             else
               echo "- dependency-install: \`${{ inputs.dependency-install }}\` — the run's pipeline runs it in the consuming stage jobs (implement, test-and-review), after each job's checkout and before its stage"
             fi
+            if [ "${{ inputs.dependency-upgrade }}" = "off" ]; then
+              echo "- dependency-upgrade: \`off\` — the run's pipeline runs without the dependency-upgrade stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence)"
+            else
+              echo "- dependency-upgrade: \`${{ inputs.dependency-upgrade }}\` (on by default) — the run's pipeline runs the dependency-upgrade stage before the implementation stage"
+            fi
           } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
           echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
             | tee "$RUNNER_TEMP/cw/stage-summary.txt"
@@ -5286,6 +5296,82 @@ jobs:
           fi
           echo "installing the target project's dependencies: $CW_DEPENDENCY_INSTALL"
           bash -c "$CW_DEPENDENCY_INSTALL"
+      - name: Upgrade the target project's dependencies (the dependency-upgrade setting)
+        # The dependency-upgrade mechanism (issue 18): beside the
+        # dependency-install step above, the run's pipeline upgrades the
+        # target project's dependencies to newer versions — default on,
+        # configurable off through the consumer workflow. The setting
+        # rides the documented settings channel end to end: the
+        # workflow's optional dependency-upgrade input (declared on the
+        # input surface, recorded in the trigger's resolved-config log in
+        # both the values it takes), relayed to this step as
+        # CW_DEPENDENCY_UPGRADE through the documented CW_<name> step env
+        # idiom (chapter 3). The step is inlined workflow text — no new
+        # job is added, the 15-stage / 9-job pipeline count stays
+        # (chapter 5's documented extension idiom, held for this step the
+        # way it is held for the install step above).
+        # Placement (chapter 7's documented dependency-install idiom):
+        # after this job's checkout of the AI branch and before the stage
+        # step and this job's stage-baseline recording, so the upgrade's
+        # footprint is never counted as the implementation stage's work by
+        # the guard.
+        # The factory is target-agnostic (chapter 4: any GitHub repo), so
+        # the upgrade command rides the documented channel by which a
+        # target names a command for its own project environment — the
+        # dependency-install input, relayed here as CW_DEPENDENCY_INSTALL
+        # the way the install step relays it: a target that declares it
+        # runs the upgrade, and a target that declares none has no upgrade
+        # to run — the step is a no-op, mirroring that input's documented
+        # no-op property.
+        # Setting on (the default): the command runs, and the footprint it
+        # leaves in the workspace is committed to the AI branch — the
+        # checked-out branch: the dependency files sit inside the
+        # implementation's lane (the guard's inverted allow admits
+        # everything except the protected requirements/plans set,
+        # chapter 6), so the commit rides the implementation's branch work
+        # and the guard never reverts it. The branch is the only
+        # documented cross-job workspace channel (chapter 7): each job's
+        # checkout replaces the workspace, so the commit is what carries
+        # the upgraded project across job boundaries — to the
+        # implementation stage in this job, and to the review job, whose
+        # checkout materialises the upgraded tree and whose
+        # dependency-install step installs the upgraded set for the
+        # `make test` suite run.
+        # Setting off: the step is a no-op — it guards on the relayed
+        # value, logs the off case and exits 0 without touching the
+        # workspace: the run's pipeline runs without the stage, no other
+        # job gains a step, and the run's stages, pull request and final
+        # status report are unchanged by the upgrade's absence (the
+        # documented unchanged-by-the-mechanism's-presence property).
+        env:
+          CW_DEPENDENCY_UPGRADE: ${{ inputs.dependency-upgrade }}
+          CW_DEPENDENCY_INSTALL: ${{ inputs.dependency-install }}
+        run: |
+          if [ "${CW_DEPENDENCY_UPGRADE:-on}" = "off" ]; then
+            echo "the dependency-upgrade setting is off — the run's pipeline runs without the dependency-upgrade stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence)"
+            exit 0
+          fi
+          if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
+            echo "no dependency-install command is declared (the dependency-install input is empty) — there is no upgrade to run; the step is a no-op and the run proceeds unchanged"
+            exit 0
+          fi
+          echo "upgrading the target project's dependencies to newer versions (before the implementation stage): $CW_DEPENDENCY_INSTALL"
+          bash -c "$CW_DEPENDENCY_INSTALL"
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "the upgrade left no footprint in the workspace — nothing to commit; the run proceeds unchanged"
+            exit 0
+          fi
+          # The footprint commits to the AI branch (the checked-out
+          # branch) and rides the implementation's branch work — the
+          # branch is the only documented cross-job workspace channel.
+          git add -A
+          # The documented factory identity (the baseline job's):
+          # repo-local, a fallback for a runner whose environment carries
+          # no git identity — it never rides a commit or the PR
+          git config user.name "Code Weaver"
+          git config user.email "code-weaver@users.noreply.github.com"
+          git commit -q -m "dependency-upgrade: upgrade the project's dependencies to newer versions"
+          echo "the upgrade's footprint is committed to the AI branch (${AI_BRANCH:-the AI branch}) — the consuming stages (the implementation stage, the review job's suite run) work against the upgraded project"
       - uses: actions/download-artifact@v8
         with:
           name: cw-plan

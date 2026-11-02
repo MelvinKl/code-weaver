@@ -18,6 +18,13 @@
 # predecessor release as their range base, list the real changes since
 # it, and never print an empty list for a release that publishes
 # changes.
+# Issue 18 delta — the release changelog's form: the notes'
+# changed-since list becomes a table with one row per commit in the
+# branch since the previous release, each row carrying the commit's
+# title, its author, its hash and its datetime. The two issue-79 notes
+# scenarios are updated in place to the table form; their range-base
+# rules (predecessor release, first commit without one, never empty)
+# stay.
 
 @issue-21 @auto-release
 Feature: Automatic release on main branch changes
@@ -62,12 +69,20 @@ Feature: Automatic release on main branch changes
     Given a release is published that has a predecessor release
     When the release's notes are read
     Then the notes' changed-since reference is the predecessor release and not the first commit
-    And the notes list the files changed between the predecessor release and this release's commit
+    And the notes' changelog is a table with one row per commit in the branch since the predecessor release
 
   @issue-79 @auto-release
   Scenario: The release notes are never empty for a release that publishes changes
     Given a release is published for a push that changed at least one file
     When the release's notes are read
-    Then the notes' changed-since list is not empty
-    And the list names the files changed since the release's range base
-    And where the release has no predecessor its range base is the first commit and its list is still not empty
+    Then the notes' changelog table is not empty
+    And the table carries one row per commit in the branch since the release's range base
+    And where the release has no predecessor its range base is the first commit and its table is still not empty
+
+  @issue-18 @auto-release
+  Scenario: The release changelog is a table of the commits since the last release
+    Given a release is published whose branch carries commits since the previous release
+    When the release's changelog is read
+    Then the changelog is a table
+    And the table has a row for every commit in the branch since the previous release
+    And each row carries the commit's title, the commit's author, the commit's hash and the commit's datetime

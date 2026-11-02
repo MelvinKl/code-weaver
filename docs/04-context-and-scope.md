@@ -33,6 +33,19 @@ unchanged: the step is a no-op, and the run is unchanged by the
 mechanism's presence (the stages, the pull request and the final status
 report all as if the mechanism were absent).
 
+The `with:` block also carries the optional `dependency-upgrade`
+setting — whether the run's pipeline runs the dependency-upgrade
+stage: the stage upgrades the project's dependencies to newer
+versions, before the implementation stage. The setting's default is
+`on`; a target turns the stage off through its consumer workflow (a
+`dependency-upgrade: off` line in the `with:` block, like
+`max-loops`). Where the setting is off, the pipeline runs without the
+stage, and the run is unchanged: the run's stages, pull request and
+final status report are unchanged by the upgrade's absence. Like the
+`dependency-install` input, the setting is project configuration, not a
+secret value, so it rides the input channel (chapter 3), not the
+`secrets:` block.
+
 The consumer workflow is the **only per-target code** — it stays short
 and stable (it declares the `labeled`-only issue trigger plus a manual
 dispatch; opening or editing an issue schedules no run), carries no

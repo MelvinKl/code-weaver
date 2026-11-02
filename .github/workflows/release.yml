@@ -164,11 +164,24 @@ jobs:
           # checkout above makes it the real first commit (a shallow
           # fetch would report HEAD itself).
           RANGEFROM=${PREV:-$(git rev-list --max-parents=0 HEAD)}
-          # The notes' list spans the whole tree — no pathspec subset
-          # of it: a push that changes files elsewhere (docs, README,
-          # tests, …) still publishes, and the list must name the real
-          # changes, never print empty.
-          CHANGES=$(git diff --stat "$RANGEFROM" HEAD | tail -n +2)
+          # The notes' changelog is a table with one row per commit in
+          # the branch since the range base — the whole range, no
+          # pathspec subset of it: a push that changes files elsewhere
+          # (docs, README, tests, …) still publishes, and the table
+          # must name the real changes, never print empty. Each row
+          # carries the commit's title, its author, its hash and its
+          # datetime. The commit's fields are separated by
+          # unit-separator bytes (a commit field can carry a pipe, but
+          # never that byte), which the awk below turns into the
+          # table's rows, escaping the pipes a text field can carry;
+          # the table's header prints even where the range is empty,
+          # so the notes' changelog is never the empty string.
+          CHANGES=$(git log "$RANGEFROM"..HEAD \
+            --pretty=format:'%s%x1f%an%x1f%h%x1f%ad' --date=iso | \
+            awk 'BEGIN { FS = "\037"; print "| Title | Author | Hash | Datetime |";
+                          print "|---|---|---|---|" }
+                 { gsub(/\|/, "\\\\&", $1); gsub(/\|/, "\\\\&", $2);
+                   printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4 }')
 
           # One tag per commit: a re-run of this flow at an unchanged
           # HEAD (a workflow-dispatch retry) would otherwise spend the
@@ -195,5 +208,5 @@ jobs:
           # ref the flow publishes.
           git tag "$NEXT" HEAD
           git push origin "refs/tags/$NEXT"
-          NOTES=$(printf '## %s\n\nChanged since %s:\n\n`%s`\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `@%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$NEXT" "${PREV:-the first commit}" "$CHANGES" "$NEXT")
+          NOTES=$(printf '## %s\n\nChanged since %s:\n\n%s\n\n**Consumers:** bump the ref in your `code-weaver.yml` to `@%s` to upgrade. Older pinned refs remain valid — every published version is a stable ref.\n' "$NEXT" "${PREV:-the first commit}" "$CHANGES" "$NEXT")
           gh release create "$NEXT" --title "code-weaver $NEXT" --notes "$NOTES"

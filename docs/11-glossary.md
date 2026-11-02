@@ -36,7 +36,7 @@
   mirrored per iteration into the state dir and fed into the fixer: the
   fix directive names it by path, the fixer reads it on demand
 - **Oracle** — the Gherkin requirements under `requirements/` (16 files,
-  180 scenarios), structured by topic: each file is named after the topic
+  185 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
@@ -49,6 +49,21 @@
   runs unchanged — where the input is empty the step is a no-op that
   logs and exits without touching the workspace, and the run is
   unchanged by the mechanism's presence
+- **Project dependency-upgrade stage** — whether the run's pipeline
+  runs the dependency-upgrade stage, decided by the target's optional
+  `dependency-upgrade` setting (the consumer workflow's `with:` block;
+  the setting's default is `on` — a target turns it off with a
+  `dependency-upgrade: off` line in the `with:` block, like
+  `max-loops`): the stage upgrades the project's dependencies to newer
+  versions, in the `implement` job after its checkout of the AI branch
+  and before its stage — before the implementation stage — and commits
+  the footprint to the AI branch, the only documented cross-job channel
+  the consuming stages work through (the implementation stage, the
+  `review` job's `make test` suite run); where the setting is off the
+  step is a no-op that logs and exits without touching the workspace —
+  the pipeline runs without the stage, and the run's stages, pull
+  request and final status report are unchanged by the upgrade's
+  absence
 - **Guard** — the shared "only X changed" check (one implementation,
   three call sites): collects working-tree changes against the stage
   baseline, compares them against the per-stage set, and repairs a

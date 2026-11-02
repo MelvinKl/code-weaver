@@ -107,6 +107,15 @@ The pins (one per scenario the fix loop had to fulfil):
   surfaces)
   (configuration "the loop caps are configurable", "a loop cap of 0 means
   no cap");
+- the factory's dependency-upgrade setting rides the documented settings
+  channel on its declaration side: the reusable workflow declares it on
+  its input surface (a string input, optional — an older consumer's with:
+  block stays schema-valid — default on), and the trigger's resolved-config
+  log records it in both values it can take — the on default names the
+  value, and a target-declared off value records that the run's pipeline
+  runs without the dependency-upgrade stage, the run's stages, pull
+  request and final status report unchanged by the upgrade's absence
+  (configuration "the dependency-upgrade setting is configurable");
 - a file list appears in a stage instruction only where the set is the
   instruction's scope (the plan's changed-requirements list, the guard's
   off-limits list in the repair instructions, the implement target's single
@@ -2505,6 +2514,26 @@ def _workflow_input_default(factory: str, name: str) -> str:
     raise AssertionError(f"no default found for input {name!r}")
 
 
+def _workflow_input_entry(factory: str, name: str) -> str:
+    """One entry of the workflow_call inputs block, line-based (the same
+    stdlib-only parse-avoidance as _workflow_input_default): from its
+    6-indent key line to the next 6-indent (or shallower) line, kept as
+    text so a test can assert the entry's type and required lines."""
+    lines = factory.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.strip() == f"{name}:"), None)
+    assert start is not None, \
+        f"no {name} input in the factory's inputs block"
+    entry = [lines[start]]
+    for cont in lines[start + 1:]:
+        if cont.strip():
+            indent = len(cont) - len(cont.lstrip(" "))
+            if indent <= 6:
+                break
+        entry.append(cont)
+    return "\n".join(entry)
+
+
 def test_stage_instructions_avoid_file_lists_without_meaning():
     """(configuration "A stage instruction avoids file lists that carry no
     meaning"; reference
@@ -2701,6 +2730,81 @@ def test_loop_cap_defaults_match_oracle():
     assert "guard re-run" not in quality
     assert "guard repair" in readme
     assert "guard re-run" not in readme
+
+
+def test_dependency_upgrade_setting_is_configurable():
+    """(configuration "The dependency-upgrade setting is configurable";
+    reference
+    `requirements/configuration.feature::The dependency-upgrade setting
+    is configurable`) the setting's configuration-channel half rides the
+    documented settings end-to-end: the reusable workflow declares
+    dependency-upgrade on its input surface — a string input, optional
+    (an older consumer's with: block stays schema-valid, the
+    dependency-install input's pattern), default on — and the trigger's
+    resolved-config log records it (the documented audit surface — the
+    resolved configuration is recorded in the workflow log for audit,
+    never committed to the repo): the on default names the value, and a
+    target-declared off value records that the run's pipeline runs without
+    the dependency-upgrade stage, the run's stages, pull request and
+    final status report unchanged by the upgrade's absence. The
+    setting's input → stage-environment relay and the pipeline step that
+    skips itself where the setting is off — the scenario's pipeline half
+    — land in the step that consumes the setting (the project-dependencies
+    tests pin it); this test pins the declaration and the audit record."""
+    factory = _read(".github/workflows/factory.yml")
+    # the input surface declares the setting with its on default — a
+    # string input, optional (an older consumer's with: block stays
+    # schema-valid)
+    assert _workflow_input_default(factory, "dependency-upgrade") == "on", \
+        "the dependency-upgrade setting's default is on"
+    entry = _workflow_input_entry(factory, "dependency-upgrade")
+    assert "type: string" in entry, \
+        "the dependency-upgrade input is not a string input"
+    assert "required: false" in entry, \
+        "the dependency-upgrade input must be optional — an older " \
+        "consumer's with: block stays schema-valid"
+    # the trigger's resolved-config log records the setting — the block is
+    # the trigger's `{ … } | tee` group that writes the audit file
+    trig = factory[factory.index("  trigger:"):factory.index("  setup-pi:")]
+    heading = trig.index('echo "### Code Weaver — resolved configuration')
+    assert heading != -1, "the trigger lost its resolved-config heading"
+    start = trig.rfind("{", 0, heading)
+    assert start != -1, \
+        "the resolved-config group lost its opening brace"
+    end = trig.find('} | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"',
+                    heading)
+    assert end != -1, "the resolved-config group lost its `} | tee` close"
+    block = trig[start:end]
+    # the block branches on the setting's off value
+    assert 'if [ "${{ inputs.dependency-upgrade }}" = "off" ]; then' in block, \
+        "the resolved-config block does not branch on the off value"
+    # a target-declared off value names the value and records that the
+    # pipeline runs without the dependency-upgrade stage — the run's
+    # stages, pull request and final status report unchanged by the
+    # upgrade's absence
+    off = [ln for ln in block.splitlines()
+           if "echo" in ln and "dependency-upgrade" in ln
+           and "runs without the dependency-upgrade stage" in ln]
+    assert off, ("the resolved-config log has no off-value line for the "
+                 "dependency-upgrade setting")
+    # the value is backtick-quoted on the line, in the file's shell-escape
+    # form (a backslash before each backtick, as on every other
+    # resolved-config line)
+    assert all("\\`off\\`" in ln for ln in off), \
+        "the off-value line does not name the value it records"
+    assert any("the run's stages, pull request and final status report" in ln
+               and "unchanged" in ln for ln in off), \
+        "the off-value line does not record the run as unchanged by the " \
+        "upgrade's absence"
+    # the on default names the setting's value (the on branch of the same
+    # record)
+    on = [ln for ln in block.splitlines()
+          if "echo" in ln and "dependency-upgrade" in ln
+          and "{{ inputs.dependency-upgrade }}" in ln]
+    assert on, ("the resolved-config log does not name the setting's value "
+                "for the on default")
+    assert any("on by default" in ln for ln in on), \
+        "the on-value line does not state the setting's on default"
 
 
 def test_implement_guard_protects_requirements_and_other_plans():

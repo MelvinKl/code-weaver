@@ -25,10 +25,15 @@ dedicated pre-publish step pinned line-based; "The release notes name
 the changes since the previous release" — the notes' range base is the
 predecessor release's tag restricted to the numbered series, the notes
 reference it (the first-commit fallback only where no predecessor
-exists), and the diff of the range base against this release's commit
-pinned line-based; "The release notes are never empty for a release
-that publishes changes" — the full-history checkout and the
-whole-tree diff pinned line-based) and in the adjusted
+exists), and the changelog's one row per commit over the range base →
+HEAD range pinned line-based; "The release notes are never empty for
+a release that publishes changes" — the full-history checkout and the
+changelog enumerating one row per commit over the whole range (not a
+pathspec subset of it) pinned line-based; "The release changelog is a
+table of the commits since the last release" — the issue-#18 delta:
+the changelog is a markdown table, its header's per-commit columns and
+each row's title, author, hash and datetime pinned line-based) and in
+the adjusted
 `reuse-by-ref` scenario "Every published version is a stable ref" (whose
 And line — workflows pinned to an older ref keep working — is unchanged:
 both tag series stay immutable, pinnable refs) and in the reworked
@@ -601,8 +606,10 @@ def test_release_notes_name_the_changes_since_the_previous_release():
     integer — no `v` prefix, no dots — the older `v`-prefixed semver
     tags stay out of it, so none can name the reference), keeps the
     first-commit fallback for a release with no predecessor only, and
-    lists the files changed between the predecessor release and this
-    release's commit as the diff of the range base against HEAD."""
+    the notes' changelog is a table with one row per commit in the
+    branch since the predecessor release — the `git log` over the
+    range base → HEAD range (the whole range), with the notes'
+    range-base reference line below it."""
     lines = _read(RELEASE_WORKFLOW).splitlines()
     prev = _first_line_index(lines, "PREV=$(git describe")
     assert prev != -1, (
@@ -619,19 +626,19 @@ def test_release_notes_name_the_changes_since_the_previous_release():
         "the range base is no longer the dichotomy the scenario "
         "encodes — the predecessor release's tag where one exists, the "
         "first commit only where it does not")
-    diff = _first_line_index(lines, 'git diff --stat "$RANGEFROM" HEAD')
-    assert diff != -1, (
-        "the notes no longer list the files changed between the range "
-        "base and this release's commit")
+    changelog = _first_line_index(lines, 'git log "$RANGEFROM"..HEAD')
+    assert changelog != -1, (
+        "the notes' changelog no longer enumerates one row per commit "
+        "in the branch since the range base")
     notes = _first_line_index(lines, "${PREV:-the first commit}")
     assert notes != -1, (
         "the notes do not reference the range base — with the "
         "predecessor release where one exists, the first commit only "
         "where there is no predecessor")
-    assert prev < base < diff and notes > prev, (
+    assert prev < base < changelog < notes, (
         "the notes' reference is not the range base computed above it "
-        "— the computation, the diff and the notes must sit in that "
-        "order in the Publish step")
+        "— the computation, the changelog and the notes must sit in "
+        "that order in the Publish step")
 
 
 def test_release_notes_are_never_empty_for_a_release_that_publishes_changes():
@@ -640,16 +647,17 @@ def test_release_notes_are_never_empty_for_a_release_that_publishes_changes():
     `requirements/auto-release-on-main.feature::The release notes are
     never empty for a release that publishes changes`)
     a release published for a push that changed at least one file
-    lists the files changed since its range base — never an empty
-    list: the checkout fetches full history (a shallow checkout's
-    object database carries no tags, so a release with a predecessor
-    would compute its range base as the shallow clone's "first
-    commit," which is HEAD itself, and the diff behind it prints
-    nothing — full history puts the predecessor's tag in the database
-    and the real first commit at a first release's range base), and
-    the notes' diff spans the whole tree — not a path subset of it
-    (a push that changes files elsewhere still publishes, and a
-    restricted diff would print nothing for it)."""
+    carries a changelog table that is not empty: the checkout fetches
+    full history (a shallow checkout's object database carries no
+    tags, so a release with a predecessor would compute its range base
+    as the shallow clone's "first commit," which is HEAD itself, and
+    the enumeration behind it prints nothing — full history puts the
+    predecessor's tag in the database and the real first commit at a
+    first release's range base), and the changelog enumerates one row
+    per commit over the range base → HEAD range — the whole range, not
+    a pathspec subset of it (a push that changes files elsewhere still
+    publishes, and a restricted enumeration would print no row for
+    it)."""
     lines = _read(RELEASE_WORKFLOW).splitlines()
     checkout = _first_line_index(lines, "actions/checkout")
     depth = _first_line_index(lines, "fetch-depth: 0")
@@ -658,13 +666,60 @@ def test_release_notes_are_never_empty_for_a_release_that_publishes_changes():
         "factory workflow's own stage jobs' fetch-depth: 0 idiom) — a "
         "shallow object database carries no tags, so a release with a "
         "predecessor would fall back to the shallow clone's "
-        "'first commit,' which is HEAD itself, and the notes' list "
+        "'first commit,' which is HEAD itself, and the notes' table "
         "would print empty for a release that publishes changes")
-    diff = _first_line_index(lines, 'git diff --stat "$RANGEFROM" HEAD')
-    assert diff != -1, (
-        "release.yml does not compute the notes' list as the diff of "
-        "the range base against this release's commit")
-    assert " -- " not in lines[diff], (
-        f"the notes' diff is restricted to a path subset of the tree — "
-        f"{lines[diff]!r}: a push that changes files outside that "
-        "subset would publish a release whose list is empty")
+    changelog = _first_line_index(lines, 'git log "$RANGEFROM"..HEAD')
+    assert changelog != -1, (
+        "release.yml does not enumerate the notes' changelog as one "
+        "row per commit over the range base → HEAD range")
+    assert " -- " not in lines[changelog], (
+        f"the notes' changelog enumeration is restricted to a path "
+        f"subset of the range — {lines[changelog]!r}: a push that "
+        "changes commits outside that subset would publish a release "
+        "whose table is empty")
+
+
+def test_release_changelog_is_a_table_of_the_commits_since_the_last_release():
+    """(scenario "The release changelog is a table of the commits
+    since the last release"; reference
+    `requirements/auto-release-on-main.feature::The release changelog
+    is a table of the commits since the last release`)
+    a release published whose branch carries commits since the previous
+    release renders its changelog as a table: the changelog is a
+    markdown table (its header line and the column-separator line that
+    follow it — printed even where the range is empty, so the
+    changelog is never the empty string), the table carries one row
+    per commit in the branch since the previous release (the
+    `git log` enumerates the range base → HEAD range above the table
+    it renders), and each row carries the commit's title, the
+    commit's author, the commit's hash and the commit's datetime — all
+    four fields in the pretty format, in the header's column order.
+    """
+    lines = _read(RELEASE_WORKFLOW).splitlines()
+    header = _first_line_index(lines, "| Title | Author | Hash | Datetime |")
+    assert header != -1, (
+        "the changelog is not a table — the changelog computation "
+        "prints no markdown table header line for its per-commit "
+        "columns")
+    separator = _first_line_index(lines, "|---|---|---|---|")
+    assert separator == header + 1, (
+        "the table's header line is not followed by its "
+        "column-separator line — the changelog would not render as a "
+        "table")
+    enum = _first_line_index(lines, 'git log "$RANGEFROM"..HEAD')
+    assert enum != -1 and enum < header, (
+        "the changelog's rows are not enumerated one per commit over "
+        "the range base → HEAD range (since the previous release) "
+        "above the table they render")
+    fmt = _first_line_index(lines, "--pretty=format:")
+    assert fmt != -1, (
+        "the changelog's rows carry no per-commit fields — the "
+        "enumeration has no pretty format")
+    for field in ("%s", "%an", "%h", "%ad"):
+        assert field in lines[fmt], (
+            f"the changelog's row format lacks its {field} field — "
+            "each row must carry the commit's title, its author, its "
+            "hash and its datetime")
+    assert "--date=" in lines[fmt], (
+        "the changelog's datetime field has no date format — the "
+        "row's datetime column would print git's internal format")

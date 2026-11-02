@@ -29,6 +29,26 @@ consuming job:
   and the arc42 chapters covering the mechanism state the same input,
   the same placement and the same unchanged-when-undeclared behaviour
   on the same surfaces.
+- upgrade (issue 18) — beside the install step, the implement job
+  (stage 8) carries the dependency-upgrade step, inlined workflow text
+  (no new job — the pipeline count stays): positioned after its checkout
+  of the AI branch and before its stage step and its stage-baseline
+  recording, the setting relayed through the documented CW_<name> step
+  env idiom; where the setting (the workflow's optional
+  dependency-upgrade input, default on) is at its default and the target
+  has declared the dependency-install command, the step runs that
+  command to upgrade the project's dependencies to newer versions and
+  commits the footprint to the AI branch — the documented cross-job
+  channel the consuming stages (the implementation stage, the review
+  job's suite run) work through; where the setting is off, or no install
+  command is declared, the step is a no-op — it guards on the relayed
+  value, logs and exits 0 without touching the workspace — and the
+  run's stages, pull request and final status report are unchanged by
+  the upgrade's absence; the documented surfaces (the README — the
+  Inputs-table row and the consumption example — plus the arc42
+  chapters covering the mechanism) state the stage, its default, the
+  turn-off input, the before-implementation placement and the
+  unchanged-when-off behaviour on the same surfaces.
 
 The workflow reads are line-based (stdlib only — the documented
 `on:`/YAML 1.1 gotcha makes a whole-document parse the wrong tool for
@@ -354,3 +374,249 @@ def test_readme_and_arc42_document_the_dependency_install_mechanism():
         assert "the run is unchanged" in t, (
             f"{p} covers the dependency-install mechanism but does not "
             "state that a target that declares nothing runs unchanged")
+
+
+# ── task 4: the dependency-upgrade step (issue 18) ───────────────────
+
+
+def test_upgrade_step_sits_before_the_implementation_stage():
+    """(project-dependencies "The factory's run upgrades the target
+    project's dependencies"; reference
+    `requirements/project-dependencies.feature::The factory's run
+    upgrades the target project's dependencies`) the factory's pipeline
+    carries the dependency-upgrade mechanism as an inlined step in the
+    existing implement job (the job whose stage is the implementation
+    stage, stage 8) — the documented extension idiom: no new job is
+    added, the pipeline count stays. The step is positioned after the
+    job's checkout of the AI branch and before the job's stage step,
+    with the job's stage-baseline recording after the step, so the
+    upgrade's footprint is never counted as the stage's work by the
+    guard (the documented dependency-install placement idiom, chapter
+    7); the setting is relayed through the documented CW_<name> step
+    env idiom, and the step executes where the setting is at its
+    default (on): it has no workflow-level skip, and the body's early
+    exits are only the off value and the no-declared-command no-op —
+    the upgrade command rides the dependency-install input, the
+    documented channel by which a target names a command for its own
+    project environment, and a target that declares none has no upgrade
+    to run. The unchanged-run half mirrors the dependency-install job
+    sweep: no other job carries the step, and where the setting is off
+    the step's no-op path guards on the relayed value, logs the off case
+    and exits before touching the workspace (the off path of "The
+    dependency-upgrade setting is configurable"; reference
+    `requirements/configuration.feature::The dependency-upgrade
+    setting is configurable`)."""
+    factory = _read(FACTORY)
+    region = _job_region(factory, "implement", "review")
+    checkout = _step_index(region,
+                           lambda ln: "- uses: actions/checkout" in ln)
+    step = _step_index(region,
+                       lambda ln: "name:" in ln
+                       and "dependency-upgrade" in ln)
+    stage = _step_index(region,
+                        lambda ln: "Stage 8 — implement the plans" in ln)
+    assert checkout != -1, \
+        "the implement job lost its AI-branch checkout step"
+    assert step != -1, \
+        "the implement job carries no dependency-upgrade step"
+    assert stage != -1, "the implement job lost its stage step"
+    assert checkout < step < stage, (
+        f"the implement job's dependency-upgrade step is not after the "
+        f"checkout and before the stage (checkout line {checkout}, "
+        f"step line {step}, stage line {stage}) — the stage's "
+        "stage-baseline recording measures the stage's work, and a "
+        "footprint after it would be counted as the stage's work by "
+        "the guard")
+    # the stage-baseline recording (the guard's measurement point) is
+    # the stage step's — and it sits after the upgrade step
+    assert "stage-baseline.sha" in _step_block(region, stage), \
+        "the implement job's stage step no longer records the " \
+        "stage-baseline"
+    # the setting is relayed through the documented CW_<name> step env
+    # idiom
+    block = _step_block(region, step)
+    assert "CW_DEPENDENCY_UPGRADE: ${{ inputs.dependency-upgrade }}" \
+        in block, \
+        "the step does not relay the setting through the CW_ step env " \
+        "idiom"
+    # the step executes where the setting is at its default (on): no
+    # workflow-level skip, and the body's early exits are only the off
+    # value and the no-declared-command no-op
+    assert not any(ln.strip().startswith("if:")
+                   for ln in block.splitlines()), \
+        "the upgrade step carries a workflow-level skip — it must run " \
+        "in the job and gate on the relayed setting"
+    assert 'if [ "${CW_DEPENDENCY_UPGRADE:-on}" = "off" ]; then' in block, \
+        "the step does not guard on the relayed setting's off value"
+    assert 'if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]' in block, \
+        "the step has no no-declared-command no-op path — a target " \
+        "that declares none has no upgrade to run (the documented " \
+        "no-op property of the dependency-install input)"
+    # the off path: guard, log, exit 0 — all before the workspace is
+    # touched (the upgrade command, the commit)
+    off = block.index('if [ "${CW_DEPENDENCY_UPGRADE:-on}" = "off" ]')
+    off_exit = block.index("exit 0", off)
+    assert off < off_exit < block.index("bash -c"), \
+        "the off path does not guard, log and exit before the upgrade " \
+        "runs"
+    off_seg = block[off:off_exit]
+    assert "runs without the dependency-upgrade stage" in off_seg, \
+        "the off path does not log that the pipeline runs without the " \
+        "stage"
+    assert "unchanged" in off_seg, \
+        "the off path does not log the run as unchanged by the " \
+        "upgrade's absence"
+    # the unchanged-run half (the dependency-install job-sweep idiom):
+    # only the implement job carries the step
+    job_keys = ("trigger", "setup-pi", "baseline", "extract", "plan",
+                "implement", "review", "pr", "gates", "report")
+    next_of = dict(zip(job_keys, job_keys[1:] + (None,)))
+    for job in job_keys:
+        region = _job_region(factory, job, next_of[job])
+        upgrade = [ln for ln in region.splitlines()
+                   if ln.startswith("      - name: ")
+                   and "dependency-upgrade" in ln]
+        if job == "implement":
+            assert len(upgrade) == 1, \
+                "the implement job must carry exactly one " \
+                "dependency-upgrade step"
+        else:
+            assert not upgrade, (
+                f"the {job} job gained a dependency-upgrade step — the "
+                "mechanism is an inlined step in the consuming job "
+                "only; a step in another job would change the run's "
+                "stages, pull request or final status report")
+
+
+def test_upgrade_footprint_reaches_the_consuming_stages_intact():
+    """(project-dependencies "The dependency upgrade does not break the
+    project's current functionality"; reference
+    `requirements/project-dependencies.feature::The dependency upgrade
+    does not break the project's current functionality`) the upgrade's
+    footprint reaches the run's consuming stages through the AI branch
+    — the branch is the only documented cross-job workspace channel
+    (chapter 7: each job's checkout replaces the workspace, so a change
+    in one job's workspace reaches the next job only once it is
+    committed to the branch): the implement job's upgrade step commits
+    the footprint to the checked-out AI branch, and the job pushes the
+    branch after the step; the review job's checkout of the same branch
+    (the trigger-state relay) materialises the upgraded tree, where the
+    review job's existing documented dependency-install step installs
+    the upgraded set before the stage — the make test suite run (which
+    executes every scenario) runs against a project whose functionality
+    is intact."""
+    factory = _read(FACTORY)
+    impl = _job_region(factory, "implement", "review")
+    step = _step_index(impl,
+                       lambda ln: "name:" in ln
+                       and "dependency-upgrade" in ln)
+    assert step != -1, \
+        "the implement job carries no dependency-upgrade step"
+    block = _step_block(impl, step)
+    # the footprint commits to the checked-out branch (the AI branch),
+    # after the upgrade runs
+    assert "git commit" in block, \
+        "the upgrade step never commits the footprint — the consuming " \
+        "stages could not see the upgraded project"
+    assert block.index("bash -c") < block.index("git commit"), \
+        "the upgrade step commits before the upgrade runs"
+    # and the commit rides the branch work the job pushes — the
+    # cross-job channel
+    push = _step_index(impl, lambda ln: "Push the AI branch" in ln)
+    assert push != -1, "the implement job lost its AI-branch push step"
+    assert step < push, \
+        "the implement job does not push the AI branch after the " \
+        "upgrade step — the footprint would not leave the job"
+    # the review job's checkout of the same branch materialises the
+    # upgraded tree, and its documented dependency-install step then
+    # installs the upgraded set before the stage's suite run
+    review = _job_region(factory, "review", "pr")
+    rcheckout = _step_index(review,
+                            lambda ln: "- uses: actions/checkout" in ln)
+    rinstall = _step_index(review,
+                           lambda ln: "name:" in ln
+                           and "dependency-install" in ln)
+    rstage = _step_index(review,
+                         lambda ln:
+                         "Stage 10-11 — run the oracle, review, fix" in ln)
+    assert rcheckout != -1, \
+        "the review job lost its AI-branch checkout step"
+    assert rinstall != -1, \
+        "the review job lost its dependency-install step"
+    assert rstage != -1, "the review job lost its stage step"
+    assert rcheckout < rinstall < rstage, (
+        "the review job's dependency-install step is not after the "
+        "checkout and before the stage — the suite run would not work "
+        "against the upgraded environment")
+    assert "ref: ${{ steps.state.outputs.checkout-ref }}" in \
+        _step_block(review, rcheckout), (
+        "the review job's checkout does not take the AI branch from the "
+        "trigger-state relay — the documented cross-job channel the "
+        "upgrade's footprint rides")
+
+
+# ── task 5: the documented surfaces state the same (issue 18) ────────
+
+
+def test_readme_and_arc42_document_the_dependency_upgrade_stage():
+    """(project-dependencies "The README and the arc42 documentation
+    describe the dependency-upgrade stage"; reference
+    `requirements/project-dependencies.feature::The README and the
+    arc42 documentation describe the dependency-upgrade stage`) the
+    documented surfaces (the README plus every arc42 chapter, the
+    AI-activity section cut) state the mechanism on the same surfaces:
+    the README's Inputs-table entry names the setting with its on
+    default, the consumption example shows the setting in the with:
+    block, and every surface that covers the mechanism states the
+    stage, its default, the turn-off input, the before-implementation
+    placement and the unchanged-when-off behaviour (a run with the
+    setting off — the stages, the pull request and the final status
+    report as if the mechanism were absent — the documented
+    unchanged-by-the-mechanism's-presence property, the step's no-op)."""
+    surfaces = _doc_surfaces()
+    by_relpath = dict(surfaces)
+    # the README's Inputs-table entry names the setting with its on
+    # default — and how a target turns it off
+    readme = by_relpath["README.md"]
+    assert "| dependency-upgrade | on |" in readme, \
+        "the README's Inputs table has no dependency-upgrade entry"
+    # and the consumption example shows the setting in the with: block
+    raw = _read("README.md")
+    start = raw.index("## Consume it")
+    end = raw.find("\n## ", start)
+    example = raw[start:end] if end != -1 else raw[start:]
+    assert "dependency-upgrade:" in example, \
+        "the README's consumption example does not show the setting"
+    # the arc42 chapters that cover the mechanism name the same setting
+    covering = [p for p, t in surfaces if "dependency-upgrade" in t]
+    for p in ("docs/04-context-and-scope.md",
+              "docs/05-solution-strategy.md",
+              "docs/06-building-block-view.md", "docs/07-runtime-view.md",
+              "docs/08-deployment-view.md", "docs/11-glossary.md"):
+        assert p in covering, \
+            f"{p} no longer covers the dependency-upgrade mechanism"
+    # the scenario's And step: the arc42 documentation covering the
+    # same mechanism states the same — every surface that names the
+    # setting also states the stage, its default, the turn-off input,
+    # the before-implementation placement and the unchanged-when-off
+    # behaviour
+    for p, t in surfaces:
+        if "dependency-upgrade" not in t:
+            continue
+        assert "upgrades the project's dependencies to newer versions" in t, (
+            f"{p} covers the dependency-upgrade mechanism but does not "
+            "state that the stage upgrades the project's dependencies "
+            "to newer versions")
+        assert "default is on" in t, (
+            f"{p} covers the dependency-upgrade mechanism but does not "
+            "state that the setting's default is on")
+        assert "dependency-upgrade: off line in the with: block" in t, (
+            f"{p} covers the dependency-upgrade mechanism but does not "
+            "state how a target turns the setting off through its "
+            "consumer workflow")
+        assert "before the implementation stage" in t, (
+            f"{p} covers the dependency-upgrade mechanism but does not "
+            "state that the stage runs before the implementation stage")
+        assert "unchanged by the upgrade's absence" in t, (
+            f"{p} covers the dependency-upgrade mechanism but does not "
+            "state that a run with the setting off is unchanged")

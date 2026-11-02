@@ -29,7 +29,31 @@ stage-baseline recording, so the install's footprint is never counted as
 the stage's work by the guard. Where the input is empty the step is a
 no-op (it logs and exits without touching the workspace): a target that
 declares nothing runs unchanged — the run is unchanged by the
-mechanism's presence. The report job's
+mechanism's presence. The `implement` job additionally runs the
+target's dependency-upgrade step — the optional `dependency-upgrade`
+setting (the setting's default is `on`; a target turns it off through
+its consumer workflow — a `dependency-upgrade: off` line in the
+`with:` block, like `max-loops`) decides whether it runs — after its
+checkout of the AI branch and before its stage step and its
+stage-baseline recording, so the upgrade's footprint is never counted
+as the implementation stage's work by the guard: the step runs before
+the implementation stage. Where the setting is on and the target has
+declared a `dependency-install` command, the stage upgrades the
+project's dependencies to newer versions: the step runs that command
+and commits the footprint to the AI branch — each job's checkout
+replaces the
+workspace, so the branch is the only documented cross-job channel the
+footprint rides: the consuming stages (the implementation stage in the
+same job, the `review` job, whose dependency-install step installs the
+upgraded set for the `make test` suite run) work against an upgraded
+project whose test suite still passes — the upgrade does not break the
+project's current functionality. Where the setting is off — or no
+command is declared — the step is a no-op (it guards on the value
+relayed through the documented `CW_<name>` step-env idiom, chapter 3,
+logs and exits without touching the workspace): the pipeline runs
+without the dependency-upgrade stage, no other job gains a step, and
+the run's stages, pull request and final status report are unchanged by
+the upgrade's absence. The report job's
 inlined status-report step draws its plumbing names across the same stash
 boundary (chapter 6: the runtime tree in `$RUNNER_TEMP`): where the shared
 module resolves from the stashed tree the step's `import common` binds the

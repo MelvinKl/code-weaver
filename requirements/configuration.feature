@@ -61,6 +61,13 @@ Feature: Configuration surface
     And the resolved configuration records the removed caps
 
   @config
+  Scenario: The dependency-upgrade setting is configurable
+    Given the default for the dependency-upgrade setting is on
+    When a target turns it off via its workflow inputs
+    Then the run's pipeline runs without the dependency-upgrade stage
+    And the run's stages, pull request and final status report are unchanged by the upgrade's absence
+
+  @config
   Scenario: Settings flow from workflow inputs to stage environment
     Given the target repo passes its settings via with on the reusable workflow
     When the factory runs

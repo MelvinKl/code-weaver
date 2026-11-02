@@ -34,7 +34,18 @@ dependency-install step targets the project's working environment. The
 run executes the declared command in the jobs whose stages consume it,
 after each job's checkout and before its stage; a target that leaves the
 input undeclared runs unchanged — the step is a no-op, and the run is
-unchanged by the mechanism's presence.
+unchanged by the mechanism's presence. The `with:` block may also
+declare the optional `dependency-upgrade` setting — whether the run's
+pipeline runs the dependency-upgrade stage: the stage upgrades the
+project's dependencies to newer versions, before the implementation
+stage. Project configuration, not a secret value (the chapter-3
+constraint holds on the input channel), and not a fifth harness
+element. The setting's default is `on`; a target turns the stage off
+through its consumer workflow (a `dependency-upgrade: off` line in the
+`with:` block, like `max-loops`). Where the setting is off, the
+pipeline runs without the stage, and the run is unchanged: the run's
+stages, pull request and final status report are unchanged by the
+upgrade's absence.
 
 **Upgrades are a ref bump.** `release.yml` fires on the main branch's
 advance: it tags the advance's head with the next single increasing
