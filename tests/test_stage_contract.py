@@ -156,6 +156,24 @@ The pins (one per scenario the fix loop had to fulfil):
   PR-triggered workflows must be green", "the gate sees the PR's runs on
   a busy repo", "a head with no PR-triggered workflow is vacuously
   green");
+- the stage-completion push: a generation stage that completes clean
+  pushes the AI branch to the remote inside the stage machinery — the
+  shared loop's completion points (after the guard has passed, and the
+  no-op exit path), not only the job-tail workflow step a terminated
+  run never reaches — so a run terminated after the stage completes
+  loses none of the completed stage's work; the branch name resolves
+  through the documented stage-value channel (the AI_BRANCH job env,
+  the CW_/trigger-state fallback), an unresolvable branch (an idle
+  run) skips with a log line, and a push that actually fails fails the
+  stage (safety "A completed stage's work is committed and pushed to
+  the AI branch"); for the implement stage, whose per-step loop runs one
+  shared-loop call per step, the loop's completion push is a push after
+  each completed step — before the stage starts the next step — and the
+  sandbox proves that order from the sequence the fake model records
+  (the step's commit, then the push, then the next step's pi call), the
+  pushed tip's tree holding the flipped plan checkbox — a re-triggered
+  run finds the step still done (implement "Every completed
+  implementation step is committed and pushed");
 - no test in the suite spawns the real git binary: the factory's python
   routes every git call through one mockable function (the shared
   module's git_exec — each inline workflow step carries its own copy of
@@ -195,21 +213,42 @@ def _read(relpath):
 # same one-function shape) — and the sandboxes mock that one function
 # with this small in-memory model of a git repository: commits as
 # file-content snapshots, the worktree as the real temp files the test
-# writes. The production code under test runs its real logic against the
-# fake; no process is ever spawned for a git call.
+# writes, pushes recorded (the model keeps them no-ops), and — where a
+# sandbox names the model's events file — an ordered log of the model's
+# git calls appended to that file, which the sandbox's fake `pi`
+# interleaves with its own invocation lines. The production code under
+# test runs its real logic against the fake; no process is ever spawned
+# for a git call.
 
 class _FakeRepo:
     """A model of one git repository: `commits` maps a sha to the tree
     it holds ({relpath: content}), `heads` lists the shas in commit
     order (HEAD = the last), `index` is the tracked set. The worktree is
     the real directory tree the test writes under `root` — the model
-    reads it for the worktree side of every comparison."""
+    reads it for the worktree side of every comparison. `pushes` records
+    the push invocations the production code under test makes — each as
+    (target branch, branch tip at the push moment), the model keeping a
+    push a no-op: the stage-completion push the stage machinery makes at
+    its completion points is asserted on by the stage-sandbox tests
+    (safety: "a completed stage's work is committed and pushed to the AI
+    branch"). `events_file` (None by default; a sandbox names it to turn
+    the recording on) is the file the model appends one line to per git
+    call it handles (the commit's new sha, the push's target branch and
+    tip, the plain subcommand otherwise): where a sandbox must prove the
+    order of the stage's git calls against the stage's pi calls — the
+    implement sandbox's push-before-the-next-step assertion — its fake
+    `pi` appends its own invocation line to the same file, so the test
+    reads one ordered sequence interleaving the two (the pi subprocess
+    runs while the stage process is blocked, the git calls run when it
+    resumes — the appends are strictly ordered)."""
 
     def __init__(self, root):
         self.root = root
         self.commits = {}
         self.heads = []
         self.index = set()
+        self.pushes = []
+        self.events_file = None
         self._n = 0
 
     def _read(self, rel):
@@ -291,8 +330,17 @@ class _FakeRepo:
         cmd = [str(a) for a in argv]
         out, err, code = "", "", 0
         sub = cmd[0] if cmd else ""
-        if sub in ("init", "config", "fetch", "push", "branch"):
+        if sub in ("init", "config", "fetch", "branch"):
             pass
+        elif sub == "push":
+            # recorded no-op: the production code under test may push
+            # (the stage-completion push), and the sandbox's assertions
+            # read what the push carried — the push's target branch and
+            # the branch tip at the push moment
+            refs = [a for a in cmd[1:]
+                    if not a.startswith("-") and "://" not in a]
+            self.pushes.append((refs[-1] if refs else None,
+                                self.heads[-1] if self.heads else None))
         elif sub == "add":
             if "-A" in cmd or "--all" in cmd:
                 self.index |= set(self.worktree_files())
@@ -419,6 +467,26 @@ class _FakeRepo:
             code, err = 129, (f"the fake git model does not cover `git "
                                f"{sub}` — a test's git call bypassed the "
                                "sandbox's fake model")
+        # the events file the sandbox named: one appended line per handled
+        # call (the commit's new sha, the push's target branch and tip,
+        # the plain subcommand otherwise) — the sandbox's fake `pi`
+        # appends its own invocation line to the same file, so the test
+        # reads one ordered sequence interleaving the stage's git calls
+        # with its pi calls; a log-write failure is swallowed (the fake
+        # stays a no-op recorder, never a source of stage failure)
+        if self.events_file is not None:
+            if sub == "commit" and self.heads:
+                entry = "commit " + self.heads[-1]
+            elif sub == "push" and self.pushes:
+                entry = ("push " + str(self.pushes[-1][0])
+                         + " " + str(self.pushes[-1][1]))
+            else:
+                entry = sub or "(no subcommand)"
+            try:
+                with open(self.events_file, "a", encoding="utf-8") as f:
+                    f.write(entry + "\n")
+            except OSError:
+                pass
         return subprocess.CompletedProcess(cmd, code, out, err)
 
 
@@ -3487,7 +3555,12 @@ def test_implement_stage_has_no_plan_loop_back():
 # the template's work-one-open-step rule), and closes with a
 # usage-carrying JSONL event stream (a message_end with input/output
 # usage, then agent_settled) the way a real `pi --mode json` call's stdout
-# reads.
+# reads. Where the sandbox names the events file (the FAKE_PI_EVENTS env
+# entry), it also appends its own invocation line to that file — the same
+# file the sandbox's fake git model appends to for every git call it
+# handles — so the sandbox's test reads one ordered sequence interleaving
+# the stage's pi calls with its git calls (the per-step push lands in
+# that sequence between the step's commit and the next step's call).
 _FAKE_PI_IMPLEMENT = (
         "#!" + sys.executable + "\n"
         "import json, os, re, sys\n"
@@ -3499,6 +3572,13 @@ _FAKE_PI_IMPLEMENT = (
         "      if os.path.exists(cf) else 0) + 1\n"
         "with open(cf, 'w') as f:\n"
         "    f.write(str(n))\n"
+        "ef = os.environ.get('FAKE_PI_EVENTS')\n"
+        "if ef:\n"
+        "    d = os.path.dirname(ef)\n"
+        "    if d:\n"
+        "        os.makedirs(d, exist_ok=True)\n"
+        "    with open(ef, 'a') as f:\n"
+        "        f.write('pi\\n')\n"
         "arg = sys.argv[-1]\n"
         "plan_rel = arg[1:] if arg.startswith('@') else None\n"
         "if plan_rel is None:\n"
@@ -3723,6 +3803,128 @@ def test_implement_fully_tracked_plan_logs_full_step_count():
         ns["cleanup"]()
 
 
+def test_every_completed_implement_step_is_committed_and_pushed():
+    """(implement "Every completed implementation step is committed and
+    pushed" — new scenario; reference
+    `requirements/implement.feature::Every completed implementation step
+    is committed and pushed`) the implement stage works the plan one step
+    at a time — the sandbox's fake `pi` flips the plan's first open step
+    per call (the sandbox plan holds two open steps, so the stage's
+    per-step loop runs the shared generation loop once per step) — and
+    the shared loop's stage-completion push is the mechanism that makes
+    each completed step's work durable: after each clean iteration (the
+    step's changes committed, the guard passed) the loop pushes the AI
+    branch before returning to the stage's per-step loop, so a push of
+    the AI branch lands after each completed step's commit and before
+    the stage starts the next step. The test asserts the git-call order
+    the fake model records — the step-1 commit, then the push, then the
+    step-2 pi call (the sandbox's fake `pi` appends its own line to the
+    model's events file, so the sequence interleaves the two), then the
+    step-2 commit and its push — and that the first push's tip carries
+    the state a run terminated after that push keeps on the remote
+    branch: the pushed tip's tree holds the plan file with the step-1
+    checkbox marked `- [x]` (the step's commit sweeps the working tree —
+    the flipped checkbox rides in the same commit the push carries) — so
+    a re-triggered run reusing the remote branch (the resume semantics)
+    reads the plan file at the remote tip and finds the step still
+    marked done; the last push's tip holds every step done and is the
+    branch tip the stage leaves."""
+    ns = _implement_stage_sandbox(
+        "# Issue 74\n\n## Steps\n\n"
+        "- [ ] a first step\n"
+        "- [ ] a second step\n")
+    ws_fake = _FAKE_REPOS[os.path.realpath(ns["repo"])]
+    # the ordered event log: the fake model appends one line per git call
+    # it handles, the sandbox's fake `pi` appends its own invocation line
+    # to the same file — the two write to one file, so the test reads a
+    # single sequence interleaving the stage's git calls with its pi calls
+    events = os.path.join(ns["rt"], "cw", "git-events.log")
+    ws_fake.events_file = events
+    # the documented stage-value channel the stage-completion push
+    # resolves (the AI_BRANCH job env every stage job writes, the
+    # push idiom's GITHUB_REPOSITORY/GH_TOKEN riding along), and the
+    # events file the sandbox's fake `pi` appends to
+    extra = ("AI_BRANCH", "GITHUB_REPOSITORY", "GH_TOKEN",
+             "FAKE_PI_EVENTS")
+    saved = {k: os.environ.get(k) for k in extra}
+    for k in extra:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "AI_BRANCH": "ai/code-weaver/74",
+        "GITHUB_REPOSITORY": "code-weaver/target",
+        "GH_TOKEN": "fake-token",
+        "FAKE_PI_EVENTS": events,
+    })
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ns["repo"])
+    try:
+        ns["mod"].main()
+        console = open(os.path.join(ns["rt"], "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        lines = [l for l in console.splitlines() if l.strip()]
+        # the per-step loop ran the shared loop once per completed step —
+        # both of the plan's open steps worked and marked done
+        assert ("stage 8 implementation: clean — step 1/2 of the plan "
+                "done; 1 step(s) remain") in lines, console
+        assert ("stage 8 implementation: all 2 plan steps done — "
+                "stage complete") in lines, console
+        # the stage-completion push fired once per completed step, on the
+        # AI branch — inside the stage machinery, before the run proceeds
+        assert [b for b, _ in ws_fake.pushes] == [
+            "ai/code-weaver/74", "ai/code-weaver/74"], ws_fake.pushes
+        (step1_branch, step1_tip) = ws_fake.pushes[0]
+        (step2_branch, step2_tip) = ws_fake.pushes[1]
+        assert step1_tip != step2_tip, \
+            "the stage pushed the same branch tip for both completed steps"
+        assert step2_tip == ws_fake.heads[-1], \
+            "the last push is not the branch tip the stage left"
+        # the git-call order the fake model records: the step-1 commit,
+        # then the push of the AI branch, then the step-2 pi call (the
+        # push precedes the next step), then the step-2 commit and its push
+        ev = [l.strip()
+              for l in open(events, encoding="utf-8").read().splitlines()
+              if l.strip()]
+        pi_calls = [i for i, l in enumerate(ev) if l == "pi"]
+        assert len(pi_calls) == 2, \
+            f"the stage ran one pi call per completed step: {ev!r}"
+        i_c1 = ev.index(f"commit {step1_tip}")
+        i_p1 = ev.index(f"push {step1_branch} {step1_tip}")
+        i_c2 = ev.index(f"commit {step2_tip}")
+        i_p2 = ev.index(f"push {step2_branch} {step2_tip}")
+        assert i_c1 < i_p1 < pi_calls[1] < i_c2 < i_p2, \
+            f"the push must land after the step's commit and before the " \
+            f"stage starts the next step: {ev!r}"
+        # the first push's tip — the remote state a run terminated right
+        # after it keeps — carries the step-1 commit's tree: the plan
+        # file with the step-1 checkbox flipped done, step 2 still open
+        plan1 = ws_fake.commits.get(step1_tip, {}).get("plans/74.md")
+        assert plan1 is not None, \
+            "the pushed tip does not carry the plan file"
+        assert "- [x] a first step" in plan1, plan1
+        assert "- [ ] a second step" in plan1, plan1
+        # …and the last push's tip holds every step marked done: a
+        # re-triggered run reuses the remote branch and reads the plan
+        # file from it, finding every completed step still done
+        plan2 = ws_fake.commits.get(step2_tip, {}).get("plans/74.md")
+        assert "- [x] a first step" in plan2 and \
+               "- [x] a second step" in plan2, plan2
+        # the stage's per-step loop left the plan fully tracked in the
+        # worktree — committed and pushed
+        plan = open(os.path.join(ns["repo"], "plans", "74.md"),
+                    encoding="utf-8").read()
+        assert "- [ ]" not in plan, plan
+        assert plan.count("- [x]") == 2, plan
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        ns["cleanup"]()
+
+
 def test_single_call_stages_keep_plain_completion_line():
     """(implement "The single-call stages keep the plain completion
     line" — new scenario; reference
@@ -3841,6 +4043,157 @@ def test_single_call_stages_keep_plain_completion_line():
             else:
                 sys.modules[k] = v
         sys.modules.pop("cw_plan_stage_sandbox", None)
+        restore_git()
+        _FAKE_REPOS.pop(ws_key, None)
+        for d in (ws, rt, fake):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def test_completed_stage_work_is_committed_and_pushed():
+    """(safety "A completed stage's work is committed and pushed to the
+    AI branch" — new scenario; reference
+    `requirements/safety.feature::A completed stage's work is committed
+    and pushed to the AI branch`) a single-call generation stage (the
+    plan stage) run to clean completion in the stage sandbox (a temp
+    workspace the fake model tracks as a git repo, a temp state dir, the
+    fake `pi` on PATH writing the stage's one allowed plan file): the
+    stage's generation call commits the plan file on the AI branch, the
+    guard passes, and the shared generation loop pushes the AI branch to
+    the remote as part of the stage completing — the push moves from the
+    job-tail workflow step (a step a terminated run never reaches) into
+    the stage machinery: a push of the AI branch is recorded after the
+    stage's commit, and the pushed tip is the commit carrying the
+    stage's changed file — a run terminated after the stage completes
+    loses none of the completed stage's work (the remote branch holds
+    it; the job tail's push step stays as the job's final sync). The
+    push reuses the factory's sanitised push idiom (the token rewritten
+    out of the log, the GIT_CONFIG hygiene) and resolves the branch name
+    through the documented stage-value channel — the AI_BRANCH job env
+    every stage job writes, with the CW_/trigger-state fallback; where
+    the branch is unresolvable (an idle run) it skips with a log line
+    rather than failing, and a push that actually fails fails the
+    stage."""
+    import shutil
+    import tempfile
+    spec = importlib.util.spec_from_file_location(
+        "cw_plan_push_sandbox",
+        os.path.join(ROOT, ".github", "actions", "plan-stage", "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_plan_push_sandbox"] = mod
+    spec.loader.exec_module(mod)
+    # the stage's git traffic (the guard call in its loop, and its
+    # stage-completion push) rides the mocked single entry point — the
+    # fake model records the push
+    restore_git = _patch_git_exec()
+    ws = tempfile.mkdtemp(prefix="cw-plan-push-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-plan-push-rt-")
+    fake = tempfile.mkdtemp(prefix="cw-plan-push-fake-")
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n")
+    ws_fake = _FakeRepo(ws)
+    ws_key = os.path.realpath(ws)
+    _FAKE_REPOS[ws_key] = ws_fake
+    ws_fake.exec(["init", "-q"])
+    ws_fake.exec(["add", "-A"])
+    ws_fake.exec(["commit", "-qm", "baseline"])
+    baseline = ws_fake.exec(["rev-parse", "HEAD"]).stdout.strip()
+    assert baseline, "the sandbox's fake baseline commit failed"
+    cw = os.path.join(rt, "cw")
+    os.makedirs(os.path.join(cw, "state", "trigger"))
+    with open(os.path.join(cw, "baseline.sha"), "w") as f:
+        f.write(baseline + "\n")
+    with open(os.path.join(cw, "stage-baseline.sha"), "w") as f:
+        f.write(baseline + "\n")
+    with open(os.path.join(cw, "state", "trigger", "issue-number.txt"),
+              "w") as f:
+        f.write("74\n")
+    os.makedirs(os.path.join(fake, "bin"))
+    # the fake `pi` plays the planner: it writes the plan file and closes
+    # with a usage-carrying JSONL event stream the way a real
+    # `pi --mode json` call's stdout reads
+    with open(os.path.join(fake, "bin", "pi"), "w") as f:
+        f.write("#!" + sys.executable + "\n"
+                "import json, os\n"
+                "ws = os.environ['GITHUB_WORKSPACE']\n"
+                "os.makedirs(os.path.join(ws, 'plans'), exist_ok=True)\n"
+                "with open(os.path.join(ws, 'plans', '74.md'), 'w',\n"
+                "          encoding='utf-8') as f:\n"
+                "    f.write('# Issue 74\\n\\n## Steps\\n\\n- [ ] a step\\n')\n"
+                "print(json.dumps({'type': 'message_end', 'message': {\n"
+                "    'role': 'assistant',\n"
+                "    'content': 'the plan is written',\n"
+                "    'usage': {'input': 4, 'output': 2}}}))\n"
+                "print(json.dumps({'type': 'agent_settled'}))\n")
+    os.chmod(os.path.join(fake, "bin", "pi"), 0o755)
+    keys = ("GITHUB_WORKSPACE", "RUNNER_TEMP", "LLM_MODEL", "MAX_LOOPS",
+            "PATH", "PLAN_DIR", "REQUIREMENTS_DIR", "DOC_DIR",
+            "BASELINE_REF", "CW_ISSUE_NUMBER", "INPUT_ISSUE_NUMBER",
+            "AI_BRANCH", "CW_AI_BRANCH", "GITHUB_REPOSITORY", "GH_TOKEN")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "GITHUB_WORKSPACE": ws,
+        "RUNNER_TEMP": rt,
+        "LLM_MODEL": "fake-model",
+        "MAX_LOOPS": "5",
+        "PATH": os.path.join(fake, "bin") + os.pathsep + (saved["PATH"] or ""),
+        "PLAN_DIR": "plans",
+        # the documented stage-value channel the stage-completion push
+        # resolves: the AI_BRANCH job env every stage job writes
+        "AI_BRANCH": "ai/code-weaver/74",
+        "GITHUB_REPOSITORY": "code-weaver/target",
+        "GH_TOKEN": "fake-token",
+    })
+    saved_mods = {k: sys.modules.get(k) for k in ("common", "stages")}
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ws)
+    try:
+        mod.main()
+        console = open(os.path.join(rt, "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        lines = [l for l in console.splitlines() if l.strip()]
+        # the single-call stage completed clean on its generation call:
+        # the plan file the fake `pi` wrote landed, committed, guard-clean
+        assert "stage 6 planning: clean — stage complete" in lines, console
+        # the stage-completion push: the shared loop pushed the AI branch
+        # after the stage's commit, before the run proceeds — the fake
+        # model recorded it
+        assert ws_fake.pushes, (
+            "the stage completed but pushed nothing — the job-tail "
+            "workflow step a terminated run never reaches was the "
+            "stage's only push")
+        branch, tip = ws_fake.pushes[-1]
+        assert branch == "ai/code-weaver/74", (
+            f"the push carried a branch other than the AI branch: "
+            f"{branch!r}")
+        # the push is recorded AFTER the stage's commit: the pushed tip
+        # is the stage's commit (not the baseline the stage started on)
+        assert tip != baseline, \
+            "the push recorded the stage's baseline as its tip — the " \
+            "stage's commit is not on it"
+        assert tip == ws_fake.heads[-1], \
+            "the push's tip is not the branch tip the stage left"
+        # and the pushed tip carries the stage's changed file — a run
+        # terminated after the push keeps it on the remote branch
+        assert "plans/74.md" in ws_fake.commits[tip], \
+            "the pushed tip does not carry the stage's changed file"
+        assert ws_fake.commits[tip]["plans/74.md"] == \
+            "# Issue 74\n\n## Steps\n\n- [ ] a step\n"
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        for k, v in saved_mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        sys.modules.pop("cw_plan_push_sandbox", None)
         restore_git()
         _FAKE_REPOS.pop(ws_key, None)
         for d in (ws, rt, fake):

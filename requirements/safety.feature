@@ -43,6 +43,13 @@ Feature: Secrets and safety
     And the partial work stays on the AI branch, reviewable via the PR
 
   @safety
+  Scenario: A completed stage's work is committed and pushed to the AI branch
+    Given a factory stage has finished its work on the AI branch
+    When the stage completes and the run proceeds to the next stage
+    Then the stage's changes are committed to the AI branch and the branch is pushed
+    And a run terminated after that stage loses none of the completed stage's work
+
+  @safety
   Scenario: The factory tolerates arc42 structure variance
     Given a target project's arc42 markdown files use a different structure variant
     When the extraction stage runs

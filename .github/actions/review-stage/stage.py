@@ -29,7 +29,13 @@ Bounded by MAX_LOOPS (0 = no cap). Each iteration — test output,
 verdict, reviewer report, fix directive — is logged into the state dir
 and travels as a workflow artifact: the audit trail lives in the
 workflow log/artifacts, and nothing under test-results/ is ever
-committed to the repo.
+committed to the repo. The fix loop pushes the AI branch after each
+fix commit (the branch is the documented cross-job channel), and at
+the stage's completion point (the suite green and every in-scope
+scenario fulfilled — or the vacuous empty-delta pass) the stage pushes
+the branch too: a no-op in the normal case, its fix iterations already
+pushing — the guarantee is explicit and uniform (safety: "a completed
+stage's work is committed and pushed to the AI branch").
 
 The review call's captured output is the model's FULL transcript: the pi
 invocation runs `--print --mode json` and the harness reconstructs EVERY
@@ -430,6 +436,11 @@ def main() -> None:
             open(common.state_file("stage-summary.txt"), "a").write(
                 "stage 10 test-and-review: green — no changed "
                 "requirements and no test-referenced scenario to judge\n")
+            # the completion push: the vacuous pass commits nothing, the
+            # branch tip is where the fix loop left it — the push is the
+            # redundant sync that makes the push-at-completion guarantee
+            # explicit and uniform
+            stages.stage_push("stage 10-11 test & review")
             return
 
         if res is None and rrc == 124:
@@ -451,6 +462,12 @@ def main() -> None:
                 common.log(f"stage 10: suite green — all {len(verdicts)} scenarios FULFILLED")
                 open(common.state_file("stage-summary.txt"), "a").write(
                     f"stage 10 test-and-review: green — {len(verdicts)} scenarios fulfilled\n")
+                # the completion push: the fix iterations already pushed
+                # after each fix commit, so in the normal case this is the
+                # no-op that keeps the guarantee explicit and uniform — a
+                # run terminated after the stage completes loses none of
+                # the stage's work
+                stages.stage_push("stage 10-11 test & review")
                 return
             bad_desc = "\n".join(f"- {f}::{name} — {ev}" for f, name, ev in unfulfilled)
             directive = (

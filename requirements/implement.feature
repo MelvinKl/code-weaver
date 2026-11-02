@@ -35,6 +35,14 @@ Feature: Implementation
     And it keeps doing this until every step is done or the time/token limit (a loop cap) is reached
 
   @implement
+  Scenario: Every completed implementation step is committed and pushed
+    Given the implement stage works the plan one step at a time
+    When a completed step's changes are committed on the AI branch
+    Then the stage pushes the AI branch before it starts the next step
+    And a run terminated after that push keeps the completed step's work on the remote branch
+    And a re-triggered run finds the step still marked done in the plan file
+
+  @implement
   Scenario: Tests are generated for the new behaviour
     When the implement stage runs
     Then tests covering the new behaviour are added under tests/

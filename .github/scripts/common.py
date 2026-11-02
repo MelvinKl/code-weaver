@@ -754,6 +754,17 @@ def commit_all(message: str) -> bool:
     return True
 
 
+def ai_branch() -> str:
+    """The run's AI branch name — the documented stage-value channel:
+    the `AI_BRANCH` job env every stage job writes, then the `CW_` env
+    entry, then the trigger's state file (the artifact channel the other
+    stage values ride). Empty string where the run resolves no branch
+    (an idle run) — the stage-completion push then skips with a log line
+    rather than failing."""
+    return (os.environ.get("AI_BRANCH") or os.environ.get("CW_AI_BRANCH")
+            or cw_state("ai-branch") or "")
+
+
 def push_branch(branch: str, force: bool = True) -> None:
     token = os.environ.get("GH_TOKEN", "")
     origin = f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}"

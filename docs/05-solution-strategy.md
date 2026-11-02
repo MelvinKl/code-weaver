@@ -72,7 +72,19 @@ Key mechanisms:
 - **Branch hygiene.** All writes land on `ai/code-weaver/<issue>`; a
   re-triggered run *reuses* the existing AI branch (a fresh cut happens
   only when the branch is absent); the target branch is never touched by
-  the factory, and a broken stage cannot corrupt it.
+  the factory, and a broken stage cannot corrupt it. A completed
+  stage's work is committed and pushed to the AI branch as part of
+  stage completion — inside the stage machinery, not only the job's
+  tail: the shared generation loop pushes after each clean iteration
+  (the single-call stages' push at stage completion; the implement
+  stage's push after each completed step, before the next step starts),
+  the dependency-upgrade step pushes after its own commit, and the
+  review stage pushes at its completion point — a run terminated after
+  a stage completes loses none of the completed stage's work; the push
+  fires only after the guard has passed (a violating iteration is never
+  pushed — the remote branch stays at the last completed clean state),
+  and a push that actually fails fails the stage (its work would not be
+  on the remote, and the next stage or a re-trigger would lose it).
 - **The project's dependency-install step.** The optional
   `dependency-install` input (the consumer's `with:` block) names a
   command, and the run's pipeline executes it in the two stage jobs

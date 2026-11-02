@@ -5,6 +5,10 @@ review-stage) imports this and keeps the same contract:
   - loops are bounded by MAX_LOOPS — 0 means no cap
   - the guard is the one shared idiom (common.guard / guard-check.py)
   - iteration state & logs live in the state dir, never the repo tree
+  - the generation loop pushes the AI branch at the stage's completion
+    points (stage_push) — a completed stage's work is committed and
+    pushed before the run proceeds (safety: "a completed stage's work
+    is committed and pushed to the AI branch")
 """
 from __future__ import annotations
 
@@ -251,6 +255,50 @@ def under(path: str, prefix: str) -> bool:
     return path == p or path.startswith(p + "/")
 
 
+def stage_push(stage: str) -> None:
+    """Push the AI branch — the stage-completion push, part of the stage
+    completing inside the stage machinery (safety: "a completed stage's
+    work is committed and pushed to the AI branch"): a run terminated
+    after the push keeps the completed stage's work on the remote branch
+    — the work no longer waits on the job-tail workflow step a
+    terminated run never reaches (the step stays as the job's final sync;
+    for stage work it is a redundant no-op).
+
+    The push reuses the factory's sanitised push idiom (common.push_branch
+    — the token rewritten out of the log, the GIT_CONFIG_* hygiene) and
+    resolves the branch name through the documented stage-value channel
+    (the AI_BRANCH job env every stage job writes, with the CW_ /
+    trigger-state fallback): where the branch is unresolvable (an idle
+    run) the push skips with a log line rather than failing, while a push
+    that actually fails fails the stage — its work would not be on the
+    remote, and the next stage or a re-trigger would lose it.
+
+    The shared generation loop reaches it only from its completion points
+    — after the guard has passed (a violating iteration is never pushed;
+    the remote branch stays at the last completed clean state) and on the
+    no-op exit path (the work is already on the branch; the push is the
+    idempotent sync that keeps the guarantee uniform). For the
+    single-call stages that is the push at stage completion; for the
+    implement stage, whose per-step loop runs one shared-loop call per
+    step, it is a push after each completed step, before the next step
+    starts."""
+    branch = common.ai_branch()
+    if not branch:
+        common.log(f"{stage}: the AI branch is unresolvable (an idle run) "
+                   f"— the stage-completion push skips; the stage's work "
+                   f"stays on the branch")
+        return
+    try:
+        common.push_branch(branch)
+    except Exception as e:
+        common.log(f"::error::{stage}: the stage-completion push failed — "
+                   f"the stage's work is not on the remote branch, and the "
+                   f"next stage or a re-trigger would lose it: {e}")
+        sys.exit(1)
+    common.log(f"{stage}: the AI branch {branch} is pushed — the stage's "
+               f"completed work is committed and on the remote branch")
+
+
 def run_generation_stage(stage: str, template: str, allow: list[str],
                          context: list[str], prompt_file: str | None = None,
                          inject: list[str] | tuple[str, ...] = (),
@@ -309,7 +357,18 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
     remains open it logs the per-step line ("clean — step <done>/<total> of
     the plan done; <remaining> step(s) remain") instead of a stage
     completion. The shared loop does not force one completion wording on
-    every caller."""
+    every caller.
+
+    At its completion points — after the guard has passed, and the no-op
+    exit — the loop pushes the AI branch (stage_push) before returning:
+    for the single-call stages that is the push at stage completion; for
+    the implement stage's per-step loop, one shared-loop call per step,
+    it is a push after each completed step, before the next step starts.
+    The push fires only after the guard has passed (a violating iteration
+    is never pushed — the remote branch stays at the last completed clean
+    state), so a run terminated after the push loses none of the completed
+    stage's work (safety: "a completed stage's work is committed and
+    pushed to the AI branch")."""
     baseline = stage_baseline()
     i = 0
     empty = 0
@@ -407,6 +466,7 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                            f"file(s) vs the run baseline) — a re-run of "
                            f"implemented work is a satisfied no-op")
                 common.log(f"{stage}: clean — stage complete (no-op)")
+                stage_push(stage)
                 return
             empty += 1
             if empty > 3:
@@ -461,6 +521,7 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                 line = completion_line()
                 if line:
                     common.log(line)
+            stage_push(stage)
             return
         except Exception:
             import traceback

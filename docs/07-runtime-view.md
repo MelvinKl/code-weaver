@@ -63,7 +63,28 @@ the module does not resolve on that runner, the step's `ImportError`
 branch binds the same names to local fallback definitions in the step —
 the body's calls are unchanged on both paths, and the reports the two
 paths complete agree (one ledger, one set of numbers on both the PR body
-and the issue comment).
+and the issue comment). The stage's push: a completed stage's work is
+committed and pushed to the AI branch as part of stage completion —
+inside the stage machinery, not only the job-tail workflow step (the
+step stays as the job's final sync; for stage work it is a redundant
+no-op). The shared generation loop pushes the branch at its completion
+points — after each clean iteration (the single-call stages' push at
+stage completion; the implement stage's push after each completed step,
+before the next step starts) and on the no-op exit path — the
+dependency-upgrade step pushes after its own commit, and the review
+stage pushes at its completion point (a no-op in the normal case, its
+fix iterations already pushing per iteration). The push reuses the
+factory's sanitised push idiom (the token rewritten out of the log, the
+GIT_CONFIG hygiene) and resolves the branch name through the documented
+stage-value channel (the `AI_BRANCH` job env every stage job writes, the
+`CW_`/trigger-state fallback): an unresolvable branch (an idle run)
+skips with a log line, a push that actually fails fails the stage (its
+work would not be on the remote, and the next stage or a re-trigger
+would lose it), and the push fires only after the guard has passed — a
+violating iteration is never pushed, the remote branch stays at the last
+completed clean state. The AI branch remains the documented cross-job
+channel: each job's checkout of the branch materialises the work the
+previous stages committed and pushed.
 
 **Resume semantics.** A re-triggered run for an issue whose AI branch
 already exists reuses that branch — every stage runs again from the

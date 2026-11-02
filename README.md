@@ -88,7 +88,12 @@ this repo's reusable workflow takes over:
    scenario cites it in its docstring as `<feature file>::<scenario name>`;
    a correctness-only test cites nothing — the reference is the join the
    review stage and the suite read), the arc42 docs kept complete, README
-   current — and, where the plan is a brownfield plan, the run adjusts the
+   current; the stage works the plan one open step at a time, committing
+   each completed step and pushing the AI branch before the next step
+   starts — a run terminated after a step's push keeps the completed
+   step's work on the remote branch, and a re-triggered run finds the step
+   still marked done in the plan file — and, where the plan is a brownfield
+   plan, the run adjusts the
    tests without implementing code: no source code changes (the changed
    files are the tests and the issue's plan file), the existing tests are
    adjusted to reference the requirements they describe, and each adjusted
@@ -334,7 +339,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 185 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 187 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -342,7 +347,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **185 Gherkin scenarios** — the oracle this
+`requirements/` holds **187 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and
