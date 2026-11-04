@@ -59,12 +59,20 @@ def stage_baseline() -> str:
 def pi_stage(template: str, prompt_file: str | None = None,
              context: list[str] | tuple[str, ...] = (),
              inject: list[str] | tuple[str, ...] = (),
-             timeout: int = 21600,
+             timeout: int | None = None,
              context_as_args: bool = False):
-    # 360-minute cap: the user's model is slow (a thinking phase at ~13
-    # tok/s over a large context legitimately runs for hours); the stage jobs
-    # give 8 hours around each call, and a cut-off call is retried inside
-    # the bounded loop. Overridable per call via CW_PI_TIMEOUT.
+    # The per-call cap: the user's model is slow (a thinking phase at ~13
+    # tok/s over a large context legitimately runs for hours); the stage
+    # jobs give 8 hours around each call, and a cut-off call is retried
+    # inside the bounded loop. The value resolves through the shared chain
+    # (common.resolve_pi_timeout) — the workflow's pi-timeout input's value
+    # (INPUT_PI_TIMEOUT, then the CW_PI_TIMEOUT job-env relay every stage
+    # job carries), then the 21600 code default — so the override the
+    # comment has always promised is the one resolution every pi call in
+    # the pipeline rides. A resolved cap longer than the stage jobs'
+    # job-level timeout-minutes backstop is clamped to that backstop
+    # (common.clamped_pi_timeout) — the declared cap is not honoured,
+    # and the run records the exceedance.
     """One pi invocation against a pi-prompts/ template — the same
     common.pi_invoke the declarative pi-run action wraps. The thinking level
     is never pinned here (pi-jev chooses it per prompt). `context` files are

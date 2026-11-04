@@ -2800,6 +2800,313 @@ def test_loop_cap_defaults_match_oracle():
     assert "guard re-run" not in readme
 
 
+def test_pi_call_time_cap_is_a_configurable_workflow_input():
+    """(configuration "The pi call time cap is a configurable workflow
+    input"; reference
+    `requirements/configuration.feature::The pi call time cap is a
+    configurable workflow input`) the reusable workflow declares
+    pi-timeout on its input surface — a string input, optional (an
+    older consumer's with: block stays schema-valid), default "21600":
+    the 360-minute per-call cap that today rides the shared pi-call
+    plumbing as a hard-coded constant becomes one of the settings a
+    target overrides per repo through the with: block, and the
+    README's Inputs table carries the row. A consumer that leaves the
+    input undeclared keeps the current 360-minute cap, so such a run is
+    unchanged — the consumer workflow gains no line: this repo's own
+    consumer workflow (the dogfood) declares no pi-timeout of its own.
+    The cap's runtime half — the stage jobs relaying the value and the
+    shared pi-call plumbing resolving the chain, and the trigger's
+    resolved-configuration record naming the resolved cap — lands in the
+    steps that consume the input; this test pins the declaration and the
+    doc surface."""
+    factory = _read(".github/workflows/factory.yml")
+    # the input surface declares the cap with the 360-minute default —
+    # a string input, optional (an older consumer's with: block stays
+    # schema-valid), the max-loops/dependency-upgrade input pattern
+    assert _workflow_input_default(factory, "pi-timeout") == "21600", \
+        "the pi call time cap's default is the 360-minute cap"
+    entry = _workflow_input_entry(factory, "pi-timeout")
+    assert "type: string" in entry, \
+        "the pi-timeout input is not a string input"
+    assert "required: false" in entry, \
+        "the pi-timeout input must be optional — an older " \
+        "consumer's with: block stays schema-valid"
+    # the README's Inputs table carries the row
+    readme = _read("README.md")
+    assert "| `pi-timeout` | `21600` |" in readme, \
+        "the README's Inputs table has no pi-timeout row"
+    # a consumer that leaves the input undeclared keeps the current
+    # 360-minute cap, so such a run is unchanged: the consumer
+    # workflow gains no line (this repo's own consumer workflow — the
+    # dogfood — declares no pi-timeout of its own)
+    consumer = _read(".github/workflows/code-weaver.yml")
+    assert "pi-timeout" not in consumer, \
+        "the consumer workflow gains no pi-timeout line — a consumer " \
+        "that leaves the input undeclared runs unchanged"
+
+
+def _pi_timeout_sandbox(cw_pi_timeout):
+    """The sandbox the pi call cap's job-env relay half runs: a temp
+    workspace (GITHUB_WORKSPACE — the call's cwd), a temp RUNNER_TEMP state
+    dir, the suite's fake `pi` on PATH (it records the call and settles
+    cleanly), and the fake job env — CW_PI_TIMEOUT where the test names a
+    value, BOTH chain links unset where it is None (the
+    undeclared-consumer half). The stage code (stages.pi_stage → the shared
+    pi-call plumbing) runs in-process against a spy on the plumbing's
+    subprocess call that records the timeout kwarg it hands the pi
+    subprocess — the fake answers promptly, so the recorded value is the
+    cap the call ran under, no waiting out a 360-minute default. The
+    stage's template file resolves against the repository's own
+    `pi-prompts/` dir (the stage code anchors it from the shared module's
+    own location, the way it resolves in the factory's stashed runtime
+    tree), so the sandbox calls the stage with a template the repo
+    carries. Returns a namespace: repo, rt, fake,
+    captured_timeout (the timeout the pi subprocess ran under — None when
+    the plumbing never reached the subprocess), returncode, and cleanup
+    (restore the env, the spy, the sys.modules/sys.path entries and remove
+    the temp dirs)."""
+    import shutil
+    import subprocess
+    import tempfile
+    repo = tempfile.mkdtemp(prefix="cw-pitmo-repo-")
+    rt = tempfile.mkdtemp(prefix="cw-pitmo-rt-")
+    fake = tempfile.mkdtemp(prefix="cw-pitmo-fake-")
+    os.makedirs(os.path.join(fake, "bin"))
+    with open(os.path.join(fake, "bin", "pi"), "w") as f:
+        f.write(_FAKE_PI)
+    os.chmod(os.path.join(fake, "bin", "pi"), 0o755)
+
+    keys = ("GITHUB_WORKSPACE", "RUNNER_TEMP", "LLM_MODEL", "PATH",
+            "INPUT_PI_TIMEOUT", "CW_PI_TIMEOUT")
+    saved = {k: os.environ.get(k) for k in keys}
+    # both chain links start unset; the test's value (where it names one)
+    # rides the CW_ link — the job-env relay the stage jobs carry
+    for k in ("INPUT_PI_TIMEOUT", "CW_PI_TIMEOUT"):
+        os.environ.pop(k, None)
+    if cw_pi_timeout is not None:
+        os.environ["CW_PI_TIMEOUT"] = str(cw_pi_timeout)
+    os.environ.update({
+        "GITHUB_WORKSPACE": repo,
+        "RUNNER_TEMP": rt,
+        "LLM_MODEL": "fake-model",
+        "PATH": os.path.join(fake, "bin") + os.pathsep + (saved["PATH"] or ""),
+    })
+
+    # the stage code's `import common` must resolve to the repo's shared
+    # module: a suite sibling that already installed it under the canonical
+    # name is reused (it is that very file); otherwise the scripts dir goes
+    # on sys.path and the import loads it
+    scripts = os.path.join(ROOT, ".github", "scripts")
+    common_mod = sys.modules.get("common")
+    added_path = (common_mod is None
+                  or not (getattr(common_mod, "__file__", "") or "")
+                      .replace(os.sep, "/")
+                      .endswith(".github/scripts/common.py"))
+    if added_path:
+        sys.path.insert(0, scripts)
+    spec = importlib.util.spec_from_file_location(
+        "cw_stages_pi_timeout_sandbox",
+        os.path.join(scripts, "stages.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_stages_pi_timeout_sandbox"] = mod
+    spec.loader.exec_module(mod)
+
+    # the spy: record the timeout the plumbing hands the pi subprocess,
+    # then delegate to the real run (the fake pi it spawns answers
+    # promptly, so the delegation completes under the cap)
+    captured = {}
+    real_run = subprocess.run
+
+    def spy_run(*args, **kw):
+        captured["timeout"] = kw.get("timeout")
+        return real_run(*args, **kw)
+    subprocess.run = spy_run
+    try:
+        r = mod.pi_stage("pr-body")
+    finally:
+        subprocess.run = real_run
+
+    def cleanup():
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        if added_path:
+            sys.path.remove(scripts)
+        sys.modules.pop("cw_stages_pi_timeout_sandbox", None)
+        for d in (repo, rt, fake):
+            shutil.rmtree(d, ignore_errors=True)
+
+    return {"repo": repo, "rt": rt, "fake": fake,
+            "captured_timeout": captured.get("timeout"),
+            "returncode": getattr(r, "returncode", None),
+            "cleanup": cleanup}
+
+
+def test_pi_call_cap_rides_the_job_env_relay():
+    """(configuration "The pi call cap rides the job-env relay like every
+    other setting" — the runtime half of "The pi call time cap is a
+    configurable workflow input"; reference
+    `requirements/configuration.feature::The pi call cap rides the job-env
+    relay like every other setting`,
+    `requirements/configuration.feature::The pi call time cap is a
+    configurable workflow input`) every stage job relays the declared
+    value as CW_PI_TIMEOUT in its job env — the documented CW_<name>
+    job/step env idiom the other settings ride — and the shared pi-call
+    plumbing resolves each call's time cap as INPUT_PI_TIMEOUT, then
+    CW_PI_TIMEOUT, then the 21600 code default: a value set at the
+    CW_PI_TIMEOUT link caps the run's pi calls, and a consumer that
+    leaves the input undeclared (no value at either chain link) resolves
+    the 21600-second 360-minute cap its run ran under before the input
+    existed — the sandbox drives the stage code against a fake job env
+    and a spy records the timeout the pi subprocess runs under, while the
+    workflow-file half asserts each stage job's env carries the relay
+    from the input (the guard's repair call and the PR-body call ride the
+    same shared plumbing, and the setup stage's smoke check runs under
+    its short probe budget, the target's value where it is shorter). The
+    clamp half (reference
+    `requirements/configuration.feature::A declared cap longer than the
+    job's timeout backstop is not honoured`): a declared cap at or under
+    the stage jobs' job-level timeout-minutes backstop is honoured
+    unchanged, while a CW_PI_TIMEOUT declared longer than that backstop
+    is not honoured — the plumbing clamps the resolved cap to the
+    backstop (a job killed at its own timeout would die mid-call), and
+    the sandbox's third case records the pi subprocess running under
+    that backstop."""
+    # the workflow-file half: every stage job's job-env block relays
+    # CW_PI_TIMEOUT from the reusable workflow's pi-timeout input
+    factory = _read(".github/workflows/factory.yml")
+    lines = factory.splitlines()
+    job_keys = ("trigger", "setup-pi", "baseline", "extract", "plan",
+                "implement", "review", "pr", "gates", "report")
+    starts = [i for i, ln in enumerate(lines)
+              if ln.startswith("  ") and not ln.startswith("   ")
+              and ln.strip() in {k + ":" for k in job_keys}]
+    assert len(starts) == len(job_keys), \
+        f"the factory's ten jobs are not all found in the workflow file: " \
+        f"{len(starts)}"
+    relay = "CW_PI_TIMEOUT: ${{ inputs.pi-timeout }}"
+    for a, b in zip(starts, starts[1:] + [len(lines)]):
+        name = lines[a].strip()[:-1]
+        # stage 1 makes no pi call — the relay rides the stage jobs' env
+        if name == "trigger":
+            continue
+        section = "\n".join(lines[a:b])
+        env = section[section.index("    env:"):section.index("    steps:")]
+        assert relay in env, \
+            (f"the {name} job's env does not relay CW_PI_TIMEOUT from "
+             "the reusable workflow's pi-timeout input")
+    # the sandbox half: a fake job env drives the stage code / shared
+    # pi-call plumbing — with CW_PI_TIMEOUT set, the pi subprocess call
+    # runs under that timeout; with neither chain link set, it resolves
+    # to the 21600-second default
+    # a declared cap at or under the stage jobs' job-level
+    # timeout-minutes backstop is honoured unchanged (12345s and the
+    # 21600 default are both under the 480-minute backstop); a
+    # CW_PI_TIMEOUT longer than the backstop (99999s > 28800s) is not
+    # honoured — the pi call is capped at the backstop
+    for cw_value, expected in (("12345", 12345), (None, 21600),
+                               (99999, 480 * 60)):
+        ns = _pi_timeout_sandbox(cw_value)
+        try:
+            assert ns["captured_timeout"] == expected, \
+                (f"the pi subprocess ran under timeout "
+                 f"{ns['captured_timeout']!r} with CW_PI_TIMEOUT="
+                 f"{cw_value!r} — the stage code did not resolve the "
+                 f"cap through INPUT_PI_TIMEOUT → CW_PI_TIMEOUT → the "
+                 f"21600 default, clamped to the stage jobs' "
+                 f"timeout-minutes backstop where the declared value "
+                 f"exceeds it (the declared cap is not honoured)")
+            assert ns["returncode"] == 0, \
+                "the pi call completed under its cap (the fake answers)"
+        finally:
+            ns["cleanup"]()
+
+
+def test_job_timeout_backstop_is_a_factory_side_property():
+    """(configuration "The job's timeout backstop is a factory-side
+    property"; reference
+    `requirements/configuration.feature::The job's timeout backstop is a
+    factory-side property`) the stage jobs' job-level timeout-minutes
+    backstop is a factory-side property: the factory's own workflow file
+    declares it on every stage job (a uniform value — the five stage
+    jobs that already declared 480 minutes, extended to the stage jobs
+    that rode the runner's default), no input of the reusable workflow
+    sets it (the input surface carries no entry that does, and the jobs'
+    entries are plain literals no input reaches — the per-call cap a
+    target sets per repo is the pi-timeout input, a different property),
+    and the stage code knows that same value through the shared plumbing
+    — the constant common.py resolves matches the file's declaration, so
+    the two can never drift apart."""
+    factory = _read(".github/workflows/factory.yml")
+    lines = factory.splitlines()
+    job_keys = ("trigger", "setup-pi", "baseline", "extract", "plan",
+                "implement", "review", "pr", "gates", "report")
+    starts = [i for i, ln in enumerate(lines)
+              if ln.startswith("  ") and not ln.startswith("   ")
+              and ln.strip() in {k + ":" for k in job_keys}]
+    assert len(starts) == len(job_keys), \
+        f"the factory's ten jobs are not all found in the workflow file: " \
+        f"{len(starts)}"
+    declared = {}
+    for a, b in zip(starts, starts[1:] + [len(lines)]):
+        name = lines[a].strip()[:-1]
+        if name == "trigger":
+            continue  # stage 1 is the gate, not a stage job
+        section = "\n".join(lines[a:b])
+        # the job-level entry sits at 4-space indent (a step's entry sits
+        # at 6) and carries a plain literal value — an input expression
+        # there would let a target set the factory's own backstop
+        m = re.search(r"^    timeout-minutes: (\S+)\s*$", section, re.M)
+        assert m is not None, \
+            (f"the {name} stage job does not declare a job-level "
+             f"timeout-minutes — the stage jobs' backstop is a "
+             f"factory-side property the workflow file declares on every "
+             f"stage job, not the runner's default")
+        assert m.group(1).isdigit(), \
+            (f"the {name} job's timeout-minutes value {m.group(1)!r} is "
+             f"not a plain literal — no input of the reusable workflow "
+             f"reaches the jobs' backstop")
+        declared[name] = int(m.group(1))
+    assert len(declared) == 9, \
+        (f"the factory's nine stage jobs are not all found in the "
+         f"workflow file: {sorted(declared)}")
+    assert len(set(declared.values())) == 1, \
+        f"the stage jobs' timeout-minutes backstop is not uniform: {declared}"
+    # the reusable workflow's input surface carries no entry that sets a
+    # job timeout: its entries are the with:-block inputs, and none is
+    # named for the jobs' timeout field
+    i = next(k for k, ln in enumerate(lines)
+             if ln.strip() == "inputs:" and ln.startswith("    "))
+    block = lines[i + 1:next(k for k in range(i + 1, len(lines))
+                             if lines[k].startswith("    secrets:"))]
+    entries = [ln.strip()[:-1] for ln in block
+               if ln.startswith("      ") and not ln.startswith("       ")]
+    assert "timeout-minutes" not in entries, \
+        ("the reusable workflow's input surface declares an entry that "
+         "sets the jobs' timeout — the backstop is a factory-side "
+         "property no input sets")
+    # the stage code knows the same value through the shared plumbing:
+    # the constant common.py resolves as the jobs' backstop matches the
+    # file's declaration
+    backstop = next(iter(declared.values()))
+    spec = importlib.util.spec_from_file_location(
+        "cw_job_timeout_backstop_common",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_job_timeout_backstop_common"] = mod
+    try:
+        spec.loader.exec_module(mod)
+        assert mod.JOB_TIMEOUT_MINUTES == backstop, \
+            (f"the shared plumbing's JOB_TIMEOUT_MINUTES "
+             f"({mod.JOB_TIMEOUT_MINUTES}) does not match the workflow "
+             f"file's stage-job timeout-minutes ({backstop}) — the stage "
+             f"code must know the backstop the file declares")
+    finally:
+        sys.modules.pop("cw_job_timeout_backstop_common", None)
+
+
 def test_dependency_upgrade_setting_is_configurable():
     """(configuration "The dependency-upgrade setting is configurable";
     reference

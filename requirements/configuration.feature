@@ -61,6 +61,42 @@ Feature: Configuration surface
     And the resolved configuration records the removed caps
 
   @config
+  Scenario: The pi call time cap is a configurable workflow input
+    Given the factory's reusable workflow declares the PI_TIMEOUT input as a string
+    And its default is "21600"
+    When a target sets PI_TIMEOUT to another number of seconds
+    Then every pi invocation in the pipeline runs under the target's value
+    And a consumer that leaves the input undeclared keeps the current 360 minute cap
+
+  @config
+  Scenario: The pi call cap rides the job-env relay like every other setting
+    Given the target repo passes its settings via with on the reusable workflow
+    When a stage job starts
+    Then its env carries CW_PI_TIMEOUT with the declared value
+    And the stage code resolves the cap as INPUT_PI_TIMEOUT, then CW_PI_TIMEOUT, then the 21600 default
+    And a value set at the CW_PI_TIMEOUT link caps the run's pi calls
+
+  @config
+  Scenario: The resolved pi call cap rides the resolved-configuration record
+    Given the trigger stage records the run's resolved configuration in the workflow log
+    When a run starts with a declared or default pi call cap
+    Then the resolved cap value is listed with the rest of the resolved configuration
+    And the record stays in the workflow log, never committed to the repo
+
+  @config
+  Scenario: A declared cap longer than the job's timeout backstop is not honoured
+    Given the stage jobs run under a job-level timeout-minutes backstop
+    When a target declares a PI_TIMEOUT longer than that backstop
+    Then the effective per-call cap is no longer than the job's backstop
+    And the run records that the declared cap exceeds the backstop
+
+  @config
+  Scenario: The job's timeout backstop is a factory-side property
+    Given the stage jobs' timeout-minutes backstop
+    Then it is declared in the factory's own workflow file
+    And no input of the reusable workflow sets it
+
+  @config
   Scenario: The dependency-upgrade setting is configurable
     Given the default for the dependency-upgrade setting is on
     When a target turns it off via its workflow inputs

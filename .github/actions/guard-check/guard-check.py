@@ -197,11 +197,26 @@ def _load():
                     "initial instructions gave it (the stage's prompt "
                     "template under `pi-prompts/`).\n")
             try:
+                # the per-call cap, resolved through the same chain the
+                # canonical plumbing resolves (common.resolve_pi_timeout):
+                # INPUT_PI_TIMEOUT → CW_PI_TIMEOUT → the 21600 code default
+                # (its own variable — this loop's `v` is the violation
+                # list, never to be shadowed)
+                timeout = 21600
+                for k in ("INPUT_PI_TIMEOUT", "CW_PI_TIMEOUT"):
+                    val = (os.environ.get(k) or "").strip()
+                    if not val:
+                        continue
+                    try:
+                        timeout = int(val)
+                        break
+                    except ValueError:
+                        pass
                 r = subprocess.run(
                     ["pi", "--approve", "--print", "--mode", "json",
                      "--model", model,
                      open(ins, encoding="utf-8").read()],
-                    cwd=ws, capture_output=True, timeout=21600)
+                    cwd=ws, capture_output=True, timeout=timeout)
             except subprocess.TimeoutExpired:
                 r = subprocess.CompletedProcess(args=[], returncode=124,
                                                 stdout=b"", stderr=b"")

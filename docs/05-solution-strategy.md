@@ -44,7 +44,16 @@ Key mechanisms:
   cap (0 = no cap) — no token budget is one of the loops' stopping
   conditions; every stage's pi call carries its own time cap, and a call cut
   off at the cap (exit 124) is retried inside the loop — a slow model is not
-  a broken environment.
+  a broken environment. The stage jobs run under a factory-side
+  job-timeout backstop that no input of the reusable workflow sets — a
+  job-level `timeout-minutes` the workflow file declares on every stage job
+  (a uniform value the stage code knows through the shared plumbing), which
+  bounds how long the job a cut-off call retries in may run; a
+  target-declared pi call cap longer than that backstop is not honoured —
+  the effective per-call cap is clamped to the backstop (a declared cap at
+  or under it is honoured unchanged), and the run records the exceedance —
+  the trigger's resolved-configuration record and the job log of the stage
+  that clamps.
 - **The context contract — two disjoint slices** (the oracle's two
   pinning scenarios are re-sliced onto disjoint stage boundaries): the
   *extraction* stage is the **`@`-file slice** — the arc42 markdown,

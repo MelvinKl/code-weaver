@@ -240,19 +240,100 @@ def pi_stream_capture(raw: str) -> tuple[bool, list[str], tuple[int, int] | None
     return is_jsonl, texts, usage, settled
 
 
+# The stage jobs' job-level `timeout-minutes` backstop, in minutes — a
+# factory-side property: the factory's own workflow file declares the same
+# value on every stage job, and no input of the reusable workflow sets it.
+# The stage code knows that same value through this shared constant, so the
+# file's declaration and the code's knowledge are one property and can never
+# drift apart (the stage-contract test pins the match). The per-call cap
+# (resolve_pi_timeout) is a different property — a target sets it per repo
+# through the pi-timeout input — but a resolved cap longer than this backstop
+# is clamped to it (clamped_pi_timeout): a declared cap longer than the
+# backstop is not honoured, and the run records the exceedance.
+JOB_TIMEOUT_MINUTES = 480
+
+
+PI_TIMEOUT_DEFAULT = 21600
+
+
+def resolve_pi_timeout() -> int:
+    """The per-call pi time cap, resolved through the documented chain
+    (chapter 3's settings flow): the reusable workflow's `pi-timeout`
+    input's value first — the workflow's own binding `INPUT_PI_TIMEOUT` on
+    a healthy runner, then `CW_PI_TIMEOUT`, the job-env entry every stage
+    job relays from the input — then the 21600 (360-minute) code default:
+    a consumer that leaves the input undeclared keeps the cap its run ran
+    under before the input existed, so such a run is unchanged. Every pi
+    invocation in the pipeline resolves through this one function — the
+    stages' generation calls, the guard's repair call, the pr job's
+    PR-body call, the setup stage's smoke check — no call site keeps a
+    private default of its own. A declared value that is not an integer
+    number of seconds is not a cap: it is skipped for the next link of the
+    chain, and for the default at its end."""
+    for key in ("INPUT_PI_TIMEOUT", "CW_PI_TIMEOUT"):
+        v = (os.environ.get(key) or "").strip()
+        if not v:
+            continue
+        try:
+            return int(v)
+        except ValueError:
+            log(f"::error::the declared pi call cap {v!r} is not an "
+                f"integer number of seconds — the value is skipped for "
+                f"the {PI_TIMEOUT_DEFAULT}s default")
+    return PI_TIMEOUT_DEFAULT
+
+
+def clamped_pi_timeout() -> int:
+    """The per-call cap a pi call that resolves its own timeout rides —
+    the resolved cap (resolve_pi_timeout's documented chain) clamped to
+    the stage jobs' job-level `timeout-minutes` backstop, in seconds.
+
+    The backstop merely bounds how long a target may ask a single call to
+    run; the cap stays a per-call property. A declared cap at or under
+    the backstop is honoured unchanged. A declared cap longer than it can
+    never be honoured — the job itself is killed at the backstop,
+    mid-call — so the effective per-call cap is the backstop, and the run
+    records the exceedance: the declared value, the backstop, and that
+    the declared cap is not honoured, in the job log of the stage that
+    clamps (the trigger's resolved-configuration record computes the same
+    comparison and carries the same entry in the workflow log)."""
+    cap = resolve_pi_timeout()
+    backstop = JOB_TIMEOUT_MINUTES * 60
+    if cap > backstop:
+        log(f"::warning::the declared pi call cap {cap}s exceeds the "
+            f"stage job's {JOB_TIMEOUT_MINUTES}-minute job-level "
+            f"timeout-minutes backstop ({backstop}s) — the declared "
+            f"cap is not honoured: the effective per-call cap is "
+            f"clamped to the backstop")
+        return backstop
+    return cap
+
+
 def pi_invoke(
     model: str,
     system_prompt_file: str,
     prompt_file: str | None = None,
     context: list[str] | tuple[str, ...] = (),
     inject: list[str] | tuple[str, ...] = (),
-    timeout: int = 21600,
+    timeout: int | None = None,
     context_as_args: bool = False,
 ) -> subprocess.CompletedProcess:
     """One headless pi run. The backend comes from the pi configuration the
     setup stage wrote into the agent directory for the run — this never
     passes or overrides it (setup-pi contract). Only the model is selected
     here.
+
+    The call's time cap resolves through the documented chain
+    (resolve_pi_timeout): `INPUT_PI_TIMEOUT`, then `CW_PI_TIMEOUT` — the
+    job-env relay every stage job carries from the reusable workflow's
+    `pi-timeout` input — then the 21600 code default, and the resolved
+    cap is clamped to the stage jobs' job-level `timeout-minutes`
+    backstop (clamped_pi_timeout): a declared cap longer than the
+    backstop is not honoured — the effective cap is the backstop, and
+    the run records the exceedance in the job log of the stage that
+    clamps (and in the trigger's resolved-configuration record). An
+    explicit `timeout` overrides the resolution for that one call; a
+    caller that passes none rides the clamped resolved cap.
 
     The thinking level is deliberately NOT passed: pi-jev is configured
     (PI_JEV_THINKING / --jev-thinking) and classifies *each* prompt and picks
@@ -312,6 +393,8 @@ def pi_invoke(
     text-mode fallback of an older pi build). A call that left no parseable
     usage record appends no line. The record travels with the run's state
     artifacts like every other stage value."""
+    if timeout is None:
+        timeout = clamped_pi_timeout()
     with open(system_prompt_file, encoding="utf-8") as f:
         instructions = f.read()
     # --print keeps the one-shot contract the oracle pins ("a stage
@@ -556,11 +639,13 @@ def _guard_repair_call(baseline: str, violations: list[str],
     """One repair call of the guard's bounded repair loop — a pi call
     through the documented shared pi-call plumbing (pi_invoke: the call
     every stage's invocation goes through — the run's resolved model, the
-    360-minute call cap, each finished call appending its input and output
-    token counts to the run's usage ledger). The repair instructions are
-    assembled in the plumbing as a state-dir file the call reads. Returns
-    the completed process and its class: "done" (the call ran to
-    completion), "cut" (cut off at the 360-minute cap — a slow model,
+    run's resolved pi call cap — the `pi-timeout` input's value through
+    the documented chain, the 21600 default where it is undeclared — each
+    finished call appending its input and output token counts to the run's
+    usage ledger). The repair instructions are assembled in the plumbing as
+    a state-dir file the call reads. Returns the completed process and its
+    class: "done" (the call ran to
+    completion), "cut" (cut off at the resolved cap — a slow model,
     retried inside the loop), "dropped" (a non-zero exit with no output —
     the provider stream died mid-flight, retried inside the loop),
     "broken" (a non-zero exit with output — a broken environment; a slow
@@ -632,7 +717,7 @@ def _guard_repair(baseline: str, allow: list[str], deny: list[str],
     unclaimed and their stages complete without re-running. The repair
     calls consume iterations
     of the same documented cap machinery (caps_ok): bounded by MAX_LOOPS,
-    0 = no cap; a repair call cut off at the 360-minute pi call cap, or
+    0 = no cap; a repair call cut off at the resolved pi call cap, or
     dropped by a dead provider stream, consumes its iteration and is
     retried inside the loop (a slow model is not a broken environment);
     a cap exhausted without clearing the violation exits the stage with the

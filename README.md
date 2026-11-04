@@ -236,6 +236,7 @@ never empty for a release that publishes changes.
 | `doc-dir` | `docs` | where the arc42 markdown files live |
 | `llm-model` | `Ornith-1.5-35B-A3B` | which **configured** model pi uses |
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
+| `pi-timeout` | `21600` | the per-call time cap in seconds every pi invocation in the pipeline runs under — the stages' generation calls, the guard's repair call, the PR-body call; the default 21600 is the current 360-minute cap, which a consumer that leaves the input undeclared keeps; a declared value longer than the stage jobs' 480-minute job-level timeout backstop is clamped to that backstop — the declared cap is not honoured, and the run records the exceedance |
 | `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
 | `dependency-install` | *(empty)* | the command the run's pipeline runs to install the target project's dependencies — executed in the jobs whose stages consume them (the implementation, the test-and-review's suite run), after each job's checkout and before its stage; empty = no such step, the run is unchanged |
@@ -339,7 +340,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 187 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 192 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -347,7 +348,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **187 Gherkin scenarios** — the oracle this
+`requirements/` holds **192 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

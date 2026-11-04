@@ -384,10 +384,14 @@ def check_run_configuration(models, model: str, agent_dir: str,
     # host's llama-swap unloads the model entry after an idle ttl, so a run
     # started long after the last use finds it unloaded and the swap loads it
     # on the first request (2-3 min cold) before the first answer. 420 s
-    # leaves 2-4x margin while staying inside the job cap.
+    # leaves 2-4x margin while staying inside the job cap. The probe keeps
+    # its short budget — and where the run's resolved pi call cap is
+    # shorter, the probe runs under the target's value: every pi invocation
+    # in the pipeline rides the one resolution, the smoke check included.
     r = subprocess.run(
         [installed, "--print", "--model", model, "Reply with exactly: OK"],
-        capture_output=True, text=True, timeout=420, cwd=common.repo(),
+        capture_output=True, text=True,
+        timeout=min(420, common.resolve_pi_timeout()), cwd=common.repo(),
         env={**os.environ, "PI_CODING_AGENT_DIR": agent_dir})
     if r.returncode != 0 or not r.stdout.strip():
         fail(f"pi installation or configuration failed — the installed pi did "
