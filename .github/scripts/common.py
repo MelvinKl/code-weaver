@@ -241,15 +241,20 @@ def pi_stream_capture(raw: str) -> tuple[bool, list[str], tuple[int, int] | None
 
 
 # The stage jobs' job-level `timeout-minutes` backstop, in minutes — a
-# factory-side property: the factory's own workflow file declares the same
-# value on every stage job, and no input of the reusable workflow sets it.
-# The stage code knows that same value through this shared constant, so the
-# file's declaration and the code's knowledge are one property and can never
-# drift apart (the stage-contract test pins the match). The per-call cap
-# (resolve_pi_timeout) is a different property — a target sets it per repo
-# through the pi-timeout input — but a resolved cap longer than this backstop
-# is clamped to it (clamped_pi_timeout): a declared cap longer than the
-# backstop is not honoured, and the run records the exceedance.
+# target-side input: the reusable workflow's `job-timeout` input (a string,
+# optional, default "480") is what the five stage jobs that make pi calls
+# carry as their job-level timeout-minutes, and a consumer that leaves the
+# input undeclared runs under this constant's value. The stage code knows
+# that same value through this shared constant, so the file's declaration
+# and the code's knowledge are one property and can never drift apart (the
+# stage-contract test pins the match to the input's default). The per-call
+# cap (resolve_pi_timeout) is a different property — a target sets it per
+# repo through the pi-timeout input — and it is honoured as resolved: the
+# trigger-time validation is the enforcement point (a declared value that
+# leaves the stage's non-call work no headroom inside the job's timeout
+# fails the run at trigger time, and no stage runs after the trigger), so a
+# run that reaches a stage has validated that its resolved cap leaves that
+# headroom.
 JOB_TIMEOUT_MINUTES = 480
 
 
@@ -283,32 +288,6 @@ def resolve_pi_timeout() -> int:
     return PI_TIMEOUT_DEFAULT
 
 
-def clamped_pi_timeout() -> int:
-    """The per-call cap a pi call that resolves its own timeout rides —
-    the resolved cap (resolve_pi_timeout's documented chain) clamped to
-    the stage jobs' job-level `timeout-minutes` backstop, in seconds.
-
-    The backstop merely bounds how long a target may ask a single call to
-    run; the cap stays a per-call property. A declared cap at or under
-    the backstop is honoured unchanged. A declared cap longer than it can
-    never be honoured — the job itself is killed at the backstop,
-    mid-call — so the effective per-call cap is the backstop, and the run
-    records the exceedance: the declared value, the backstop, and that
-    the declared cap is not honoured, in the job log of the stage that
-    clamps (the trigger's resolved-configuration record computes the same
-    comparison and carries the same entry in the workflow log)."""
-    cap = resolve_pi_timeout()
-    backstop = JOB_TIMEOUT_MINUTES * 60
-    if cap > backstop:
-        log(f"::warning::the declared pi call cap {cap}s exceeds the "
-            f"stage job's {JOB_TIMEOUT_MINUTES}-minute job-level "
-            f"timeout-minutes backstop ({backstop}s) — the declared "
-            f"cap is not honoured: the effective per-call cap is "
-            f"clamped to the backstop")
-        return backstop
-    return cap
-
-
 def pi_invoke(
     model: str,
     system_prompt_file: str,
@@ -327,13 +306,13 @@ def pi_invoke(
     (resolve_pi_timeout): `INPUT_PI_TIMEOUT`, then `CW_PI_TIMEOUT` — the
     job-env relay every stage job carries from the reusable workflow's
     `pi-timeout` input — then the 21600 code default, and the resolved
-    cap is clamped to the stage jobs' job-level `timeout-minutes`
-    backstop (clamped_pi_timeout): a declared cap longer than the
-    backstop is not honoured — the effective cap is the backstop, and
-    the run records the exceedance in the job log of the stage that
-    clamps (and in the trigger's resolved-configuration record). An
-    explicit `timeout` overrides the resolution for that one call; a
-    caller that passes none rides the clamped resolved cap.
+    cap is honoured as resolved: the trigger-time validation is the
+    enforcement point (a declared value that leaves the stage's non-call
+    work no headroom inside the job's timeout fails the run at trigger
+    time, and no stage runs after the trigger), so a run that reaches a
+    stage has validated that its resolved cap leaves that headroom, and
+    no clamp is applied. An explicit `timeout` overrides the resolution
+    for that one call; a caller that passes none rides the resolved cap.
 
     The thinking level is deliberately NOT passed: pi-jev is configured
     (PI_JEV_THINKING / --jev-thinking) and classifies *each* prompt and picks
@@ -394,7 +373,7 @@ def pi_invoke(
     usage record appends no line. The record travels with the run's state
     artifacts like every other stage value."""
     if timeout is None:
-        timeout = clamped_pi_timeout()
+        timeout = resolve_pi_timeout()
     with open(system_prompt_file, encoding="utf-8") as f:
         instructions = f.read()
     # --print keeps the one-shot contract the oracle pins ("a stage

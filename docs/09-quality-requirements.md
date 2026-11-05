@@ -15,11 +15,16 @@
   keeps the current 360-minute cap, and a value set at the `CW_PI_TIMEOUT`
   link caps the run's pi calls — every pi invocation in the pipeline rides
   that one resolution, no call site keeping a private default of its own;
-  a declared cap longer than the stage jobs' job-level `timeout-minutes`
-  backstop is not honoured — the effective per-call cap is clamped to that
-  backstop (a declared cap at or under it is honoured unchanged), and the
-  run records the exceedance (the trigger's resolved-configuration record,
-  and the job log of the stage that clamps); a call cut off at the cap
+  a declared value that leaves the stage's non-call work no headroom
+  fails the run at trigger time with a precise error, and no stage runs
+  after the trigger — the trigger validates that the resolved job timeout
+  (the target's declared `job-timeout` value, or its `480`-minute
+  default) exceeds the resolved cap by at least the headroom (7200
+  seconds — the margin the stage's own non-call work needs around each
+  call, derived from the two documented input defaults: the 480-minute
+  default job timeout minus the 21600-second default pi call cap); a run
+  that passes validation honours the declared value; a call cut off at
+  the cap
   exits 124 — the stage treats it as a slow model (the iteration is
   consumed, the loop retries), never as a broken environment. A call that
   dies with no output is a dropped provider stream: retried, not fatal;

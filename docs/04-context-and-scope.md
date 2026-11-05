@@ -51,14 +51,26 @@ per-call time cap, in seconds, every pi invocation in the run's pipeline
 runs under: the stages' generation calls, the guard's repair call, the
 PR-body call, the setup-pi stage's smoke check. The input's default is
 `21600` — the current 360-minute cap — so a target that leaves it
-undeclared runs unchanged under that cap. A declared value longer than the
-stage jobs' job-level `timeout-minutes` backstop — a factory-side property
-no input of the reusable workflow sets (chapter 5) — is not honoured: the
-effective per-call cap is clamped to that backstop, and the run records the
-exceedance in the trigger's resolved-configuration record. Like the
+undeclared runs unchanged under that cap. A declared value that leaves the
+stage's non-call work no headroom fails the run at trigger time with a
+precise error, and no stage runs after the trigger — the trigger validates
+the resolved job timeout (the target's declared `job-timeout` value, or
+its `480`-minute default) against the resolved cap plus that headroom
+(chapter 7); a run that reaches a stage has validated the pair, and its pi
+calls honour the declared value. Like the
 `dependency-install` input and the `dependency-upgrade` setting, the value
 is project configuration, not a secret value, so it rides the input channel
 (chapter 3), not the `secrets:` block.
+
+The `with:` block also carries the optional `job-timeout` input — the
+job-level `timeout-minutes` the five stage jobs that make pi calls run
+under: the target's value where the target sets it, the `480`-minute
+default where the target leaves it undeclared (such a run keeps the
+480-minute backstop its run ran under before the input existed, unchanged).
+The trigger and the setup-pi jobs are unaffected by the input. Like the
+`pi-timeout` input, the value is project configuration, not a secret
+value, so it rides the input channel (chapter 3), not the `secrets:`
+block.
 
 The consumer workflow is the **only per-target code** — it stays short
 and stable (it declares the `labeled`-only issue trigger plus a manual

@@ -83,18 +83,50 @@ Feature: Configuration surface
     Then the resolved cap value is listed with the rest of the resolved configuration
     And the record stays in the workflow log, never committed to the repo
 
-  @config
-  Scenario: A declared cap longer than the job's timeout backstop is not honoured
-    Given the stage jobs run under a job-level timeout-minutes backstop
-    When a target declares a PI_TIMEOUT longer than that backstop
-    Then the effective per-call cap is no longer than the job's backstop
-    And the run records that the declared cap exceeds the backstop
+  @config @safety
+  Scenario: A declared pi call cap the job timeout cannot exceed fails the run at trigger
+    Given the run's job timeout is the target's declared job-timeout value, or its "480" default
+    And the target declares a PI_TIMEOUT longer than the job timeout minus the headroom the stage's non-call work needs
+    When the trigger stage validates the run's configuration
+    Then the run fails at trigger time with a precise error
+    And no stage runs after the trigger
 
   @config
-  Scenario: The job's timeout backstop is a factory-side property
-    Given the stage jobs' timeout-minutes backstop
-    Then it is declared in the factory's own workflow file
-    And no input of the reusable workflow sets it
+  Scenario: The job's timeout backstop is a target-side input
+    Given the factory's reusable workflow declares the job-timeout input as a string
+    And its default is "480" minutes
+    When a target sets the job-timeout input to another number of minutes
+    Then the five stage jobs that make pi calls run under the target's value as their job-level timeout-minutes
+    And the trigger and setup-pi jobs are unaffected by the input
+    And a consumer that leaves the input undeclared keeps the 480-minute backstop
+
+  @config @safety
+  Scenario: A non-numeric job timeout fails the run at trigger
+    Given a target declares the job-timeout input
+    When the declared value is not a number of minutes
+    Then the run fails at trigger time with a precise error
+    And no stage runs after the trigger
+
+  @config @safety
+  Scenario: A job timeout with no headroom over the resolved pi call cap fails the run at trigger
+    Given the run's resolved pi call cap — the target's declared pi-timeout value, or the 21600 default where undeclared
+    And the headroom the stage's own non-call work needs around each call
+    When the declared job timeout does not exceed the resolved pi call cap by at least that headroom
+    Then the run fails at trigger time with a precise error
+    And no stage runs after the trigger
+
+  @config
+  Scenario: The resolved job timeout rides the resolved-configuration record
+    Given the trigger stage records the run's resolved configuration in the workflow log
+    When a run starts with a declared or default job timeout
+    Then the resolved value is listed with the rest of the resolved configuration
+    And the record stays in the workflow log, never committed to the repo
+
+  @config
+  Scenario: The job timeout documentation names the runner that enforces it
+    Given the job-timeout input is documented for the target
+    Then it says the job timeout is enforced by whichever runner runs the job
+    And the target names that runner through the runner input
 
   @config
   Scenario: The dependency-upgrade setting is configurable

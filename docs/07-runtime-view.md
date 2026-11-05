@@ -4,12 +4,32 @@
 `types: [labeled]` — opening or editing an issue schedules no run) or a
 manual dispatch with `issue_number`. The trigger job resolves the run
 configuration (issue number/title/body, the base ref+sha, the AI branch
-name), records it as state files, and gates: the issue carries the
-trigger label (default `ai-requirements`) — or it was dispatched — else
-the run is idle (`factory idle`, `started=false`) and every downstream
-job skips. Re-entrant triggers on the same issue are idempotent (an
-in-progress run with the same issue number → a comment on the issue, exit
-0).
+name), validates it before the run is recorded or accepted, records it
+as state files, and lists the run's resolved job timeout — the target's
+declared `job-timeout` value, or the `480`-minute default where the
+consumer leaves the input undeclared — in the resolved-configuration
+record that stays in the workflow log, never committed to the repo —
+and gates: the issue carries the trigger label (default
+`ai-requirements`) — or it was dispatched — else the run is idle
+(`factory idle`, `started=false`) and every downstream job skips. The
+validation extends that gate with the configuration half, no new
+channel: the resolved job timeout (the target's declared `job-timeout`
+value, or its `480`-minute default where the consumer leaves the input
+undeclared) is a number of minutes — else the trigger fails with a
+precise error naming the offending value — and it exceeds the resolved
+pi call cap (the target's declared `pi-timeout` value, or the
+21600-second default where undeclared) by at least the headroom the
+stage's own non-call work (checkout, guard, loop machinery, artifact
+sync, push) needs around each call — 7200 seconds, the margin the
+factory's own default pair already provides: the 480-minute default job
+timeout minus the 21600-second default pi call cap — else the trigger
+fails with a precise error naming both resolved values and the headroom;
+a failed validation leaves `started` false like an idle run, and every
+downstream job skips — no stage runs after the trigger (the default pair
+passes at exactly the margin, so a consumer that declares nothing
+validates and its run is unchanged). Re-entrant triggers on the same
+issue are idempotent (an in-progress run with the same issue number → a
+comment on the issue, exit 0).
 
 **Stage flow.** Each job downloads the prior stages' state artifacts into
 the state dir (`$RUNNER_TEMP/cw/`), where every value is a file — the

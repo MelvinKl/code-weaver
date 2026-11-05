@@ -2965,15 +2965,16 @@ def test_pi_call_cap_rides_the_job_env_relay():
     from the input (the guard's repair call and the PR-body call ride the
     same shared plumbing, and the setup stage's smoke check runs under
     its short probe budget, the target's value where it is shorter). The
-    clamp half (reference
-    `requirements/configuration.feature::A declared cap longer than the
-    job's timeout backstop is not honoured`): a declared cap at or under
-    the stage jobs' job-level timeout-minutes backstop is honoured
-    unchanged, while a CW_PI_TIMEOUT declared longer than that backstop
-    is not honoured — the plumbing clamps the resolved cap to the
-    backstop (a job killed at its own timeout would die mid-call), and
-    the sandbox's third case records the pi subprocess running under
-    that backstop."""
+    sandbox's third case — a CW_PI_TIMEOUT declared longer than the
+    stage jobs' job-level timeout-minutes backstop (the clamp case the
+    delta's deleted scenario quoted) — records the pi subprocess running
+    under the declared value: the chain no longer clamps the resolved
+    cap. The trigger-time validation is the enforcement point — a
+    declared value that leaves the stage's non-call work no headroom
+    inside the job's timeout fails the run at trigger time, and no stage
+    runs after the trigger — so a run that reaches a stage has validated
+    that its resolved cap leaves that headroom: a value set at the
+    CW_PI_TIMEOUT link caps the run's pi calls, as declared."""
     # the workflow-file half: every stage job's job-env block relays
     # CW_PI_TIMEOUT from the reusable workflow's pi-timeout input
     factory = _read(".github/workflows/factory.yml")
@@ -3001,13 +3002,16 @@ def test_pi_call_cap_rides_the_job_env_relay():
     # pi-call plumbing — with CW_PI_TIMEOUT set, the pi subprocess call
     # runs under that timeout; with neither chain link set, it resolves
     # to the 21600-second default
-    # a declared cap at or under the stage jobs' job-level
-    # timeout-minutes backstop is honoured unchanged (12345s and the
-    # 21600 default are both under the 480-minute backstop); a
-    # CW_PI_TIMEOUT longer than the backstop (99999s > 28800s) is not
-    # honoured — the pi call is capped at the backstop
+    # a value set at the CW_PI_TIMEOUT link caps the run's pi calls at
+    # that declared value (12345s — headroom to spare inside the stage
+    # jobs' job-level timeout-minutes backstop — and the 99999s that
+    # declares a cap longer than the backstop: the chain no longer
+    # clamps it, the trigger-time validation is the enforcement point,
+    # so a run that reaches a stage has validated that its resolved cap
+    # leaves the stage's non-call work its headroom); with neither chain
+    # link set the cap resolves to the 21600-second default
     for cw_value, expected in (("12345", 12345), (None, 21600),
-                               (99999, 480 * 60)):
+                               (99999, 99999)):
         ns = _pi_timeout_sandbox(cw_value)
         try:
             assert ns["captured_timeout"] == expected, \
@@ -3015,31 +3019,52 @@ def test_pi_call_cap_rides_the_job_env_relay():
                  f"{ns['captured_timeout']!r} with CW_PI_TIMEOUT="
                  f"{cw_value!r} — the stage code did not resolve the "
                  f"cap through INPUT_PI_TIMEOUT → CW_PI_TIMEOUT → the "
-                 f"21600 default, clamped to the stage jobs' "
-                 f"timeout-minutes backstop where the declared value "
-                 f"exceeds it (the declared cap is not honoured)")
+                 f"21600 default and honour the resolved value: the "
+                 f"chain carries no clamp any more (a declared value "
+                 f"that leaves the stage's non-call work no headroom "
+                 f"inside the job's timeout fails the run at trigger "
+                 f"time, so no run that reached a stage carried one)")
             assert ns["returncode"] == 0, \
                 "the pi call completed under its cap (the fake answers)"
         finally:
             ns["cleanup"]()
 
 
-def test_job_timeout_backstop_is_a_factory_side_property():
-    """(configuration "The job's timeout backstop is a factory-side
-    property"; reference
-    `requirements/configuration.feature::The job's timeout backstop is a
-    factory-side property`) the stage jobs' job-level timeout-minutes
-    backstop is a factory-side property: the factory's own workflow file
-    declares it on every stage job (a uniform value — the five stage
-    jobs that already declared 480 minutes, extended to the stage jobs
-    that rode the runner's default), no input of the reusable workflow
-    sets it (the input surface carries no entry that does, and the jobs'
-    entries are plain literals no input reaches — the per-call cap a
-    target sets per repo is the pi-timeout input, a different property),
-    and the stage code knows that same value through the shared plumbing
-    — the constant common.py resolves matches the file's declaration, so
-    the two can never drift apart."""
+def test_job_timeout_backstop_is_a_target_side_input():
+    """(configuration "The job's timeout backstop is a target-side
+    input" — adjusted: it flips the baseline scenario "The job's timeout
+    backstop is a factory-side property", which this delta deletes in
+    the same hunk; reference
+    `requirements/configuration.feature::The job's timeout backstop is
+    a target-side input`) the reusable workflow declares the job-timeout
+    input — a string input, optional (an older consumer's with: block
+    stays schema-valid), default "480" minutes — and the five stage jobs
+    that make pi calls (extract, plan, implement, review, pr — the jobs
+    whose steps carry the stages' generation calls, the guard's repair
+    call and the PR-body call) carry the target's value as their
+    job-level timeout-minutes, while the jobs that stay factory-side —
+    the trigger (which declares no job-level timeout at all) and
+    setup-pi, baseline, gates and report, which the delta leaves
+    unchanged — keep their fixed declarations: the trigger and setup-pi
+    jobs are unaffected by the input, and a consumer that leaves the
+    input undeclared resolves the 480-minute backstop, so its run is
+    unchanged. The stage code still knows that same value through the
+    shared plumbing — the constant common.py resolves matches the
+    input's default, the value an undeclared consumer's jobs run under,
+    so the file↔code one property the test pins can never drift
+    apart."""
     factory = _read(".github/workflows/factory.yml")
+    # the reusable workflow's input surface declares job-timeout — a
+    # string input, optional (an older consumer's with: block stays
+    # schema-valid), default "480" minutes
+    assert _workflow_input_default(factory, "job-timeout") == "480", \
+        "the job-timeout input's default is not the 480-minute backstop"
+    entry = _workflow_input_entry(factory, "job-timeout")
+    assert "type: string" in entry, \
+        "the job-timeout input is not a string input"
+    assert "required: false" in entry, \
+        "the job-timeout input must be optional — an older " \
+        "consumer's with: block stays schema-valid"
     lines = factory.splitlines()
     job_keys = ("trigger", "setup-pi", "baseline", "extract", "plan",
                 "implement", "review", "pr", "gates", "report")
@@ -3049,48 +3074,37 @@ def test_job_timeout_backstop_is_a_factory_side_property():
     assert len(starts) == len(job_keys), \
         f"the factory's ten jobs are not all found in the workflow file: " \
         f"{len(starts)}"
-    declared = {}
+    # the five stage jobs that make pi calls carry the target's value as
+    # their job-level timeout-minutes — the entry is input-driven, not a
+    # plain literal — while the jobs that stay factory-side (setup-pi,
+    # and the jobs the delta leaves unchanged: baseline, gates, report)
+    # keep plain literals; the trigger declares no job-level timeout
     for a, b in zip(starts, starts[1:] + [len(lines)]):
         name = lines[a].strip()[:-1]
         if name == "trigger":
-            continue  # stage 1 is the gate, not a stage job
+            continue  # stage 1 declares no job-level timeout at all
         section = "\n".join(lines[a:b])
-        # the job-level entry sits at 4-space indent (a step's entry sits
-        # at 6) and carries a plain literal value — an input expression
-        # there would let a target set the factory's own backstop
-        m = re.search(r"^    timeout-minutes: (\S+)\s*$", section, re.M)
+        # the job-level entry sits at 4-space indent (a step's entry
+        # sits at 6)
+        m = re.search(r"^    timeout-minutes: (.+?)\s*$", section, re.M)
         assert m is not None, \
             (f"the {name} stage job does not declare a job-level "
-             f"timeout-minutes — the stage jobs' backstop is a "
-             f"factory-side property the workflow file declares on every "
-             f"stage job, not the runner's default")
-        assert m.group(1).isdigit(), \
-            (f"the {name} job's timeout-minutes value {m.group(1)!r} is "
-             f"not a plain literal — no input of the reusable workflow "
-             f"reaches the jobs' backstop")
-        declared[name] = int(m.group(1))
-    assert len(declared) == 9, \
-        (f"the factory's nine stage jobs are not all found in the "
-         f"workflow file: {sorted(declared)}")
-    assert len(set(declared.values())) == 1, \
-        f"the stage jobs' timeout-minutes backstop is not uniform: {declared}"
-    # the reusable workflow's input surface carries no entry that sets a
-    # job timeout: its entries are the with:-block inputs, and none is
-    # named for the jobs' timeout field
-    i = next(k for k, ln in enumerate(lines)
-             if ln.strip() == "inputs:" and ln.startswith("    "))
-    block = lines[i + 1:next(k for k in range(i + 1, len(lines))
-                             if lines[k].startswith("    secrets:"))]
-    entries = [ln.strip()[:-1] for ln in block
-               if ln.startswith("      ") and not ln.startswith("       ")]
-    assert "timeout-minutes" not in entries, \
-        ("the reusable workflow's input surface declares an entry that "
-         "sets the jobs' timeout — the backstop is a factory-side "
-         "property no input sets")
-    # the stage code knows the same value through the shared plumbing:
-    # the constant common.py resolves as the jobs' backstop matches the
-    # file's declaration
-    backstop = next(iter(declared.values()))
+             f"timeout-minutes")
+        value = m.group(1)
+        if name in ("extract", "plan", "implement", "review", "pr"):
+            assert value == "${{ inputs.job-timeout }}", \
+                (f"the {name} job — a stage job that makes pi calls — "
+                 f"carries {value!r} as its job-level timeout-minutes "
+                 f"instead of the target's job-timeout input value")
+        else:
+            assert value.isdigit(), \
+                (f"the {name} job's timeout-minutes value {value!r} is "
+                 f"not a plain literal — the delta leaves this job's "
+                 f"declaration unchanged")
+    # the stage code still knows the 480-minute backstop through the
+    # shared plumbing: the constant common.py resolves matches the
+    # job-timeout input's default — the value an undeclared consumer's
+    # jobs run under
     spec = importlib.util.spec_from_file_location(
         "cw_job_timeout_backstop_common",
         os.path.join(ROOT, ".github", "scripts", "common.py"))
@@ -3098,13 +3112,77 @@ def test_job_timeout_backstop_is_a_factory_side_property():
     sys.modules["cw_job_timeout_backstop_common"] = mod
     try:
         spec.loader.exec_module(mod)
-        assert mod.JOB_TIMEOUT_MINUTES == backstop, \
+        assert mod.JOB_TIMEOUT_MINUTES == 480, \
             (f"the shared plumbing's JOB_TIMEOUT_MINUTES "
-             f"({mod.JOB_TIMEOUT_MINUTES}) does not match the workflow "
-             f"file's stage-job timeout-minutes ({backstop}) — the stage "
-             f"code must know the backstop the file declares")
+             f"({mod.JOB_TIMEOUT_MINUTES}) does not match the "
+             f"job-timeout input's default (480) — the value an "
+             f"undeclared consumer's jobs run under")
     finally:
         sys.modules.pop("cw_job_timeout_backstop_common", None)
+
+
+def test_job_timeout_documentation_names_the_runner_that_enforces_it():
+    """(configuration "The job timeout documentation names the runner
+    that enforces it"; reference
+    `requirements/configuration.feature::The job timeout documentation
+    names the runner that enforces it`) the README's Inputs table — the
+    target's documented surface — carries the job-timeout row with the
+    480-minute default, and the row says the job timeout is enforced by
+    whichever runner runs the job and that the target names that runner
+    through the `runner` input (an existing row of the same table whose
+    default is already documented there); the table's pi-timeout row no
+    longer states the withdrawn clamp (a declared value longer than the
+    stage jobs' job-level timeout backstop clamped to that backstop —
+    the declared cap not honoured, the run recording the exceedance):
+    with the validation moved to trigger time it states the trigger-time
+    failure instead — a declared value that leaves the stage's non-call
+    work no headroom fails the run at trigger, and a run that passes
+    validation honours the declared value."""
+    readme = _read("README.md")
+    lines = readme.splitlines()
+    # the Inputs table carries the job-timeout row with the 480-minute
+    # default
+    assert "| `job-timeout` | `480` |" in readme, \
+        "the README's Inputs table has no job-timeout row"
+    row = next((ln for ln in lines
+                if ln.startswith("| `job-timeout` |")), None)
+    assert row is not None, \
+        "the README's Inputs table has no job-timeout row"
+    # the row says the job timeout is enforced by whichever runner runs
+    # the job
+    assert "the job timeout is enforced by whichever runner runs the job" \
+        in row, \
+        ("the README's job-timeout row does not state that the job "
+         "timeout is enforced by whichever runner runs the job")
+    # and the target names that runner through the `runner` input
+    assert "the target names that runner through the `runner` input" in row, \
+        ("the README's job-timeout row does not name the `runner` input "
+         "as the means the target names the runner that enforces the "
+         "job timeout")
+    # the pi-timeout row no longer states the withdrawn clamp: no
+    # clamped-to-the-backstop, no not-honoured, no recorded-exceedance
+    row = next((ln for ln in lines
+                if ln.startswith("| `pi-timeout` |")), None)
+    assert row is not None, \
+        "the README's Inputs table has no pi-timeout row"
+    for withdrawn in ("clamped", "not honoured", "exceedance"):
+        assert withdrawn not in row, \
+            (f"the README's pi-timeout row still states the withdrawn "
+             f"clamp (its {withdrawn!r} clause)")
+    # and it states the trigger-time failure the clamp's place took: a
+    # declared value that leaves the stage's non-call work no headroom
+    # fails the run at trigger, a run that passes validation honours the
+    # declared value
+    assert "leaves the stage's non-call work no headroom" in row, \
+        ("the README's pi-timeout row does not name the headroom a "
+         "declared value must leave the stage's non-call work")
+    assert "fails the run at trigger" in row, \
+        ("the README's pi-timeout row does not state that a declared "
+         "value that leaves the stage's non-call work no headroom fails "
+         "the run at trigger")
+    assert "honours the declared value" in row, \
+        ("the README's pi-timeout row does not state that a run that "
+         "passes validation honours the declared value")
 
 
 def test_dependency_upgrade_setting_is_configurable():

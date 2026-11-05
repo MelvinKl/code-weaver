@@ -153,3 +153,201 @@ def test_factory_trigger_gate_unchanged():
         "issue-body.md",  # records the issue body
     ):
         assert marker in gate, f"stage-1 trigger gate lost verbatim marker {marker!r}"
+
+
+def _trigger_region():
+    """The trigger job's region of the workflow file — from its
+    2-indent job key line to the next job's — the unit the
+    trigger-region idiom asserts on."""
+    text = _read(".github/workflows/factory.yml")
+    start = text.index("  trigger:")
+    end = text.index("  setup-pi:")
+    return text[start:end]
+
+
+def _resolve_step():
+    """The trigger's resolve step — the step the run's configuration
+    validation, the resolved-configuration record and the acceptance
+    (`started=true`, the state files) all live in — from its list entry
+    to the next step's."""
+    region = _trigger_region()
+    start = region.index("      - id: resolve")
+    end = region.find("      - uses:", start)
+    return region[start:end if end == -1 else end]
+
+
+def _stage_jobs_gate_on_the_trigger():
+    """The "no stage runs after the trigger" half, asserted on the
+    workflow file: every one of the nine stage jobs lists the trigger
+    — directly or through its predecessor — in its `needs:` chain and
+    gates its run on the trigger's `started` output, so a failed trigger
+    leaves `started` false and every stage job skips."""
+    text = _read(".github/workflows/factory.yml")
+    lines = text.splitlines()
+    job_keys = ("setup-pi", "baseline", "extract", "plan", "implement",
+                "review", "pr", "gates", "report")
+    starts = [i for i, ln in enumerate(lines)
+              if ln.startswith("  ") and not ln.startswith("   ")
+              and ln.strip() in {k + ":" for k in job_keys}]
+    assert len(starts) == len(job_keys), \
+        (f"the factory's nine stage jobs are not all found in the "
+         f"workflow file: {len(starts)}")
+    for a, b in zip(starts, starts[1:] + [len(lines)]):
+        name = lines[a].strip()[:-1]
+        section = "\n".join(lines[a:b])
+        assert "needs:" in section, \
+            f"the {name} job declares no needs: chain"
+        assert "needs.trigger.outputs.started" in section, \
+            (f"the {name} job does not gate its run on the trigger's "
+             f"started output — a failed trigger would not skip it")
+
+
+def test_non_numeric_job_timeout_fails_the_run_at_trigger():
+    """(configuration "A non-numeric job timeout fails the run at
+    trigger"; reference
+    `requirements/configuration.feature::A non-numeric job timeout
+    fails the run at trigger`) the trigger validates the run's
+    configuration before it records or accepts the run: a declared
+    job-timeout value that is not a number of minutes fails the trigger
+    with a precise error naming the offending value — the validation
+    block resolves the input's value (the declared value, or the
+    input's default where the consumer leaves the input undeclared)
+    and checks it is a number of minutes, exiting the step non-zero
+    before the run is accepted (the step's first line wrote
+    started=false, and the acceptance writes started=true later — the
+    validation sits between them) — and the stage jobs gate on the
+    trigger's started output, so a failed trigger skips every stage:
+    no stage runs after the trigger."""
+    step = _resolve_step()
+    # the block resolves the declared job-timeout value
+    assert 'JOB_TIMEOUT="${{ inputs.job-timeout }}"' in step, \
+        ("the trigger's validation block does not resolve the declared "
+         "job-timeout input's value")
+    # and checks it is a number of minutes
+    check = '[[ "$JOB_TIMEOUT" =~ ^[0-9]+$ ]]'
+    assert check in step, \
+        ("the trigger's validation block does not check the declared "
+         "job-timeout for a number of minutes")
+    # a value that is not a number of minutes fails the trigger with a
+    # precise error naming the offending value, before any stage work
+    fail = "job-timeout '${JOB_TIMEOUT}' is not a number of minutes"
+    assert fail in step, \
+        ("the trigger's validation does not fail with a precise error "
+         "naming the offending job-timeout value")
+    assert "exit 1" in step, \
+        "a non-numeric job timeout does not fail the trigger step"
+    assert step.index(check) < step.index('echo "started=true"'), \
+        ("the job-timeout validation does not run before the trigger "
+         "accepts the run — a failed trigger would not keep the stages "
+         "skipped")
+    _stage_jobs_gate_on_the_trigger()
+
+
+def test_job_timeout_with_no_headroom_fails_the_run_at_trigger():
+    """(configuration "A job timeout with no headroom over the resolved
+    pi call cap fails the run at trigger"; reference
+    `requirements/configuration.feature::A job timeout with no headroom
+    over the resolved pi call cap fails the run at trigger`) the
+    trigger validates the run's configuration before it records or
+    accepts the run: where the declared job timeout does not exceed the
+    resolved pi call cap — the target's declared pi-timeout value, or
+    the 21600 default where undeclared — by at least the headroom the
+    stage's own non-call work needs around each call, the block compares
+    the resolved job timeout against the resolved pi cap plus the
+    headroom and fails the trigger on a shortfall with a precise error
+    naming both resolved values and the headroom — and the stage jobs
+    gate on the trigger's started output, so a failed trigger skips
+    every stage: no stage runs after the trigger. The default pair
+    passes at exactly the margin: the comparison is inclusive, and the
+    factory's own defaults (the 28800-second job timeout, the
+    21600-second cap) leave precisely the 7200-second headroom, so a
+    consumer that declares nothing validates and its run is
+    unchanged."""
+    step = _resolve_step()
+    # the headroom the stage's own non-call work needs around each call
+    # — named and fixed, derived from the two documented input defaults
+    assert "HEADROOM_SECONDS=7200" in step, \
+        ("the trigger's validation block does not name the headroom "
+         "the stage's own non-call work needs around each call")
+    assert "28800 s minus 21600 s = 7200 s" in step, \
+        ("the trigger's validation block does not derive the headroom "
+         "from the two documented input defaults (the 480-minute "
+         "default job timeout minus the 21600-second default pi call "
+         "cap)")
+    # the resolved pi call cap — the target's declared pi-timeout value,
+    # or the 21600 default where undeclared
+    assert 'PI_CAP="${{ inputs.pi-timeout }}"' in step, \
+        ("the trigger's validation block does not resolve the declared "
+         "pi-timeout input's value as the run's pi call cap")
+    # the comparison: the resolved job timeout must exceed the resolved
+    # pi cap plus the headroom — the block fails the trigger on a
+    # shortfall, and the comparison is inclusive, so the default pair
+    # (28800 s against 21600 s plus the 7200 s headroom) passes at
+    # exactly the margin
+    compare = ('[ "$JOB_TIMEOUT_SECONDS" -ge '
+               '$(( PI_CAP + HEADROOM_SECONDS )) ]')
+    assert compare in step, \
+        ("the trigger's validation block does not compare the resolved "
+         "job timeout against the resolved pi cap plus the headroom")
+    # a shortfall fails the trigger with a precise error naming both
+    # resolved values and the headroom, before the run is accepted
+    fail = ("does not exceed the resolved pi call cap (${PI_CAP} s) "
+            "by at least the ${HEADROOM_SECONDS}-second headroom")
+    assert fail in step, \
+        ("the trigger's validation does not fail with a precise error "
+         "naming both resolved values and the headroom")
+    assert "exit 1" in step, \
+        "a job timeout with no headroom over the resolved pi call cap " \
+        "does not fail the trigger step"
+    assert step.index(compare) < step.index('echo "started=true"'), \
+        ("the headroom validation does not run before the trigger "
+         "accepts the run — a failed trigger would not keep the stages "
+         "skipped")
+    _stage_jobs_gate_on_the_trigger()
+
+
+def test_declared_pi_call_cap_the_job_timeout_cannot_exceed_fails_the_run_at_trigger():
+    """(configuration "A declared pi call cap the job timeout cannot
+    exceed fails the run at trigger"; reference
+    `requirements/configuration.feature::A declared pi call cap the job
+    timeout cannot exceed fails the run at trigger`) the declared-cap
+    view of the trigger's configuration validation, the same comparison
+    its job-timeout half makes — the run's job timeout is the target's
+    declared job-timeout value, or its "480" default where the consumer
+    leaves the input undeclared, and where the target declares a pi call
+    cap longer than the job timeout minus the headroom the stage's
+    non-call work needs, the trigger fails the run at trigger time with
+    a precise error (one trigger-side validation discharges both views
+    of the same inequality) — and the stage jobs gate on the trigger's
+    started output, so no stage runs after the trigger."""
+    factory = _read(".github/workflows/factory.yml")
+    # the run's job timeout — the target's declared job-timeout value,
+    # or its "480" default (the input's declared default)
+    assert 'default: "480"' in factory, \
+        "the job-timeout input does not declare its 480 default"
+    step = _resolve_step()
+    assert 'JOB_TIMEOUT="${{ inputs.job-timeout }}"' in step, \
+        ("the trigger's validation block does not resolve the run's job "
+         "timeout from the declared job-timeout input")
+    # the cap-side view of the same comparison: a declared pi call cap
+    # longer than the job timeout minus the headroom fails the run
+    assert "longer than the job timeout minus the headroom" in step, \
+        ("the trigger's validation block does not carry the declared-"
+         "cap view — a cap longer than the job timeout minus the "
+         "headroom — of the same comparison")
+    # the comparison: a declared cap passes only at or under the job
+    # timeout minus the headroom — beyond it, the trigger fails before
+    # the run is accepted
+    compare = ('[ "$JOB_TIMEOUT_SECONDS" -ge '
+               '$(( PI_CAP + HEADROOM_SECONDS )) ]')
+    assert compare in step, \
+        ("the trigger's validation does not compare the declared pi "
+         "call cap against the job timeout minus the headroom")
+    assert "exit 1" in step, \
+        ("a declared pi call cap the job timeout cannot exceed does not "
+         "fail the trigger step")
+    assert step.index(compare) < step.index('echo "started=true"'), \
+        ("the cap-side validation does not run before the trigger "
+         "accepts the run — a failed trigger would not keep the stages "
+         "skipped")
+    _stage_jobs_gate_on_the_trigger()

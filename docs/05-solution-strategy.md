@@ -44,16 +44,22 @@ Key mechanisms:
   cap (0 = no cap) — no token budget is one of the loops' stopping
   conditions; every stage's pi call carries its own time cap, and a call cut
   off at the cap (exit 124) is retried inside the loop — a slow model is not
-  a broken environment. The stage jobs run under a factory-side
-  job-timeout backstop that no input of the reusable workflow sets — a
-  job-level `timeout-minutes` the workflow file declares on every stage job
-  (a uniform value the stage code knows through the shared plumbing), which
-  bounds how long the job a cut-off call retries in may run; a
-  target-declared pi call cap longer than that backstop is not honoured —
-  the effective per-call cap is clamped to the backstop (a declared cap at
-  or under it is honoured unchanged), and the run records the exceedance —
-  the trigger's resolved-configuration record and the job log of the stage
-  that clamps.
+  a broken environment. The five stage jobs that make pi calls run under the
+  target's `job-timeout` input (default `480` minutes — a consumer that
+  leaves the input undeclared keeps the 480-minute backstop, unchanged; the
+  trigger and the setup-pi jobs are unaffected by the input; the stage code
+  knows the same value through the shared plumbing) as their job-level
+  `timeout-minutes`, which bounds how long the job a cut-off call retries in
+  may run; a declared value that leaves the stage's non-call work no headroom
+  fails the run at trigger time with a precise error, and no stage runs after
+  the trigger — the trigger validates that the resolved job timeout exceeds
+  the resolved pi call cap by at least the headroom (7200 seconds — the
+  margin the stage's own non-call work — checkout, guard, loop machinery,
+  artifact sync, push — needs around each call, and the margin the factory's
+  own default pair already provides: the 480-minute default job timeout minus
+  the 21600-second default pi call cap), the default pair passing at exactly
+  the margin; a run that reaches a stage has validated the pair, and its pi
+  calls honour the resolved value.
 - **The context contract — two disjoint slices** (the oracle's two
   pinning scenarios are re-sliced onto disjoint stage boundaries): the
   *extraction* stage is the **`@`-file slice** — the arc42 markdown,

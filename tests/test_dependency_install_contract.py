@@ -49,18 +49,21 @@ consuming job:
   chapters covering the mechanism) state the stage, its default, the
   turn-off input, the before-implementation placement and the
   unchanged-when-off behaviour on the same surfaces.
-- resolved pi call cap (issue 97) — this module also pins one entry of
-  the trigger's resolved-configuration record: the record (the
-  workflow-log block the trigger tees into the resolved-config file that
-  rides the trigger's artifact) lists the run's resolved pi call cap
-  with the rest of the resolved configuration — the declared value
-  where a target declared one, the 21600 default where the input is
-  undeclared — and the record stays in the workflow log, never
-  committed to the repo; the block also carries the record's
-  exceedance line — a declared pi call cap longer than the stage
-  jobs' job-level timeout-minutes backstop is not honoured, and the
-  record names the declared value, the backstop, and that the declared
-  cap is not honoured.
+- resolved pi call cap (issue 97) and resolved job timeout (issue 98)
+  — this module also pins entries of the trigger's
+  resolved-configuration record: the record (the workflow-log block the
+  trigger tees into the resolved-config file that rides the trigger's
+  artifact) lists the run's resolved pi call cap with the rest of the
+  resolved configuration — the declared value where a target declared
+  one, the 21600 default where the input is undeclared — and the record
+  stays in the workflow log, never committed to the repo; the record
+  lists the run's resolved job timeout with the rest of the resolved
+  configuration too — the declared value where a target declared one,
+  the 480 default where the input is undeclared — and it carries no
+  exceedance line any more: with the validation moved to trigger time,
+  a run whose declared cap leaves the stage's non-call work no headroom
+  inside the job timeout fails before any stage runs, so the record's
+  pi-cap line simply carries the resolved value.
 
 The workflow reads are line-based (stdlib only — the documented
 `on:`/YAML 1.1 gotcha makes a whole-document parse the wrong tool for
@@ -639,8 +642,11 @@ def test_readme_and_arc42_document_the_dependency_upgrade_stage():
 
 def test_resolved_pi_call_cap_rides_the_resolved_configuration_record():
     """(configuration "The resolved pi call cap rides the
-    resolved-configuration record"; reference
+    resolved-configuration record" and "The resolved job timeout rides
+    the resolved-configuration record"; references
     `requirements/configuration.feature::The resolved pi call cap rides
+    the resolved-configuration record`,
+    `requirements/configuration.feature::The resolved job timeout rides
     the resolved-configuration record`) the trigger's
     resolved-configuration record — the workflow-log block its resolve
     step tees into the resolved-config file that rides the trigger's
@@ -649,19 +655,21 @@ def test_resolved_pi_call_cap_rides_the_resolved_configuration_record():
     one, the 21600 default where the input is undeclared (the input's
     declared default is the value an undeclared consumer resolves, so
     the record's line carries both branches — the value and the default
-    it names); the record stays in the workflow log and the run's
-    artifacts, never committed to the repo — its heading says so, and
-    the file it tees is the one the trigger's artifact uploads. The
-    block also carries the exceedance branch (reference
-    `requirements/configuration.feature::A declared cap longer than the
-    job's timeout backstop is not honoured`): where the declared value
-    exceeds the stage jobs' job-level timeout-minutes backstop — which
-    the trigger computes in this same block from the same literal the
-    workflow file declares on the jobs — the record names the declared
-    value, the backstop, and that the declared cap is not honoured."""
+    it names); the record lists the run's resolved job timeout with the
+    rest of the resolved configuration too — the declared value where a
+    target declared one, the 480 default where the input is undeclared
+    (the same both-branches shape); and the record stays in the workflow
+    log and the run's artifacts, never committed to the repo — its
+    heading says so, and the file it tees is the one the trigger's
+    artifact uploads. The record carries no exceedance branch any more —
+    with the validation moved to trigger time, a run whose declared cap
+    leaves the stage's non-call work no headroom inside the job timeout
+    fails before any stage runs, so the record's pi-cap line simply
+    carries the resolved value."""
     factory = _read(FACTORY)
     block = _resolved_config_block(factory)
-    # the declared-value branch: the record lists the input's value
+    # the pi call cap line: the declared-value branch — the record lists
+    # the input's value
     assert "inputs.pi-timeout" in block, (
         "the trigger's resolved-config record does not list the "
         "resolved pi call cap from the pi-timeout input")
@@ -670,21 +678,16 @@ def test_resolved_pi_call_cap_rides_the_resolved_configuration_record():
     assert "21600" in block, (
         "the trigger's resolved-config record does not name the 21600 "
         "default a target that leaves the input undeclared keeps")
-    # the exceedance branch: a declared pi call cap longer than the
-    # stage jobs' job-level timeout-minutes backstop is not honoured —
-    # the record names the declared value, the backstop, and that the
-    # declared cap is not honoured (the trigger computes the declared
-    # value against the backstop in this same block)
-    assert "EXCEEDANCE" in block, (
-        "the trigger's resolved-config record does not carry the "
-        "exceedance branch for a declared pi call cap")
-    assert "the declared cap is not honoured" in block, (
-        "the resolved-config record's exceedance line does not state "
-        "that the declared pi call cap is not honoured")
-    assert "timeout-minutes backstop" in block, (
-        "the resolved-config record's exceedance line does not name "
-        "the stage jobs' timeout-minutes backstop the declared cap is "
-        "compared against")
+    # the job timeout line: the declared-value branch — the record lists
+    # the input's value
+    assert "inputs.job-timeout" in block, (
+        "the trigger's resolved-config record does not list the "
+        "resolved job timeout from the job-timeout input")
+    # the default branch: an undeclared consumer's value is the input's
+    # declared default — the line names it
+    assert "480" in block, (
+        "the trigger's resolved-config record does not name the 480 "
+        "default a target that leaves the input undeclared keeps")
     # the record's location and never-committed property (its heading)
     assert "workflow log" in block, (
         "the resolved-config record's heading no longer states the "
