@@ -4,8 +4,8 @@
 workflow (chapter 4). An external target pins the factory by **owner,
 repo, path and a version tag** — `uses:
 MelvinKl/code-weaver/.github/workflows/factory.yml@<version tag>` — and
-that is the only pin: the file at the ref carries its runtime tree
-embedded, so no relayed ref accompanies it. The oracle pins the owner
+that is the only pin: the ref selects the published version, so no
+relayed ref accompanies it. The oracle pins the owner
 and a version tag: a moving branch ref (`@main`) is not a stable ref, so
 both the deployed consumer workflow and the README's consumption example
 declare the same owner and the same tag (the
@@ -17,10 +17,14 @@ public release line (a version tag of the MelvinKl line) with the
 exactly the published version the external targets get — a broken
 release breaks the dogfood visibly — while a run triggered in it still
 checks out and works the code of the repo it was triggered in: the pin
-selects the machinery (the file and the runtime tree embedded in it, the
-tagged version — the embed's contract test keeps that version fresh, and
-the release flow gates publication on it), never the code, and no stage
-clones the factory repo at a second ref. Its `secrets:` block carries
+selects the machinery (the file and its runtime tree as one published
+version), never the code — each stage job materialises the runtime tree
+of the pinned version (the tagged version's tree, kept consistent with
+the file by the release flow's publication gate) and runs its stage
+steps from that copy, and no stage clones the factory repo at a second
+ref (the first job fetches the called version's tree from the factory
+repo at the ref that selected the file — the consumer's `uses:` line
+stays the only pin). Its `secrets:` block carries
 `GH_TOKEN` (the only required one) plus the four optional
 harness-provider secrets (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`,
 `PI_EXTENSION_ENV`) — a provider value never appears in a `with:` input
@@ -60,15 +64,22 @@ helper's guard), so a number is never spent on a duplicate version. A
 push whose changed files are confined to the consumer workflow publishes
 no release (no tag, no release, no number spent — the version it would
 have carried is unchanged: a version is the factory workflow and its
-embedded runtime tree, never the consumer's own workflow file). The
-workflow at a ref is self-contained and self-carrying — its stage
-steps are inlined in the file, and its runtime tree is embedded in the
-file (stage 1 materialises it; the trigger's artifact carries it to
-every later stage job's first step — that upload opts into hidden
-files, the tree sitting under the hidden .github/ directory the
-artifact API would otherwise drop) — so a target's ref bump selects the
-whole version at once (the workflow file and the tree its steps execute
-are one version: the file's own); tags are
+runtime tree as one published version, never the consumer's own
+workflow file). The published file is plain text within the max
+allowed size for it — at most 500kb; a version whose file exceeds the
+cap is not consistent. The workflow at a ref is self-contained — its
+stage steps are inlined in the file, which stores no binary content —
+and the tagged commit carries the tree the file's stage steps execute
+(stage 1 fetches the called version's runtime tree at the called ref
+into $RUNNER_TEMP before the first checkout; the trigger's artifact
+carries it to every later stage job's first step — that upload opts
+into hidden files, the tree sitting under the hidden .github/ directory
+the artifact API would otherwise drop); the release flow's publication
+gate keeps the two consistent, failing a publish that is not —
+including a file past 500kb — so a target's ref bump selects the whole
+version at once (the workflow file and the tree its steps execute are
+one version: the ref's published version carries the two together);
+tags are
 immutable, so targets pinned to an older ref keep working, and bumping
 the ref is the only change a target ever makes. A release's notes name
 the changes since the predecessor release (first commit only where

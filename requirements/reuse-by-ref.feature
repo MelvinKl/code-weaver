@@ -38,6 +38,17 @@
 # works. One tag per commit: the release flow's guard makes a re-run
 # at an unchanged HEAD publish nothing, so a number is never spent on
 # a duplicate.
+# Issue 100 delta — the single-pin rewrite stored the runtime tree in
+# the file as a base64 tarball: a binary payload in a file that must be
+# plain text, and the bloat that took the published file past its max
+# allowed size (500kb — 528kb when the issue was filed). The
+# scenarios' embed clauses are updated in place: the file keeps its
+# inlined stage steps, stores no binary content, and stays within the
+# max allowed size. How the runtime tree reaches the stage jobs is the
+# plan stage's question — the oracle no longer pins the tree to the
+# file. The one-ref version architecture is unchanged: the ref still
+# selects the published version — the file and the tree of that ref's
+# commit — and the consumer's uses: line stays the only pin.
 
 Feature: Reuse by ref, never copy-paste
   As a maintainer of a target project
@@ -48,7 +59,7 @@ Feature: Reuse by ref, never copy-paste
   Scenario: The factory is invoked as a reusable workflow
     Given the target repo's workflow .github/workflows/code-weaver.yml
     When it invokes the factory
-    Then an external target uses MelvinKl/code-weaver/.github/workflows/factory.yml at a version tag — one pin: the file at the tag carries its runtime tree embedded, so no relayed ref accompanies it
+    Then an external target uses MelvinKl/code-weaver/.github/workflows/factory.yml at a version tag — one pin: the ref selects the published version, so no relayed ref accompanies it
     And a repo that is the factory project itself pins the public release line too — a version tag of the MelvinKl line — with the (legacy) factory-ref input left undeclared
     And it passes issue-number and the factory settings via with
     And it passes GH_TOKEN via secrets
@@ -65,13 +76,13 @@ Feature: Reuse by ref, never copy-paste
     When its stage jobs are read
     Then every stage's steps live in the workflow file itself
     And no step references the factory's actions as separate files
-    And its runtime tree is embedded in the file (a base64 tarball in stage 1's first step), so the file carries what its steps execute
+    And the file stores no binary content — the runtime tree its steps execute is not embedded in it
 
   @reuse
   Scenario: The stage jobs materialise the runtime tree before their first checkout
     Given a factory run on a target repo whose tree holds no copy of the factory's runtime tree
     When a stage job starts
-    Then the first job of the run decodes the runtime tree embedded in the workflow file into the runner's temp dir
+    Then the first job of the run materialises the runtime tree into the runner's temp dir before the first checkout replaces the workspace
     And every later stage job restores it from the trigger's artifact before its first checkout replaces the workspace
     And its stage steps run their scripts from that materialised copy
 
@@ -79,16 +90,16 @@ Feature: Reuse by ref, never copy-paste
   Scenario: The whole version is one ref
     Given the factory's reusable workflow at a published version ref
     When a target invokes it at that ref
-    Then the workflow file and the runtime tree its steps execute are the one version that ref selects — the tree is embedded in the file, so no stage job clones the factory repo at a second ref
-    And the stage jobs fetch nothing from the factory repo at run time — the consumer's uses: ref is the only pin a run makes
+    Then the workflow file and the runtime tree its steps execute are the one version that ref selects — the ref's published version carries the file and the tree together, and the file stores no binary payload
+    And the consumer's uses: ref is the only pin the consumer's workflow makes — the tree the run executes is the one the ref's version carries
 
   @reuse
   Scenario: A run triggered in the factory's own repo works on that repo's code
     Given the triggered repo is the factory project itself
     When a stage job starts
     Then the run's workflow file is the public release the dogfood pins — the factory workflow at a version tag of the MelvinKl line, never a clone of the factory repo at a second ref
-    And each stage job materialises the runtime tree the workflow file embeds — the tagged version's tree, the embed's contract test keeping that version fresh — and runs its stage steps from that copy
-    And the code the run works is the triggered repo's own — the pin selects the machinery (the file and its embedded tree), never the code
+    And each stage job materialises the runtime tree of the pinned version — the tagged version's tree, kept consistent with the file by the release flow's publication gate — and runs its stage steps from that copy
+    And the code the run works is the triggered repo's own — the pin selects the machinery (the file and its runtime tree as one published version), never the code
 
   @reuse
   Scenario: An upgrade is a ref bump
@@ -112,16 +123,16 @@ Feature: Reuse by ref, never copy-paste
     And the target repo's tree holds no copy of the factory's runtime tree
     When a factory run starts on that target repo
     Then every stage step runs the factory's own script from the materialised runtime tree
-    And the materialised runtime tree is the factory's at the called ref — the file's embedded payload, decoded by stage 1 (no clone at run time; the consumer relays nothing)
+    And the materialised runtime tree is the factory's at the called ref — the tree of the called version (the consumer relays nothing)
     And no step fails looking for the factory's scripts under the target's own checkout
     And the run does not crash at the first stage step
 
   @reuse @issue-60
   Scenario: A published version is self-contained
     Given the factory's reusable workflow at a published version ref
-    And the workflow's stage steps inlined and its runtime tree embedded in the file
+    And the workflow's stage steps inlined in the file, which stores no binary payload
     When a target invokes the workflow at that version ref
-    Then the whole version — the workflow's stage steps, its embedded runtime tree, and the trigger's artifact that carries it across jobs — is selected by that one ref
+    Then the whole version — the workflow's stage steps and its runtime tree, the trigger's artifact carrying the tree across jobs — is selected by that one ref, the file storing no binary payload
     And a target's ref bump upgrades the factory atomically, with no separate ref to keep in step
 
   Scenario: Stage steps declare their shell explicitly
@@ -131,3 +142,16 @@ Feature: Reuse by ref, never copy-paste
     Then the step relies on the runner's default shell instead of the one the script was written against
     And the stage fails before any of its processes start
     And every stage step in the factory declares its shell explicitly
+
+  @reuse @issue-100
+  Scenario: The factory workflow file stays within the max allowed size
+    Given the factory's reusable workflow .github/workflows/factory.yml
+    When its size is measured
+    Then it is at most 500kb — the max allowed size for the file
+
+  @reuse @issue-100
+  Scenario: The factory workflow file stores no binary content
+    Given the factory's reusable workflow .github/workflows/factory.yml
+    When its contents are read
+    Then the file is plain text — no binary payload is stored in it
+    And the runtime tree its steps execute is not embedded in the file as a base64 tarball

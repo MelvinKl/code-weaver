@@ -38,9 +38,10 @@ the adjusted
 And line — workflows pinned to an older ref keep working — is unchanged:
 both tag series stay immutable, pinnable refs) and in the reworked
 `reuse-by-ref` scenario "A published version is self-contained" (the
-workflow's stage steps are inlined and its runtime tree stashes at the
-called ref — the tag needs no pre-tag rewrite: the version a target pins
-is one file).
+workflow's stage steps are inlined in the file, which stores no binary
+payload — the tag needs no pre-tag rewrite: the whole version — the
+stage steps and the runtime tree, the trigger's artifact carrying the
+tree across jobs — is selected by that one ref).
 
 
 Plain-stdlib by design (no third-party imports): the stage-10 driver
@@ -483,9 +484,9 @@ def test_changed_files_confined_to_the_consumer_workflow_skip():
     a push whose change set is confined to the consumer workflow — at
     least one changed file, and every changed file the consumer
     workflow file — is the release flow's skip signal: a version is the
-    factory workflow and its embedded runtime tree, never the consumer's
-    own workflow file, so the push changes nothing a published version
-    carries and must spend no release number."""
+    factory workflow and its runtime tree as one published version, never
+    the consumer's own workflow file, so the push changes nothing a
+    published version carries and must spend no release number."""
     changed = [".github/workflows/code-weaver.yml"]
     assert release_number.consumer_workflow_only(changed) is True
     # the confinement is per-file: any multiplicity of entries of that
@@ -499,8 +500,8 @@ def test_a_change_reaching_a_version_file_does_not_skip():
     `requirements/auto-release-on-main.feature::A push that changes
     only the consumer workflow publishes no release`)
     a change set that reaches a version file — the factory workflow or
-    any file of the embedded runtime tree — is not confined to the
-    consumer workflow, so the skip predicate is false and the flow
+    any file of the runtime tree the version carries — is not confined to
+    the consumer workflow, so the skip predicate is false and the flow
     publishes the next release for it."""
     for version_file in (".github/workflows/factory.yml",
                          ".github/scripts/common.py",
@@ -508,8 +509,8 @@ def test_a_change_reaching_a_version_file_does_not_skip():
                          "pi-prompts/plan.md"):
         assert release_number.consumer_workflow_only([version_file]) is False, (
             f"{version_file} is part of the published version (the factory "
-            "workflow and its embedded runtime tree) — a change reaching it "
-            "must not skip")
+            "workflow and its runtime tree as one published version) — a "
+            "change reaching it must not skip")
 
 
 def test_the_consumer_workflow_plus_any_other_file_does_not_skip():
@@ -562,7 +563,7 @@ def test_workflow_runs_the_changed_files_check_as_a_pre_publish_step():
     `requirements/auto-release-on-main.feature::A push that changes
     only the consumer workflow publishes no release`)
     release.yml runs the helper's changed-files shape as a dedicated
-    pre-publish step — after the embed-freshness gate, before the
+    pre-publish step — after the version-consistency gate, before the
     Publish step — and exits (a green no-op, like the
     one-tag-per-commit guard) where the skip signal is non-empty: a
     change set confined to the consumer workflow exits the step before
@@ -581,8 +582,8 @@ def test_workflow_runs_the_changed_files_check_as_a_pre_publish_step():
         "content did not change")
     assert gate != -1 and tag != -1 and gate < check < tag, (
         "the changed-files check is not a dedicated pre-publish step — it "
-        "must sit after the embed-freshness gate and before the Publish "
-        "step, so a skipped push exits cleanly before a number is "
+        "must sit after the version-consistency gate and before the "
+        "Publish step, so a skipped push exits cleanly before a number is "
         "materialised, a tag is created, or a release is published")
     skip_test = _first_line_index(lines, r'[ -n "$SKIP" ]')
     skip_exit = _first_line_index(lines, "exit 0")

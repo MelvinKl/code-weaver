@@ -23,15 +23,20 @@ jobs:
     # version the external targets get — a broken release breaks the
     # dogfood visibly. A run triggered here still checks out and works
     # the code of the repo it was triggered in — the pin selects the
-    # machinery (the workflow file and the runtime tree embedded in it,
-    # the tagged version), never the code; no stage clones the factory
-    # repo or reads a relayed ref, and the (legacy) factory-ref input
-    # stays undeclared (requirements/reuse-by-ref.feature, "a run
+    # machinery (the workflow file and its runtime tree as one published
+    # version), never the code: each stage job materialises the runtime
+    # tree of the pinned version — the tagged version's tree, kept
+    # consistent with the file by the release flow's publication gate —
+    # and runs its stage steps from that copy (the first job fetches the
+    # called version's tree from the factory repo at the ref that
+    # selected the file — the consumer's uses: line stays the only pin,
+    # and the (legacy) factory-ref input stays undeclared, no stage
+    # reading a relayed ref; requirements/reuse-by-ref.feature, "a run
     # triggered in the factory's own repo works on that repo's code").
     # Bumping the tag number is the dogfood's upgrade — one tag is one
     # complete version, and the release flow's one-tag-per-commit guard
     # keeps the series one commit per number.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@12
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@42
     with:
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}

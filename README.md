@@ -163,7 +163,7 @@ jobs:
     # a reusable-workflow job may only carry `uses`/`with`/`secrets` — a
     # `runs-on:` here makes the file schema-invalid. Choose the runner
     # through the factory's `runner` input instead.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@7
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@42
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
@@ -189,19 +189,26 @@ workflow's file — the runner never checks the factory repo into the
 target's workspace — so the called ref is not visible to the stage
 jobs. The old answer relayed the ref as a `factory-ref` input (a second
 pin beside the `uses:` line) and had each stage job clone the factory
-repo at it; the restored-and-improved answer carries the answer in the
-file instead: the workflow's runtime tree (the stage scripts, the
-shared scripts, the pi prompt templates) is **embedded in the workflow
-file** — a base64 tarball in stage 1's first step, which materialises
-it into the runner's temp dir before any checkout replaces the
-workspace, and the trigger's artifact carries it to every later stage
-job's first step (that upload opts into hidden files — the tree lives
-under the hidden .github/ directory, which the artifact API would
-otherwise drop). No run fetches the factory repo, and no stage reads
-the `factory-ref` input (a legacy no-op, still declared so an older
-consumer's `with:` block stays schema-valid): the ref on the `uses:`
-line is the only version selection a run makes — one ref selects the
-workflow file and its runtime tree as one version.
+repo at it; the current answer recovers the ref: stage 1 reads the
+consumer workflow as committed at the run's base ref over the GitHub
+API (no checkout has happened yet, so nothing has replaced the
+workspace — the token reads the target repo, which the contract
+already requires), recovers the ref the `uses:` line declared, and
+fetches the called version's runtime tree (the stage scripts, the
+shared scripts, the pi prompt templates) from the factory repo at that
+same ref into the runner's temp dir before the first checkout replaces
+the workspace — the factory repo is public, and the fetch is an
+anonymous checkout that does not ride the target-scoped `GH_TOKEN`
+(which cannot read it). The trigger's artifact carries the tree to
+every later stage job's first step (that upload opts into hidden files
+— the tree lives under the hidden .github/ directory, which the
+artifact API would otherwise drop). No stage reads the `factory-ref`
+input (a legacy no-op, still declared so an older consumer's `with:`
+block stays schema-valid), and the consumer relays nothing: the ref on
+the `uses:` line is the only version selection a run makes — one ref
+selects the workflow file and its runtime tree as one version (the file
+GitHub fetched, and the tree the first job fetches at that same ref —
+the tag's commit carries the two together).
 
 The `GH_TOKEN` secret holds the token every factory stage authenticates with
 — it must be a token that **can read the target repo** (its user/app a member
@@ -210,11 +217,13 @@ verifies this up front: a missing, dead or wrongly-scoped token fails within
 seconds with the exact cause in the log — not as an opaque red checkout.
 
 **Upgrading is a ref bump** in that `uses:` line — and that is the only
-pin: the file at the ref carries the runtime tree its steps execute (the
-scripts, the pi prompt templates) embedded in it, so the ref selects the
-reusable workflow — self-contained, its stage steps inlined in the
-workflow file and its runtime tree embedded in the file — as one version
-from the factory repo; a ref bump selects the whole version.
+pin: the ref selects the published version — the workflow file (plain
+text, within its max allowed size, storing no binary content) and the
+runtime tree its stage steps execute (the scripts, the pi prompt
+templates) as one version, the tagged commit's tree carrying the two
+together and the release flow's publication gate keeping the version
+consistent (a version that is not is never published); a ref bump
+selects the whole version at once.
 **Every published version is a stable ref**: a push to the factory's `main`
 branch publishes the next single increasing number as a GitHub release;
 targets pinned to an older ref keep working. A push whose changed files
@@ -242,7 +251,7 @@ never empty for a release that publishes changes.
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
 | `dependency-install` | *(empty)* | the command the run's pipeline runs to install the target project's dependencies — executed in the jobs whose stages consume them (the implementation, the test-and-review's suite run), after each job's checkout and before its stage; empty = no such step, the run is unchanged |
 | `dependency-upgrade` | `on` | whether the run's pipeline runs the dependency-upgrade stage — the stage upgrades the project's dependencies to newer versions, before the implementation stage; set it to `off` in the `with:` block = the pipeline runs without the stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence) |
-| `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is embedded in the workflow file, so the ref on the `uses:` line is the only pin a run makes (the factory project's own repo pins the public release line too — a run triggered in it works the code of the repo it was triggered in, and the dogfood exercises the published version its external targets get, chapter 8) |
+| `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is fetched by the first job from the called version — the ref the `uses:` line selected, recovered by the trigger, never relayed — so the ref on the `uses:` line is the only pin a run makes (the factory project's own repo pins the public release line too — a run triggered in it works the code of the repo it was triggered in, and the dogfood exercises the published version its external targets get, chapter 8) |
 
 The **LLM backend is provided for the run** — via a GitHub secret or the
 repo file `.pi/agent/models.json`. The runner's pre-existing user-level
@@ -318,11 +327,11 @@ factory.
 ```
 .github/
   workflows/
-    factory.yml        the 15-stage pipeline as one self-contained, self-carrying reusable workflow (the stage steps inlined in the file; the runtime tree embedded in it as a base64 tarball — one ref is one version; no composite actions)
+    factory.yml        the 15-stage pipeline as one self-contained, self-carrying reusable workflow (the stage steps inlined in the file — plain text within its max allowed size, at most 500kb, storing no binary content; the called version's runtime tree fetched into the runner's temp dir by the first job; one ref is one version; no composite actions)
     house-ci.yml       this repo's own gate (uv; compile+YAML+oracle+pytest)
     release.yml        push to main → next single increasing number → GitHub release (a push whose changed files are confined to the consumer workflow publishes no release — no tag, no number spent; the ref targets pin; the default GITHUB_TOKEN publishes the tag on main's HEAD — no special token)
   actions/
-    <stage>/           the stage's python script — the stage's STEPS are inlined in factory.yml (the workflow is self-contained: no composite actions to reference, no own-action ref for the release to rewrite, no runtime tree for a stage job to fetch — the file carries it embedded); each dir holds the script its inlined stage step runs
+    <stage>/           the stage's python script — the stage's STEPS are inlined in factory.yml (the workflow is self-contained: no composite actions to reference, no own-action ref for the release to rewrite — the file stores no binary content, so the stage job's runtime tree is the called version's: the first job fetches it into the runner's temp dir, the trigger's artifact carries it to every later job); each dir holds the script its inlined stage step runs
     setup-pi/          stage 2 — install pi for the run + write the provided harness + backend/model checks
     pi-run/            one headless `pi --print` run (the stage primitive)
     baseline/          stage 3 — branch ai/code-weaver/<issue> + baseline ref
@@ -339,9 +348,9 @@ factory.
     stages.py          the shared generation/review loop machinery
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
-    embed-runtime.py   the release pipeline's rewrite of factory.yml — embeds the runtime tree in the file (`make embed`; the release flow gates publication on its freshness)
+    embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 196 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 198 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -349,7 +358,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **196 Gherkin scenarios** — the oracle this
+`requirements/` holds **198 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

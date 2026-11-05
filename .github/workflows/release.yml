@@ -21,10 +21,11 @@
 # The one push the flow does not publish: a push to main whose changed
 # files are confined to the consumer's own workflow file
 # (.github/workflows/code-weaver.yml — the target's only per-target
-# code). A version is the factory workflow and its embedded runtime
-# tree — never the consumer's own workflow file — so such a push
-# changes nothing a published version carries: the pre-publish step
-# (between the rewrite gate and Publish below) asks the shared-plumbing
+# code). A version is the factory workflow and its runtime tree as one
+# published version — never the consumer's own workflow file — so such
+# a push changes nothing a published version carries: the pre-publish
+# step (between the publication gate and Publish below) asks the
+# shared-plumbing
 # helper whether the push's changed files are confined to that file and,
 # where they are, exits before a number is materialised, a tag is
 # created, or a release is published — no number spent on a version
@@ -32,23 +33,31 @@
 # advance — the skip is the no-op discipline above applied to a push
 # that changes nothing a version carries.
 #
-# The published version is one file: factory.yml is self-contained —
-# its stage steps are inlined, and its runtime tree (the .github
-# scripts, the stage scripts, the pi prompt templates) is embedded in
-# the file — a base64 tarball stage 1 materialises — so the tag needs
-# no pre-tag rewrite of anything: there are no own-action refs left to
-# rewrite, and no runtime tree to fetch (the file carries it). A target
-# pins the version exactly once — its uses: ref: the file at the ref IS
-# the whole version, workflow logic and runtime tree together — and no
-# stage reads a relayed ref, because there is no second ref to relay.
-# The rewrite the old design did at release time (on a throwaway
-# branch, a push the publishing principal is refused) is now committed
-# to main by the maintainer (the `embed` make target), and this flow's
-# role in it is to gate publication on its correctness: the step below
-# verifies the committed file's embedded tree against the committed
-# runtime tree, and a stale version is not published. Tags are
-# immutable: a target that pinned an older ref keeps working; upgrading
-# is a one-line ref bump in the target's workflow.
+# A published version is the factory workflow file and its runtime tree
+# (the .github scripts, the stage scripts, the pi prompt templates) as
+# one: the file is plain text, within the max allowed size (at most
+# 500kb), and the tagged commit's tree carries the runtime tree the
+# file's stage steps execute. The tag needs no pre-tag rewrite of
+# anything: there are no own-action refs left to rewrite, and nothing
+# to fetch into the file (the file stores no binary content) — the tree
+# the run executes is the one the tagged commit carries. A target pins
+# the version exactly once — its uses: ref: the ref's published version
+# carries the file and the tree together — and no stage reads a
+# relayed ref, because there is no second ref to relay. The rewrite the
+# old design did at release time (on a throwaway branch, a push the
+# publishing principal is refused) is gone: this flow's role in the
+# version is the publication gate — the step below checks the committed
+# file and the committed tree for consistency, and a version that is
+# not consistent — a file that is not plain text or is past 500kb, or a
+# tagged commit whose tree carries no runtime tree the file's stage
+# steps execute — is not published, before the tag, with the exact
+# cause. The gate governs versions published from this change on:
+# versions published before it keep the embedded form — those files are
+# immutable published artifacts that still decode their own tree — so
+# every published version is self-sufficient under its own mechanism
+# and no cross-version coupling is introduced. Tags are immutable: a
+# target that pinned an older ref keeps working; upgrading is a
+# one-line ref bump in the target's workflow.
 #
 # One machinery note: the `gh` CLI refuses to run inside a GitHub Actions
 # job unless `GH_TOKEN` is set in the step env (it does not fall back to
@@ -84,26 +93,27 @@ jobs:
           # and full history is also what puts the *real* first
           # commit at a first release's range base.
           fetch-depth: 0
-      - name: Verify the published file's rewrite is fresh
-        # The release pipeline's rewrite of the published file is the
-        # embedded runtime tree (the one-ref-is-one-version mechanism the
-        # consumer's single uses: pin relies on). The rewrite is committed
-        # to main by the maintainer — the flow itself must never push a
-        # commit that updates a workflow file (the `workflows` scope the
-        # App cannot be granted) — so the flow's part of the rewrite is
-        # read-only: gate publication on its correctness. A commit whose
-        # file carries a stale tree (the maintainer changed
-        # .github/scripts, .github/actions or pi-prompts without
-        # re-running `make embed`) must not be published — fail here,
-        # before the tag, with the exact cause.
+      - name: Gate publication on version consistency
+        # A published version is the factory workflow file and its
+        # runtime tree as one — the one-ref-is-one-version mechanism the
+        # consumer's single uses: pin relies on. The flow itself must
+        # never push a commit that updates a workflow file (the
+        # `workflows` scope the App cannot be granted) — so the
+        # flow's part of the version is read-only: gate publication on
+        # the committed version's consistency. A tagged commit whose
+        # version is not consistent — (a) the file is not plain text,
+        # storing a binary payload; (b) the file exceeds 500kb, the max
+        # allowed size for it; or (c) the tagged commit's tree carries
+        # no runtime tree the file's stage steps execute — must not be
+        # published: fail here, before the tag, with the exact cause.
         run: |
           python3 .github/scripts/embed-runtime.py --check || {
-            echo "::error::the committed factory.yml carries a stale embedded runtime tree — re-run \`make embed\` in the commit that changed the runtime tree and re-push; a stale version must not be published"
+            echo "::error::the published version is not consistent — the committed factory.yml is not plain text within the max allowed size, or the tagged commit's tree does not carry the runtime tree the file's stage steps execute: an inconsistent version must not be published"
             exit 1
           }
       - name: Skip a push that changes only the consumer workflow
-        # A version is the factory workflow and its embedded runtime
-        # tree — never the consumer's own workflow file
+        # A version is the factory workflow and its runtime tree as one
+        # published version — never the consumer's own workflow file
         # (.github/workflows/code-weaver.yml, the target's only
         # per-target code): a push whose changed files are confined to
         # it changes nothing a published version carries, so it must
@@ -129,7 +139,7 @@ jobs:
             CHANGED=$(git diff --name-only "$BASE" HEAD)
             SKIP=$(printf '%s\n' "$CHANGED" | python3 .github/scripts/release-number.py --changed-files)
             if [ -n "$SKIP" ]; then
-              echo "the push changes only $SKIP — a published version is the factory workflow and its embedded runtime tree, never the consumer's own workflow file: no release is published and no number is spent"
+              echo "the push changes only $SKIP — a published version is the factory workflow and its runtime tree as one published version, never the consumer's own workflow file: no release is published and no number is spent"
               exit 0
             fi
           fi

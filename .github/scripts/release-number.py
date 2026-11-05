@@ -20,8 +20,8 @@ Four shapes, one rule:
   - `consumer_workflow_only(changed_files)` — the pre-publish skip's
     pure computation: whether a push's change set is confined to the
     consumer workflow file (a version is the factory workflow and its
-    embedded runtime tree — never the consumer's own workflow file, the
-    target's only per-target code);
+    runtime tree as one published version — never the consumer's own
+    workflow file, the target's only per-target code);
   - the CLI form below — default: one published ref (a tag name) per
     line on stdin, the next tag on stdout (the release workflow pipes
     the remote's tag list into it); `--published-at <sha>`: the raw
@@ -45,10 +45,11 @@ import sys
 _NUMBER_RE = re.compile(r"\d+")
 
 # The consumer's own workflow file — the target's only per-target code
-# (chapter 4). A version is the factory workflow and its embedded
-# runtime tree — never this file: a push whose change set is confined to
-# it changes nothing a published version carries, so the release flow
-# must publish no release for it (no tag, no release, no number spent).
+# (chapter 4). A version is the factory workflow and its runtime tree as
+# one published version — never this file: a push whose change set is
+# confined to it changes nothing a published version carries, so the
+# release flow must publish no release for it (no tag, no release, no
+# number spent).
 CONSUMER_WORKFLOW = ".github/workflows/code-weaver.yml"
 
 

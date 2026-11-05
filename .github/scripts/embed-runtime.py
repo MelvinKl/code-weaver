@@ -1,60 +1,115 @@
-"""Embed the factory's runtime tree into the workflow file that carries it.
+"""The release flow's publication gate: check the published version
+is consistent.
 
-The reusable workflow (factory.yml) is the file a target pins — but
-GitHub fetches only that file at the called ref, and the called ref is
-not visible to the run's jobs. The runtime tree the stage steps execute
-(the .github/scripts plumbing, the .github/actions stage scripts, the
-pi-prompts templates) must therefore come from the file itself: it is
-embedded in stage 1's first step as a base64 tarball behind a heredoc.
+A published version is the factory workflow file and its runtime tree
+(the .github scripts, the stage scripts, the pi prompt templates) as
+one: the ref the consumer's uses: line pins selects a tag, the tag
+points at a commit of the factory repo, and that commit's tree carries
+both halves — the file GitHub fetches for the run, and the runtime
+tree the file's stage steps execute, which the run's first job fetches
+at the called ref. The file itself is static plain text: the embed the
+old design owed — the runtime tree in the file as a base64 tarball
+behind stage 1's first step's heredoc, the release pipeline rewriting
+it into the file before every tag — is retired (a binary payload in a
+file that must be plain text, and the bloat that took the published
+file past its max allowed size).
 
-This is the release pipeline's rewrite of the published file. The
-rewrite is committed to main by the maintainer (the `embed` make
-target); the release flow itself only tags main's HEAD and pushes the
-tag object — the push it is never refused (a workflow-file commit
-would need the `workflows` scope, which the App behind the default
-GITHUB_TOKEN cannot be granted) — and the tag the flow cuts therefore
-points at a file that carries exactly the runtime tree of the tagged
-commit. One ref selects the workflow file and its runtime tree as one
-version; a consumer pins nothing besides its uses: line.
+The check (its `--check` mode; the release flow runs it as its pre-tag
+gate step and fails a publish it would cut from here with the exact
+cause) verifies the version the tag would point at — the committed
+file, the committed tree — is consistent:
 
-The payload region of the file is the heredoc body: the lines between
-the line that opens the `base64 -d … <<'CW_EMBEDDED_RUNTIME_TAR'`
-redirection and the `CW_EMBEDDED_RUNTIME_TAR` terminator line that
-follows it. `--check` verifies the region matches a fresh build of the
-tree (the contract test, tests/test_embedded_runtime.py, runs the same
-comparison in-process); the default splices the fresh payload in place.
-The build is deterministic — sorted member order, zeroed mtime/uid/gid,
-gzip header mtime 0 — so re-running it on an unchanged tree rewrites
-nothing.
+- the file is plain text — it stores no binary payload: no NUL byte,
+  and the retired embed's form is not back (the
+  CW_EMBEDDED_RUNTIME_TAR heredoc region, a base64-blob line of its
+  wrapped body);
+- the file is at most 500kb — read conservatively as 500,000 bytes
+  (decimal): a file at most that is also under 500×1024, so the cap
+  holds under either reading of `kb` — the max allowed size for the
+  file;
+- the tagged commit's tree carries the runtime tree the file's stage
+  steps execute: the canonical marker files the workflow's own
+  verification step checks resolve within the committed tree, and
+  every script the file's stage steps reference resolves to a file
+  the curation below carries (a generalisation of the
+  canonical-marker check: a curation drift that the stage steps'
+  references would not anticipate fails the gate, before the tag).
 
-Plain-stdlib by design (tarfile/base64 are stdlib): a runner whose
-system python is externally-managed can still run it, and the contract
-test loads it by file path with no third-party import available. No
-compressor is in the build (see build_payload) — the payload bytes must
-be reproducible on any runner's python, on any OS.
+A maintainer who changes the runtime tree commits the tree; the tag
+the release flow cuts points at a commit whose tree is consistent
+with the file — no per-release rewrite of the file is owed. Versions
+published before the embed's retirement keep the embedded form — they
+are immutable published artifacts that still decode their own tree;
+the gate governs the versions published from this change on.
+
+Plain-stdlib by design (no third-party imports): a runner whose
+system python is externally-managed can still run it, and the
+contract test (tests/test_embedded_runtime.py) loads it by file path
+with no third-party import available (the loader idiom follows
+tests/test_release_contract.py's `release-number.py` precedent).
 """
 from __future__ import annotations
 
-import base64
-import io
 import os
+import re
 import sys
-import tarfile
 
 # The runtime tree the stage steps execute, repo-relative — the curated
 # subset of the checkout: the shared .github scripts (the stage code
 # imports from here), the .github actions' stage scripts (the inlined
 # steps run them from the stash), and the pi prompt templates (the pi
-# invocations read them from here). The tree's paths under its root are
-# the layout the stage code resolves against ($RUNNER_TEMP/cw/stash).
+# invocations read them from here). The first job of a run fetches
+# exactly these prefixes (its sparse checkout) into the stash,
+# preserving the repo-relative layout the stage code resolves against
+# ($RUNNER_TEMP/cw/stash), and the gate verifies the committed tree
+# against this same curation.
 RUNTIME_PREFIXES = (".github/scripts", ".github/actions", "pi-prompts")
 
-# The payload region's anchors inside the workflow file: the heredoc the
-# stage-1 materialisation step feeds to `base64 -d`, and its terminator.
-OPEN_MARKER = "<<'CW_EMBEDDED_RUNTIME_TAR'"
-CLOSE_MARKER = "CW_EMBEDDED_RUNTIME_TAR"
+# The max allowed size for the published workflow file, read
+# conservatively as 500,000 bytes (decimal): a file at most that is
+# also under 500×1024, so the cap holds under either reading of `kb`.
+MAX_ALLOWED_SIZE = 500_000
 
-BASE64_WRAP = 76
+# The retired embed's payload-region anchor inside the workflow file:
+# its reappearance in the file is the binary payload's form back.
+EMBED_MARKER = "CW_EMBEDDED_RUNTIME_TAR"
+
+# The canonical marker files the workflow's own verification step
+# checks the fetched tree against (the files the stage steps run from
+# and the shared code resolves against) — the same set, here as the
+# committed tree's half of the file↔tree consistency: a tagged
+# commit's tree missing one is not the tree the file's stage steps
+# execute.
+CANONICAL_RUNTIME_FILES = (
+    ".github/scripts/common.py",
+    ".github/scripts/stages.py",
+    ".github/scripts/gherkin-validate.py",
+    ".github/scripts/release-number.py",
+    ".github/actions/setup-pi/stage.py",
+    ".github/actions/extract-stage/stage.py",
+    ".github/actions/plan-stage/stage.py",
+    ".github/actions/implement-stage/stage.py",
+    ".github/actions/review-stage/stage.py",
+    ".github/actions/gates-stage/stage.py",
+    ".github/actions/guard-check/guard-check.py",
+    "pi-prompts/requirements.md",
+    "pi-prompts/plan.md",
+    "pi-prompts/implement.md",
+    "pi-prompts/review.md",
+    "pi-prompts/pr-body.md",
+)
+
+# The script references the file's stage steps make — a path under the
+# runtime tree the step runs (a stage script the step launches, a
+# shared module its python binds, a prompt template the pi invocation
+# reads): every one must resolve to a file present in the committed
+# tree. The forms the inlined steps use — repo-relative, or prefixed
+# by the stash the step resolves against
+# ($RUNNER_TEMP/cw/stash/<repo-relative path> — the prefix the match
+# drops) — both end in the path under the runtime tree.
+SCRIPT_REFERENCE = re.compile(
+    r"\.github/(?:scripts|actions)/[A-Za-z0-9._/-]*[A-Za-z0-9_]\.(?:py|md)"
+    r"|pi-prompts/[A-Za-z0-9._-]*[A-Za-z0-9_-]\.md")
 
 
 def repo_root() -> str:
@@ -67,11 +122,12 @@ def default_factory_path() -> str:
 
 
 def runtime_files(root: str):
-    """[(arcname, abspath)] — the curated runtime tree, sorted by arcname
-    (the deterministic build order): every regular file under the
-    curated prefixes, `__pycache__` dirs and *.pyc excluded (the tracked
-    tree is source; a compiled cache would make the build
-    environment-dependent)."""
+    """[(arcname, abspath)] — the curated runtime tree, sorted by arcname:
+    every regular file under the curated prefixes, `__pycache__` dirs
+    and *.pyc excluded (the tracked tree is source; a compiled cache
+    would make the curation environment-dependent). This is the file
+    set the gate verifies: the tree the first job's fetch materialises
+    and the tag the flow cuts must carry."""
     out = []
     for prefix in RUNTIME_PREFIXES:
         base = os.path.join(root, prefix)
@@ -89,124 +145,89 @@ def runtime_files(root: str):
     return out
 
 
-def build_payload(root: str):
-    """(b64_lines, raw_bytes) — the runtime tree as a plain tar (sorted
-    members; mtime/uid/gid zeroed; uname/gname empty; modes from the
-    file — git-controlled, so identical on any checkout), base64-encoded
-    and wrapped at 76 columns: the exact lines the file's payload region
-    must hold for the embed to be fresh.
-
-    Deliberately NOT gzipped: the payload is compared byte-exact by the
-    contract test and the release gate on every runner, and a gzip layer
-    is not byte-stable across platforms — the header's XFL/OS bytes are
-    an interpreter detail, and the deflate bitstream depends on the
-    zlib build. A plain USTAR tar is fully under our control: the format
-    is frozen, every header field is set explicitly, and no compressor
-    is involved — so the build is byte-identical on any runner's python,
-    on any OS."""
-    tar = io.BytesIO()
-    with tarfile.open(fileobj=tar, mode="w", format=tarfile.USTAR_FORMAT) as t:
-        for arcname, abspath in runtime_files(root):
-            with open(abspath, "rb") as f:
-                data = f.read()
-            ti = tarfile.TarInfo(arcname)
-            ti.size = len(data)
-            ti.mtime = 0
-            ti.mode = os.stat(abspath).st_mode & 0o777
-            ti.uid = 0
-            ti.gid = 0
-            ti.uname = ""
-            ti.gname = ""
-            t.addfile(ti, io.BytesIO(data))
-    raw = tar.getvalue()
-    b64 = base64.b64encode(raw).decode("ascii")
-    lines = [b64[i:i + BASE64_WRAP] for i in range(0, len(b64), BASE64_WRAP)]
-    return lines, raw
-
-
-def payload_region(lines):
-    """(open_idx, term_idx) — the payload region's bounds: the line that
-    opens the heredoc, and the index of the terminator line that follows
-    it (the region's body is the lines strictly between them). Raises
-    ValueError when the anchors are missing or out of order."""
-    open_idx = None
-    for i, ln in enumerate(lines):
-        if OPEN_MARKER in ln:
-            open_idx = i
-            break
-    if open_idx is None:
-        raise ValueError("no line opens the CW_EMBEDDED_RUNTIME_TAR heredoc")
-    for j in range(open_idx + 1, len(lines)):
-        if lines[j].strip() == CLOSE_MARKER:
-            return open_idx, j
-    raise ValueError("the CW_EMBEDDED_RUNTIME_TAR heredoc has no terminator line")
-
-
-def current_payload_lines(lines):
-    """The region's body as base64 lines, dedented to column 0 (the
-    heredoc's own indent is the file's step-content indent)."""
-    open_idx, term_idx = payload_region(lines)
-    indent = len(lines[open_idx]) - len(lines[open_idx].lstrip(" "))
-    body = lines[open_idx + 1:term_idx]
-    return [ln[indent:] if ln.lstrip() else ln for ln in body]
-
-
-def check(root: str, text: str):
-    """(ok, message) — the file's payload region is exactly a fresh
-    build of the tree's payload (a maintainer who changed the tree
-    without `make embed` — or a stale splice — fails here)."""
-    lines = text.splitlines()
+def check(root: str, path: str):
+    """(ok, message) — the publication gate's check: the version the
+    tag would point at (the committed file, the committed tree) is
+    consistent. Fails, with the exact cause, when —
+    (a) the file is not plain text: it stores a binary payload (a NUL
+        byte, undecodable bytes, or the retired embed's form — the
+        CW_EMBEDDED_RUNTIME_TAR heredoc region, a base64-blob line);
+    (b) the file is past the max allowed size (at most 500kb — read
+        conservatively as 500,000 bytes);
+    (c) the committed tree carries no runtime tree the file's stage
+        steps execute: a canonical marker file the workflow's own
+        verification step checks is missing from the tree, or a script
+        the file's stage steps reference resolves to no file the
+        curation carries (a curation drift that leaves a tree the
+        stage steps cannot run from)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if b"\x00" in data:
+        return False, (
+            "the committed workflow file holds a NUL byte — it stores "
+            "binary content, and a workflow file must be plain text")
     try:
-        region = current_payload_lines(lines)
-    except ValueError as e:
-        return False, f"the workflow file has no payload region ({e})"
-    fresh, _raw = build_payload(root)
-    if region == fresh:
-        return True, (
-            f"the embedded runtime tree is fresh "
-            f"({len(fresh)} payload lines, {len(runtime_files(root))} files)")
-    return False, (
-        f"the embedded runtime tree is STALE — the file holds "
-        f"{len(region)} payload lines, a fresh build of the tree is "
-        f"{len(fresh)} (they differ at line {next((i + 1 for i, (a, b) in enumerate(zip(region, fresh)) if a != b), 'past the shorter side')}); "
-        "run `make embed` (python3 .github/scripts/embed-runtime.py) in "
-        "the commit that changed .github/scripts, .github/actions or "
-        "pi-prompts")
-
-
-def splice(root: str, text: str) -> str:
-    """The file text with its payload region replaced by a fresh build
-    of the tree's payload (re-indented to the heredoc's own indent; an
-    already-fresh file comes back unchanged)."""
-    lines = text.splitlines()
-    open_idx, term_idx = payload_region(lines)
-    indent = len(lines[open_idx]) - len(lines[open_idx].lstrip(" "))
-    fresh, _raw = build_payload(root)
-    pad = " " * indent
-    new_lines = lines[:open_idx + 1] + [pad + ln for ln in fresh] + lines[term_idx:]
-    return "\n".join(new_lines) + ("\n" if text.endswith("\n") else "")
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return False, (
+            "the committed workflow file does not decode as text — it "
+            f"stores binary content ({e})")
+    if EMBED_MARKER in text:
+        return False, (
+            "the committed workflow file opens the retired "
+            f"{EMBED_MARKER} heredoc — the embedded base64 tarball's "
+            "form is back in a file that must be plain text")
+    for ln in text.splitlines():
+        body = ln.strip()
+        if body and re.fullmatch(r"[A-Za-z0-9+/]{64,}={0,2}", body):
+            return False, (
+                "the committed workflow file holds a base64 blob line "
+                "— the retired embed's form (the runtime tree's base64 "
+                f"across the heredoc's wrapped lines): {body[:40]!r}…")
+    if len(data) > MAX_ALLOWED_SIZE:
+        return False, (
+            f"the committed workflow file is {len(data)} bytes — past "
+            f"its max allowed size (at most 500kb, read "
+            f"conservatively as {MAX_ALLOWED_SIZE} bytes)")
+    tree = set(arcname for arcname, _ in runtime_files(root))
+    for marker in CANONICAL_RUNTIME_FILES:
+        if marker not in tree:
+            return False, (
+                f"the tagged commit's tree is missing {marker} — the "
+                "canonical runtime files the file's stage steps execute "
+                "must resolve within it")
+    for ref in sorted(set(SCRIPT_REFERENCE.findall(text))):
+        if ref not in tree:
+            return False, (
+                f"the file's stage steps reference {ref} — the "
+                "committed tree carries no such file: a curation "
+                "drift that leaves a tree the stage steps cannot "
+                "run from")
+    return True, (
+        f"the published version is consistent — the committed workflow "
+        f"file is plain text ({len(data)} bytes, within the max "
+        f"allowed size of {MAX_ALLOWED_SIZE}), and the tagged "
+        f"commit's tree carries the runtime tree its stage steps "
+        f"execute ({len(tree)} curated files; every canonical marker "
+        f"and stage-step script reference resolves)")
 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     root = repo_root()
-    path = argv[0] if argv and not argv[0].startswith("-") else default_factory_path()
-    check_mode = "--check" in argv
-    with open(path, encoding="utf-8") as f:
-        text = f.read()
-    if check_mode:
-        ok, message = check(root, text)
-        print(("ok:   " if ok else "STALE: ") + message)
-        return 0 if ok else 1
-    new_text = splice(root, text)
-    if new_text != text:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(new_text)
-    _lines, raw = build_payload(root)
-    files = runtime_files(root)
-    print(f"embedded the runtime tree in {os.path.relpath(path, root)} "
-          f"({len(files)} files, payload {len(raw)} bytes, {len(_lines)} lines)")
-    return 0
+    path = next(
+        (a for a in argv if not a.startswith("-")),
+        default_factory_path())
+    # The check is the only mode: the file is static plain text —
+    # nothing here writes it (the splice that once rewrote the file's
+    # payload region retires with the embed: a maintainer who changes
+    # the runtime tree commits the tree, and the gate verifies the
+    # tag's commit against the file). `--check` names the release
+    # flow's publication gate; the no-argument form is the same check
+    # as a local run.
+    ok, message = check(root, path)
+    print(("ok:   " if ok else "INCONSISTENT: ") + message)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

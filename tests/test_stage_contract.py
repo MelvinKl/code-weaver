@@ -1273,10 +1273,12 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     via with: and GH_TOKEN via secrets:. An external target pins the
     oracle's owner, repo and path at a version tag — a moving branch ref is
     not a stable ref — and passes no factory-ref of its own: the file is
-    self-contained (its runtime tree embedded), so the single pinned tag
-    selects workflow file and runtime tree as one version — while the
-    factory keeps the factory-ref input declared as a legacy no-op, and an
-    older version's consumer block that still passes it stays schema-valid.
+    self-contained (its stage steps inlined in it, storing no binary
+    payload) and the tagged version's tree carries the runtime tree the
+    file's steps execute, so the single pinned tag selects workflow file
+    and runtime tree as one published version — while the factory keeps
+    the factory-ref input declared as a legacy no-op, and an older
+    version's consumer block that still passes it stays schema-valid.
     The ref is a single increasing number, the current scheme's tag shape
     (the retired semver ref shape is gone — reuse-by-ref "every published
     version is a stable ref"). This repo is the factory project itself,
@@ -1331,7 +1333,8 @@ def test_consumer_workflow_pins_owner_and_version_tag():
         # the alternative shape: the consumer calls the factory's own
         # copy by relative uses: (the runner reads the file from the
         # triggering commit) and leaves the factory-ref input empty —
-        # the stages run the tree the file embeds
+        # the stages run the tree the first job fetches from the
+        # triggering repo at the run's base ref
         mrel = re.search(r"uses:\s*\.?/?\.github/workflows/factory\.yml\b", text)
         assert mrel, "no uses: line naming the factory"
         assert not re.search(r"factory-ref:\s*\S+", text), (
@@ -1405,10 +1408,13 @@ def test_factory_workflow_is_self_contained():
     `workflows` not being a permission available to it), and a relative
     path would resolve against the calling repo's checkout, where a
     target holds no copy of the factory's scripts. The stage steps are
-    inlined instead: every stage job carries the former action's steps at
-    its former splice site, runs their scripts from the runtime tree the
-    job's first step stashed into $RUNNER_TEMP, and no stage job is
-    without that stash step."""
+    inlined instead: the file stores no binary content — the runtime tree
+    its steps execute is not embedded in it — and every stage job carries
+    the former action's steps at its former splice site, runs their
+    scripts from the called version's runtime tree stashed into
+    $RUNNER_TEMP (stage 1 fetches it at the called ref; every later
+    job's first step restores it from the trigger's artifact before its
+    checkout), and no stage job is without that stash step."""
     text = _read(".github/workflows/factory.yml")
     own_refs = [ln.strip() for ln in text.splitlines()
                 if re.search(r"\buses:\s*MelvinKl/code-weaver/\.github/actions/",

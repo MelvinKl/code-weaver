@@ -39,7 +39,7 @@
   mirrored per iteration into the state dir and fed into the fixer: the
   fix directive names it by path, the fixer reads it on demand
 - **Oracle** — the Gherkin requirements under `requirements/` (16 files,
-  196 scenarios), structured by topic: each file is named after the topic
+  198 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
@@ -99,13 +99,16 @@
   repo) after each run.
 - **Reuse by ref** — the factory lives in this repo and is referenced by
   ref (the self-contained reusable workflow + the runtime tree its stage
-  steps execute — the scripts and the pi prompt templates, embedded in
-  the workflow file as a base64 tarball stage 1 materialises into the
-  runner's temp dir, riding the trigger's artifact to every later stage
+  steps execute — the scripts and the pi prompt templates, fetched by
+  stage 1 at the called ref — recovered from the consumer workflow, never
+  relayed as a second pin — into the runner's temp dir before the first
+  checkout, riding the trigger's artifact to every later stage
   job) — so the ref on the consumer's `uses:` line is the only pin a run
   makes (the `factory-ref` input is a legacy no-op), the ref selects the
-  workflow file and its runtime tree as one version from the factory
-  repo, a ref bump
+  workflow file and its runtime tree as one published version (the file
+  GitHub fetched, and the tree the first job fetches at that same ref
+  from the factory repo — the tag's commit carries the two together), a
+  ref bump
   selects them as one version, and targets pinned to an older ref keep
   working — an upgrade is a one-line ref bump, and every published
   version — an older `vX.Y.Z` tag or a new single-number tag — is a
