@@ -13,10 +13,13 @@ lets the first job fetch the called version's tree: the called ref is
 recovered from the consumer workflow (read over the GitHub API at the
 run's base ref — a declared version tag resolves to the factory repo
 fetched at that tag, a relative uses: to the triggering repo at its own
-base ref), the fetch is an actions/checkout of the public factory repo
-that does not ride the target-scoped GH_TOKEN (the documented contract
-scopes that token to the target repo, and it cannot read the factory
-repo), and the tree lands in the runner's temp dir before the first
+base ref), the fetch is an anonymous git clone of the public factory
+repo that does not ride the target-scoped GH_TOKEN (the documented
+contract scopes that token to the target repo, and it cannot read the
+factory repo — the clone runs with no token and a cleared credential
+helper, and a plain clone, unlike a checkout step, is admitted into the
+runner's temp dir when the fetched repo differs from the triggered
+one), and the tree lands in the runner's temp dir before the first
 checkout replaces the workspace (the trigger's artifact then carries it
 to every later stage job). No stage reads the `factory-ref` input
 anymore (it stays declared as a legacy no-op so an older consumer's
@@ -33,7 +36,7 @@ The pins:
   set would leave a tree the stage steps cannot run from — the drift
   stays a failure, not silent);
 - a run fetches the factory repo: the fetch is an owner-qualified
-  `actions/checkout` that rides a run-time-resolved ref (no ref literal
+  `git clone` that rides a run-time-resolved ref (no ref literal
   anywhere in the file — the called ref is recovered, not declared),
   and no stage reads the `factory-ref` input (the declared legacy
   no-op).
@@ -72,6 +75,80 @@ def _read(relpath):
         return f.read()
 
 
+# The trigger job's fetch step (stage 1) — the one step whose name marks
+# it as the fetch: stage 1 fetches the called version's tree at the
+# called ref, while every later job's stash step is named for the
+# restore (it downloads the trigger's artifact, it fetches nothing).
+FETCH_STEP_MARKER = "- name: Stash the factory runtime tree (fetched at the called ref"
+
+
+def _fetch_step_block(text):
+    """The fetch step's block — from its list entry to the next step's
+    entry at the same indent — or `None` where the file holds no such
+    step."""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith(FETCH_STEP_MARKER):
+            indent = len(ln) - len(ln.lstrip())
+            block = [ln]
+            for cont in lines[i + 1:]:
+                if (cont.strip()
+                        and (len(cont) - len(cont.lstrip())) <= indent
+                        and cont.lstrip().startswith("- ")):
+                    break
+                block.append(cont)
+            return "\n".join(block)
+    return None
+
+
+# The file's jobs in file order — the trigger plus the nine stage jobs
+# that follow it (the header comment's "15 logical stages over 10
+# jobs"). The per-job loop that reads them refuses to run on a key the
+# file no longer holds: a job added without a cw-trigger download would
+# otherwise slip past the pin.
+JOB_KEYS = ("trigger", "setup-pi", "baseline", "extract", "plan",
+            "implement", "review", "pr", "gates", "report")
+
+
+def _job_block(text, job_key):
+    """The lines of one job — from its two-indent `key:` line to the
+    next job's two-indent key line (the `# ── stage N ──` separator
+    comments between jobs ride the following job's block; a job's own
+    keys all sit at four indent or deeper, so none of them ends its
+    block)."""
+    lines = text.splitlines()
+    block, started = [], False
+    for ln in lines:
+        if started and re.match(r"^  [a-z][\w-]*:\s*$", ln):
+            break
+        if started or ln == f"  {job_key}:":
+            block.append(ln)
+            started = True
+    return block
+
+
+def _job_steps(job_lines):
+    """The job's steps as line blocks — each from its six-indent `- ` entry
+    to the next six-indent `- ` entry (or the steps list's end): a step's
+    own lines all sit at six indent or deeper, while a line back to four
+    indent or shallower ends the list."""
+    steps, cur = [], None
+    for ln in job_lines:
+        if ln.startswith("      - "):
+            if cur is not None:
+                steps.append(cur)
+            cur = [ln]
+        elif cur is not None:
+            if ln.strip() and len(ln) - len(ln.lstrip()) < 6:
+                steps.append(cur)
+                cur = None
+            else:
+                cur.append(ln)
+    if cur is not None:
+        steps.append(cur)
+    return steps
+
+
 def test_factory_file_carries_its_runtime_tree_embedded():
     """(reuse-by-ref "a published version is self-contained" — the
     scenario adjusted in place by the issue-100 delta; reference
@@ -82,11 +159,14 @@ def test_factory_file_carries_its_runtime_tree_embedded():
     resolve the called ref — recovered from the consumer workflow read
     over the GitHub API at the run's base ref (GitHub fetched the file
     at the ref the consumer's uses: line declared, and the jobs are not
-    told which ref that was) — and fetch the called version's tree into
+    told which ref that was) — and clone the called version's tree into
     the stash before the first checkout replaces the workspace: the
     ref's published version carries the file and the tree together, the
     file storing no binary payload — the shape the adjusted scenario's
-    Given and Then state."""
+    Given and Then state. The scenario is unchanged by the issue-104
+    delta: what flips in place is the mechanism half these pins read —
+    the fetch is the run-step clone the delta's new scenario forces,
+    not the checkout-action step it retires."""
     text = _read(FACTORY)
     assert "CW_EMBEDDED_RUNTIME_TAR" not in text, (
         "the workflow file still holds the CW_EMBEDDED_RUNTIME_TAR "
@@ -103,17 +183,23 @@ def test_factory_file_carries_its_runtime_tree_embedded():
         "stage 1 does not read the consumer workflow over the GitHub API "
         "— the called ref is recovered from that file as committed at the "
         "run's base ref")
-    # ...and fetches the called version's tree into the stash, riding
-    # the run-time-resolved ref (no ref literal anywhere in the file —
-    # the called ref is recovered, not declared)
+    # ...and clones the called version's tree into the stash — the
+    # run-step form the issue-104 delta re-anchors these pins to (the
+    # old checkout-action's ref:/path: action inputs disappear when the
+    # step becomes a run step): the ref is expressed from the
+    # run-time-resolved called-ref output, and the destination sits
+    # under $RUNNER_TEMP/cw/stash (no ref literal anywhere in the file
+    # — the called ref is recovered, not declared)
+    fetch = _fetch_step_block(text)
+    assert fetch is not None, (
+        "stage 1 has no fetch step for the called version's tree — the "
+        "step that stashes the tree the stage steps run from is gone")
     assert re.search(
-        r"ref:\s*\$\{\{\s*steps\.called-version\.outputs\.called-ref\s*\}\}",
-        text), (
+        r"steps\.called-version\.outputs\.called-ref", fetch), (
         "the fetch does not ride the run-time-resolved ref — the called "
         "ref is recovered from the consumer workflow, and no ref literal "
-        "may stand in the fetch's ref input")
-    assert re.search(
-        r"path:\s*\$\{\{\s*runner\.temp\s*\}\}/cw/stash", text), (
+        "may stand in the fetch's ref")
+    assert "$RUNNER_TEMP/cw/stash" in fetch, (
         "stage 1 does not fetch the called version's tree into the stash "
         "($RUNNER_TEMP/cw/stash) before the first checkout replaces the "
         "workspace")
@@ -160,57 +246,285 @@ def test_no_run_fetches_the_factory_repo():
     factory repo, owner-qualified, as its fetch source — the called
     ref selects a published version, the tag's commit carries the file
     and the runtime tree together, and stage 1 fetches that tree. The
-    new pins: the fetch rides a run-time-resolved ref (no ref literal
-    anywhere in the file — the called ref is recovered from the
-    consumer workflow, not declared), no stage reads the `factory-ref`
-    input (the input stays a declared legacy no-op), and the fetch is
-    an `actions/checkout` fetch rather than a raw `git clone` (that ban
-    stands — a raw run-time clone would be the retired mechanism's
-    form)."""
+    scenario's content stays true after the issue-104 delta flipped
+    the fetch's mechanism in place — one ref selects the whole
+    version, and the file stores no binary payload; what flips is the
+    mechanism half, named as forced by the delta's new scenario (a
+    different-repo checkout into a path outside the job's workspace is
+    the form the checkout action refuses): the fetch is a `git clone`
+    run step whose source URL derives from the run-time-resolved
+    `called-repo` output and whose ref rides the run-time-resolved
+    `called-ref` output (no repo or ref literal in the fetch — the
+    recovery step resolves both values at run time), and no stage
+    reads the `factory-ref` input (the input stays a declared legacy
+    no-op)."""
     text = _read(FACTORY)
-    # the ban that stands: no raw git clone of the factory repo at run
-    # time
-    assert "git clone" not in text, (
-        "factory.yml still git-clones at run time — the fetch is an "
-        "actions/checkout fetch; a raw clone would be the retired "
-        "mechanism's form")
+    # the fetch's form after the issue-104 flip: a run step that
+    # git-clones — the checkout-action form is the one that refused
+    # the different-repo shape the delta's new scenario pins
+    assert "git clone" in text, (
+        "factory.yml no longer git-clones at run time — the fetch is a "
+        "plain run step that clones the called repo at the called ref "
+        "into the stash (the form that works on a target repo different "
+        "from the factory's own repo)")
     # the inversion: the run now fetches the factory repo,
-    # owner-qualified, as the fetch source
+    # owner-qualified, as the fetch source (the recovery step's
+    # comment names the owner/repo the owner-qualified uses: line it
+    # parses)
     assert "MelvinKl/code-weaver" in text, (
         "factory.yml no longer names the owner-qualified factory repo — "
-        "a run fetches it: stage 1's fetch is the owner-qualified "
-        "checkout of the factory repo at the called ref")
-    # the fetch is an actions/checkout step whose repository and ref
-    # ride the run-time-resolved values (no ref literal anywhere in the
-    # file — the called ref is recovered, not declared)
-    lines = text.splitlines()
-    fetch = None
-    for i, ln in enumerate(lines):
-        if "uses: actions/checkout" in ln and any(
-                "repository:" in cont for cont in lines[i + 1:i + 12]):
-            fetch = lines[i:i + 12]
-            break
+        "a run fetches it: stage 1's fetch is the clone of the factory "
+        "repo at the called ref")
+    # the fetch is a run step whose source derives from the
+    # run-time-resolved called-repo output and whose ref rides the
+    # run-time-resolved called-ref output — no repo or ref literal in
+    # the fetch (the recovery step resolves both values)
+    fetch = _fetch_step_block(text)
     assert fetch is not None, (
-        "factory.yml has no actions/checkout step that fetches a "
-        "repository — the called version's tree must arrive as an "
-        "actions/checkout fetch, not a raw clone")
+        "factory.yml has no fetch step for the called version's tree — "
+        "the step that clones the called repo at the called ref into "
+        "the stash is gone")
     assert re.search(
-        r"repository:\s*\$\{\{\s*steps\.called-version\.outputs\.called-repo\s*\}\}",
-        "\n".join(fetch)), (
-        "the fetch does not ride the run-time-resolved repo — the called "
-        "version's source is recovered from the consumer workflow, and no "
-        "literal repo may stand in the fetch's repository input")
-    assert not any(
-            re.search(r"ref:\s*(?!\$\{\{)\S", cont) for cont in fetch), (
-        "the fetch declares a literal ref — the called ref is recovered "
-        "from the consumer workflow at run time, and no ref literal may "
-        "stand in the fetch's ref input")
+        r"CALLER_REPO=\"\$\{\{\s*steps\.called-version\.outputs\.called-repo\s*\}\}\"",
+        fetch), (
+        "the fetch's source does not derive from the run-time-resolved "
+        "repo — the called version's source is recovered from the "
+        "consumer workflow, and no literal repo may stand in the "
+        "fetch's source")
+    assert re.search(
+        r"CALLER_REF=\"\$\{\{\s*steps\.called-version\.outputs\.called-ref\s*\}\}\"",
+        fetch), (
+        "the fetch's ref is not expressed from the run-time-resolved "
+        "ref — the called ref is recovered from the consumer workflow "
+        "at run time, and no ref literal may stand in the fetch's "
+        "ref")
+    # and the clone's URL is built from the shell value — no literal
+    # repo in the fetch's source
+    assert not re.search(
+        r"clone[^\n]*https?://github\.com/[\w.-]+/[\w.-]+", fetch), (
+        "the fetch's clone names a literal repo in its URL — the called "
+        "repo is recovered from the consumer workflow at run time, and "
+        "no literal repo may stand in the fetch's source")
     # no stage reads the factory-ref input (the input stays a declared
     # legacy no-op)
     assert "inputs.factory-ref" not in text, (
         "a stage still reads the factory-ref input — the consumer's "
         "uses: line is the only pin a run makes; the input is a declared "
         "legacy no-op")
+
+def test_runtime_tree_fetch_succeeds_on_a_different_target_repo():
+    """(reuse-by-ref "the runtime tree fetch succeeds on a target repo
+    different from the factory's own repo" — added by the issue-104
+    delta; reference
+    `requirements/reuse-by-ref.feature::The runtime tree fetch succeeds
+    on a target repo different from the factory's own repo`) a factory
+    run on a target repo that is different from the factory's own repo:
+    the first job fetches the called version's runtime tree from the
+    factory repo at the called ref into the runner's temp dir, the
+    fetch completes without failing, and the materialised runtime tree
+    is the called version's — the tree of the ref the consumer's
+    uses: line selects. The crash the scenario pins: the fetch was a
+    checkout-action step, and the checkout action refuses a
+    different-repo checkout into a path outside the job's workspace
+    ("Repository path ... is not under ..."), so on any target repo
+    different from the factory's own repo the step died with an empty
+    stash. The pins: no actions/checkout step in the file combines a
+    (runtime-resolved, potentially different) repository: input with a
+    path: outside the job's workspace — the combination the action
+    refuses; and the fetch is a run step that clones the called repo
+    at the called ref into $RUNNER_TEMP/cw/stash — its source deriving
+    from the run-time-resolved called-repo output (never the triggered
+    (target) repo, and no repo or ref literal standing in for either —
+    the recovery step decides both values)."""
+    text = _read(FACTORY)
+    lines = text.splitlines()
+    # no actions/checkout step in the file combines a (runtime-
+    # resolved, potentially different) repository: input with a path:
+    # outside the job's workspace — that combination is what the
+    # checkout action refuses ("Repository path ... is not under
+    # ..."), and it is what the scenario's "the fetch completes
+    # without failing" rules out for the different-repo shape
+    for i, ln in enumerate(lines):
+        if "uses: actions/checkout" not in ln:
+            continue
+        block = "\n".join(lines[i:i + 12])
+        repo = re.search(r"^\s*repository:\s*(\S+)", block, re.M)
+        path = re.search(r"^\s*path:\s*(\S+)", block, re.M)
+        assert not (repo is not None and path is not None
+                    and "github.workspace" not in path.group(1)), (
+            f"an actions/checkout step combines a repository: input "
+            f"({repo.group(1)!r}) with a path: outside the job's "
+            f"workspace ({path.group(1)!r}) — the checkout action "
+            "refuses that combination when the checked-out repo "
+            "differs from the triggered one ('Repository path ... is "
+            "not under ...'), and a factory run on a target repo "
+            "different from the factory's own repo would die in its "
+            "first job")
+    # the fetch is a run step — the different-repo shape the scenario
+    # pins is the one a checkout-action step refuses, and a plain
+    # clone is what works on it
+    fetch = _fetch_step_block(text)
+    assert fetch is not None, (
+        "factory.yml has no fetch step for the called version's runtime "
+        "tree — the first job of a run on a target repo different from "
+        "the factory's own repo would have no runtime tree at all")
+    assert "run:" in fetch, (
+        "the fetch is not a run step — the different-repo shape the "
+        "scenario pins is the one a checkout-action step refuses, and "
+        "the fetch must be the plain clone that works on it")
+    # the source derives from the run-time-resolved called-repo output —
+    # on a target repo different from the factory's own repo the called
+    # repo is the factory repo, never the triggered (target) repo, and
+    # no repo or ref literal stands in the fetch
+    assert "steps.called-version.outputs.called-repo" in fetch, (
+        "the fetch's source does not derive from the run-time-resolved "
+        "called-repo — on a target repo different from the factory's own "
+        "repo the fetch source is the factory repo the consumer's uses: "
+        "line selects, not the triggered repo")
+    assert "GITHUB_REPOSITORY" not in fetch, (
+        "the fetch's source is the triggered (target) repo — on a "
+        "target repo different from the factory's own repo the called "
+        "repo is the factory repo, and the fetch must clone the called "
+        "repo, not the run's own repository")
+    assert "steps.called-version.outputs.called-ref" in fetch, (
+        "the fetch's ref is not expressed from the run-time-resolved "
+        "called-ref — the materialised tree must be the called "
+        "version's, the tree of the ref the consumer's uses: line "
+        "selects")
+    # no repo or ref literal in the fetch — the clone's source and the
+    # ref it fetches are shell values the step's own expressions feed
+    assert not re.search(
+        r"clone[^\n]*https?://github\.com/[\w.-]+/[\w.-]+", fetch), (
+        "the fetch's clone names a literal repo in its URL — the called "
+        "repo is recovered from the consumer workflow at run time, and "
+        "no literal repo may stand in the fetch's source")
+    # the destination is under the runner's temp dir, outside the
+    # workspace every later checkout replaces — the boundary the stash
+    # must sit at
+    assert "$RUNNER_TEMP/cw/stash" in fetch, (
+        "the fetch does not materialise the called version's tree under "
+        "$RUNNER_TEMP/cw/stash — the stash must sit in the runner's temp "
+        "dir, the one place every later checkout leaves alone")
+
+def test_trigger_artifact_carries_the_stashed_tree_to_every_stage_job():
+    """(reuse-by-ref "the trigger's artifact carries the stashed runtime
+    tree to every stage job" — added by the issue-104 delta; reference
+    `requirements/reuse-by-ref.feature::The trigger's artifact carries
+    the stashed runtime tree to every stage job`) a factory run on a
+    target repo that is different from the factory's own repo, whose
+    first job materialised the called version's runtime tree into the
+    runner's temp dir: when the trigger job uploads its state artifact,
+    the artifact contains the stashed runtime tree — including the
+    hidden directory the stage scripts live under — every later stage
+    job restores the tree from the trigger's artifact before its first
+    checkout, and no stage job of the run dies on a missing stashed
+    runtime file. The chain the pins verify end to end: the trigger's
+    cw-trigger upload (the runner's temp cw dir — the stashed tree
+    sits under it — running always() and opting into hidden files,
+    which keeps the tree's .github/ half on the artifact, the part the
+    artifact API would otherwise drop), every later job's first step
+    (the cw-trigger download into the same dir, ahead of the job's
+    first checkout — the one that replaces the workspace, and only the
+    runner's temp dir survives it), and each stage step that runs a
+    script from the stashed tree (the guard that fails precisely on a
+    missing stashed file — the named file, an explicit ::error:: and
+    exit 1, not an opaque crash). With the fetch (the delta's other
+    new scenario) succeeding and the upload carrying the tree, no file
+    is missing, so no stage job of the run dies on a missing stashed
+    runtime file."""
+    text = _read(FACTORY)
+    lines = text.splitlines()
+    # the job key list is the file's own job set — a job added without
+    # a cw-trigger download would otherwise slip past the per-job loop
+    file_jobs = re.findall(r"(?m)^  ([a-z][\w-]*):\s*$",
+                           text.split("jobs:", 1)[1])
+    assert file_jobs == list(JOB_KEYS), (
+        f"the file's jobs {file_jobs!r} are no longer the trigger plus "
+        f"the nine stage jobs {list(JOB_KEYS[1:])!r} — the per-job loop "
+        "that pins every later stage job's first step would miss a job "
+        "the file gained (or read one it lost)")
+    # the trigger's upload step carries the stashed tree — including
+    # the hidden .github/ part the stage scripts live under
+    uploads = [s for s in _job_steps(_job_block(text, "trigger"))
+               if "uses: actions/upload-artifact" in s[0]]
+    assert len(uploads) == 1, (
+        "the trigger job holds no (or more than one) upload-artifact "
+        "step — the cw-trigger upload is the half of the chain that "
+        "carries the stashed tree to every later stage job")
+    up = "\n".join(uploads[0])
+    assert "name: cw-trigger" in up, (
+        "the trigger's upload is not named cw-trigger — every later "
+        "stage job restores the tree from the artifact by that name")
+    assert "if: always()" in up, (
+        "the trigger's upload does not run always() — a trigger that "
+        "fails after the fetch would skip the upload, and every later "
+        "stage job would arrive with its stashed runtime tree missing")
+    path = re.search(r"^\s*path:\s*(.+?)\s*$", up, re.M)
+    assert path and path.group(1) == "${{ runner.temp }}/cw", (
+        "the trigger's upload does not upload the runner's temp cw "
+        "dir — the stashed tree the first job fetched sits under it")
+    assert "include-hidden-files: true" in up, (
+        "the trigger's upload does not opt into hidden files — the "
+        "stashed tree lives under the hidden .github/ directory (the "
+        "stage scripts resolve their scripts from there), and "
+        "upload-artifact drops hidden files by default: without the "
+        "opt-in the artifact carries the tree with its .github/ half "
+        "missing, and every stage job arrives with its stashed stage "
+        "script missing")
+    # and the upload's path actually covers the stash: both spellings
+    # of the runner's temp dir normalise to the same dir, and the
+    # fetch's destination sits under the uploaded path
+    canon = (lambda s: s.replace("${{ runner.temp }}", "")
+                   .replace("$RUNNER_TEMP", ""))
+    assert canon("$RUNNER_TEMP/cw/stash").startswith(
+        canon(path.group(1)) + "/"), (
+        "the trigger's upload path does not cover the stash — the "
+        "fetched runtime tree would not ride the artifact")
+    # every later stage job's first step restores the tree from the
+    # trigger's artifact before the job's first checkout
+    for job in JOB_KEYS[1:]:
+        steps = _job_steps(_job_block(text, job))
+        assert steps, f"the {job} job has no steps to pin"
+        first = "\n".join(steps[0])
+        assert "uses: actions/download-artifact" in first and \
+            "name: cw-trigger" in first, (
+            f"the {job} job's first step does not download the "
+            "trigger's cw-trigger artifact — every later stage job "
+            "restores the stashed runtime tree from it before its "
+            "first checkout")
+        assert "path: ${{ runner.temp }}/cw" in first, (
+            f"the {job} job's first step does not restore the tree "
+            "into the runner's temp cw dir — the download must land "
+            "the tree back at the same repo-relative layout the fetch "
+            "left it")
+        first_checkout = next(
+            (i for i, s in enumerate(steps)
+             if "uses: actions/checkout" in s[0]), None)
+        assert first_checkout is not None and first_checkout > 0, (
+            f"the {job} job's first checkout does not follow its "
+            "first step — the restore must precede the first checkout "
+            "that replaces the workspace (only the runner's temp dir "
+            "survives it)")
+    # each stage step that runs a script from the stashed tree guards a
+    # missing stashed runtime file with a precise failure that names
+    # the file — an explicit ::error:: and exit 1, not an opaque crash
+    entries = [i for i, ln in enumerate(lines)
+               if re.match(r'\s*S="\$RUNNER_TEMP/cw/stash/', ln)]
+    assert entries, (
+        "no stage step runs a script from the stashed runtime tree — "
+        "the stage jobs would have nothing that dies on a missing "
+        "stashed runtime file, and the scenario's guard half pins "
+        "nothing")
+    for i in entries:
+        guard = lines[i + 1] if i + 1 < len(lines) else ""
+        assert re.search(r'\[ -f "\$S" \] \|\|', guard), (
+            f"the stage step that runs {lines[i].strip()} does not "
+            "guard a missing stashed script — a missing file would "
+            "surface as an opaque crash, not a precise failure")
+        assert "::error::" in guard and "$S" in guard and "exit 1" in guard, (
+            f"the guard on the stashed script {lines[i].strip()} does "
+            "not fail precisely — it must name the missing file (an "
+            "explicit ::error:: carrying $S) and exit 1")
 
 def test_no_stage_reads_the_factory_ref_input():
     """(the input the double pin relayed; reference

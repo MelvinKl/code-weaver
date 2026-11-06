@@ -36,14 +36,17 @@
 # nothing has replaced the workspace — the token reads the target repo,
 # which the documented contract already requires) and recovers the ref
 # the consumer's uses: line declared: a declared version tag resolves to
-# the factory repo fetched at that tag, and the relative uses: form
+# the factory repo cloned at that tag, and the relative uses: form
 # (the file read from the triggering commit — the legacy dogfood shape)
-# resolves to the triggering repo itself at the run's base ref. The
-# trigger job then fetches that version's curated runtime tree into
+# resolves to the triggering repo itself cloned at the run's base ref.
+# The trigger job then fetches that version's curated runtime tree into
 # $RUNNER_TEMP/cw/stash before the first checkout replaces the
-# workspace — the fetch is a public-repo fetch that does not ride the
-# target-scoped GH_TOKEN (such a token cannot read the factory repo),
-# and RUNNER_TEMP survives every later checkout, so the tree's
+# workspace — the fetch is an anonymous git clone (a plain run step — a
+# checkout action refuses a different-repo checkout into a path outside
+# the job's workspace, which is the shape a target repo different from
+# the factory's own repo presents) that does not ride the target-scoped
+# GH_TOKEN (such a token cannot read the factory repo), and
+# RUNNER_TEMP survives every later checkout, so the tree's
 # repo-relative layout keeps the scripts' __file__-relative imports
 # resolving — and rides it on the cw-trigger artifact (that upload
 # runs always() and opts into hidden files — the tree sits under the
@@ -264,8 +267,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -uo pipefail
-          # make room for the fetch: the step below checks the called
-          # version's tree out into the stash, over any tree an earlier
+          # make room for the fetch: the step below clones the called
+          # version's tree into the stash, over any tree an earlier
           # step left there
           rm -rf "$RUNNER_TEMP/cw/stash"
           CONSUMER_JSON=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/workflows/${{ inputs.workflow-name }}.yml?ref=${GITHUB_REF}") || {
@@ -308,30 +311,65 @@ jobs:
         # the way the one-ref architecture already implies: the called
         # ref selects a published version, and the tag points at a commit
         # of the factory repo whose tree carries both the workflow file
-        # and the runtime tree — so this step checks that version's
+        # and the runtime tree — so this step clones that version's
         # curated runtime tree (the .github/scripts, .github/actions and
-        # pi-prompts prefixes) out into $RUNNER_TEMP/cw/stash,
+        # pi-prompts prefixes) into $RUNNER_TEMP/cw/stash,
         # preserving the repo-relative layout the stage scripts resolve
         # against, before the first checkout replaces the workspace.
+        # The fetch is a plain run step that git clones — not a
+        # checkout-action step: a checkout that fetches a repo different
+        # from the triggered one into a path outside the job's workspace
+        # is refused by the action ("Repository path ... is not under
+        # ..."), so a run on a target repo different from the factory's
+        # own repo would die in its first job with an empty stash, and
+        # every later stage job on a missing stashed runtime file. One
+        # uniform clone serves every consumption shape: an external
+        # target's owner-qualified recovery resolves the factory repo at
+        # the version tag, the dogfood's recovery resolves the factory's
+        # own public repo at its pinned tag (the clone rides the called
+        # ref — the only ref, never a second one), and the legacy
+        # relative form resolves the triggering repo at the run's base
+        # ref.
         # The fetch does not ride the target-scoped GH_TOKEN (the
         # documented contract scopes that token to the target repo, and
-        # it cannot read the factory repo): the factory repo is public,
-        # and the empty token is the anonymous checkout the fetch is.
+        # it cannot read the fetch source): the fetch source is public,
+        # and the anonymous clone — no token, and the credential helper
+        # cleared so a runner-local git configuration cannot
+        # authenticate it either — is the fetch. The clone lands the
+        # called ref's commit tree — the same ref that selected the
+        # workflow file — so the two halves of the version stay one
+        # ref. The recovery resolves the called ref in any form GitHub
+        # expresses it (a plain tag or branch name, or a full refname —
+        # the relative form carries the run's $GITHUB_REF), and the
+        # fetch resolves it the way the old checkout-action fetch did:
+        # fetch the ref by name, then check it out.
         # The trigger's upload-artifact (with its hidden-file opt-in)
         # then rides the stashed tree on the cw-trigger artifact to every
         # later stage job's first step.
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ steps.called-version.outputs.called-repo }}
-          ref: ${{ steps.called-version.outputs.called-ref }}
-          path: ${{ runner.temp }}/cw/stash
-          token: ""
-          # the curated runtime tree — the prefixes the stage scripts
-          # resolve against, repo-relative under the stash
-          sparse-checkout: |
-            /.github/scripts
-            /.github/actions
-            /pi-prompts
+        run: |
+          set -uo pipefail
+          CALLER_REPO="${{ steps.called-version.outputs.called-repo }}"
+          CALLER_REF="${{ steps.called-version.outputs.called-ref }}"
+          # the anonymous clone of the public fetch source — shallow
+          # (depth 1 over every ref), no working tree yet, and the
+          # credential helper cleared so a runner-local git
+          # configuration cannot authenticate the fetch
+          git -c credential.helper= clone --quiet --depth 1 --no-checkout \
+            "https://github.com/${CALLER_REPO}.git" "$RUNNER_TEMP/cw/stash" || {
+            echo "::error::the anonymous clone of ${CALLER_REPO} failed — the fetch source is public, so a failed clone is a runner network egress failure (or an unreachable repo); a missing stash would leave every stage job missing its stashed runtime file"
+            exit 1
+          }
+          git -C "$RUNNER_TEMP/cw/stash" fetch --quiet origin "$CALLER_REF" || {
+            echo "::error::the called ref ${CALLER_REF} does not resolve in ${CALLER_REPO} — the consumer's uses: line selected a ref the fetch source does not carry; the fetch completes with no tree, and every stage job would die on a missing stashed runtime file"
+            exit 1
+          }
+          # the curation: sparse to the curated runtime tree — the
+          # prefixes the stage scripts resolve against, repo-relative
+          # under the stash — then check out the called ref's commit
+          git -C "$RUNNER_TEMP/cw/stash" sparse-checkout set \
+            .github/scripts .github/actions pi-prompts
+          git -C "$RUNNER_TEMP/cw/stash" checkout --quiet FETCH_HEAD
+          echo "cloned ${CALLER_REPO} at ${CALLER_REF} into $RUNNER_TEMP/cw/stash — the called version's curated runtime tree (the file GitHub fetched and the tree the run executes are the two halves of that ref's commit)"
       - name: Verify the stashed runtime tree holds the canonical runtime files
         # The fetch materialised the called version's tree; the canonical
         # marker files the stage steps run from must be in it — a fetch

@@ -49,6 +49,22 @@
 # file. The one-ref version architecture is unchanged: the ref still
 # selects the published version — the file and the tree of that ref's
 # commit — and the consumer's uses: line stays the only pin.
+# Issue 104 delta — a factory run on a target repo that is DIFFERENT
+# from the factory's own repo crashed in its first job: the runtime-tree
+# fetch step (an actions/checkout of the factory repo at the called ref
+# into the runner's temp dir — a path outside the job's workspace)
+# failed with "Repository path ... is not under ...": the checkout
+# action refuses a different-repo checkout to a path outside the
+# workspace, while the same step passes in the factory's own repo (the
+# dogfood), where the checked-out repo is the triggered repo itself.
+# The empty stash starved the trigger's artifact, and every later stage
+# job died on a missing stashed runtime file. The delta pins the fetch
+# for the different-repo shape: the tree is fetched from the factory
+# repo at the called ref into the runner's temp dir without the fetch
+# failing, the trigger's artifact carries the stashed tree to every
+# later stage job, and no stage job dies on a missing stashed runtime
+# file. The one-ref architecture is unchanged — the consumer's uses:
+# line stays the only pin.
 
 Feature: Reuse by ref, never copy-paste
   As a maintainer of a target project
@@ -155,3 +171,21 @@ Feature: Reuse by ref, never copy-paste
     When its contents are read
     Then the file is plain text — no binary payload is stored in it
     And the runtime tree its steps execute is not embedded in the file as a base64 tarball
+
+  @reuse @issue-104
+  Scenario: The runtime tree fetch succeeds on a target repo different from the factory's own repo
+    Given a target repo that is different from the factory's own repo
+    And the target repo's consumer workflow invokes the factory's workflow at a version tag
+    When a factory run on that target repo reaches its first job
+    Then the first job fetches the called version's runtime tree from the factory repo at the called ref into the runner's temp dir
+    And the fetch completes without failing
+    And the materialised runtime tree is the called version's — the tree of the ref the consumer's uses: line selects
+
+  @reuse @issue-104
+  Scenario: The trigger's artifact carries the stashed runtime tree to every stage job
+    Given a factory run on a target repo that is different from the factory's own repo
+    And its first job materialised the called version's runtime tree into the runner's temp dir
+    When the trigger job uploads its state artifact
+    Then the artifact contains the stashed runtime tree — including the hidden directory the stage scripts live under
+    And every later stage job restores the tree from the trigger's artifact before its first checkout
+    And no stage job of the run dies on a missing stashed runtime file
