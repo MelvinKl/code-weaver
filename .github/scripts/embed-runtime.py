@@ -64,7 +64,19 @@ of that shape:
   stage scripts live in the runtime tree (the file's steps launch them
   from the stash), and a `run` block over the line budget would be
   exactly the body shape the parser mishandles (the published file's
-  486-line report body, its 165-line baseline body).
+  486-line report body, its 165-line baseline body);
+- no run block's heredoc terminator is indented past the block's base
+  indent — the block scalar's dedent strips the base, and a bash
+  heredoc terminator must then sit at column 0 in the executed script
+  (indented past the base it keeps its extra indent after the dedent,
+  is not a terminator, and the shell reads the rest of the step's
+  script as the heredoc's body — the step dies at run time while the
+  file parses cleanly and keeps every other shape above: the trigger
+  step of the published version's failed runs #151/#152 died exactly
+  here, its issue-meta heredoc's terminator four deeper than the
+  block's base — issue #112); and no run block opens a heredoc it
+  never terminates (a script ending mid-heredoc is the same death —
+  bash's "here-document delimited by end-of-file").
 
 A maintainer who changes the runtime tree commits the tree; the tag
 the release flow cuts points at a commit whose tree is consistent
@@ -263,11 +275,14 @@ def _step_key_scan(text: str):
     at eight), and yield, for every step, (the step's name, the
     ordered keys of its mapping with their line numbers, and the extent
     of its `run` block scalar as [key line, content start, block
-    indent, line count]). The two divergence-shape tests then run on
-    that scan: a step that declares keys AFTER its `run` key (a block
-    scalar that terminates inside the step mapping — the divergence's
-    trigger site), and a `run` block scalar past the giant-body
-    budget."""
+    indent, line count, the block's lines (line, raw) in order]).
+    The three shape tests then run on that scan: a step that declares
+    keys AFTER its `run` key (a block scalar that terminates inside the
+    step mapping — the divergence's trigger site), a `run` block
+    scalar past the giant-body budget, and a run block whose heredoc
+    terminator the block's dedent leaves off column 0 in the executed
+    script (the shape `heredoc_terminator_violations` checks — the
+    engine half cannot see it)."""
     lines = text.splitlines()
     jobs_key = None
     for i, ln in enumerate(lines):
@@ -284,6 +299,12 @@ def _step_key_scan(text: str):
     for i in range(jobs_key + 1, len(lines)):
         ln = lines[i]
         if not ln.strip() or ln.lstrip().startswith("#"):
+            # a blank line inside an open run block stays in the block
+            # (a block scalar keeps its blank lines, and the scan skips
+            # comments everywhere) — collected here, in order, for the
+            # heredoc-terminator lint that walks the block's lines
+            if step[2] is not None and step[2][1] is not None:
+                step[2][3].append((i, ln))
             continue
         ind = len(ln) - len(ln.lstrip())
         body = ln.strip()
@@ -311,7 +332,7 @@ def _step_key_scan(text: str):
                 if k:
                     step[1].append((i, k))
                 if k == "run" and v.startswith(("|", ">")):
-                    step[2] = [i, None, 0]
+                    step[2] = [i, None, 0, []]
             continue
         if ind == 8 and ":" in body and not body.startswith("-"):
             k = body.split(":", 1)[0].strip()
@@ -319,7 +340,7 @@ def _step_key_scan(text: str):
             if k:
                 step[1].append((i, k))
             if k == "run" and v.startswith(("|", ">")):
-                step[2] = [i, None, 0]
+                step[2] = [i, None, 0, []]
             continue
         # a line at or below the run block's content indent ends the
         # block; a line at or beyond it extends it
@@ -329,10 +350,118 @@ def _step_key_scan(text: str):
             if step[2][1] is not None:
                 if ind >= step[2][1]:
                     step[2][2] += 1
+                    step[2][3].append((i, ln))
                     continue
                 step[2] = None
     for st in flush():
         yield st
+
+
+# A bash heredoc opener: `<<` (the lookbehind keeps a `<<<` herestring
+# out — the third `<` opens no heredoc), an optional `-` (whose
+# terminators bash strips leading tabs from), an optionally quoted
+# delimiter word, the matching closing quote where one opened.
+_HEREDOC_OPEN = re.compile(
+    r"(?<!<)<<?-?(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def heredoc_terminator_violations(text: str) -> list[str]:
+    """The run-block heredoc-terminator check — the shape no YAML
+    engine sees: every `run` block scalar the runner dedents to its
+    base indent (the block's first content line) before the shell reads
+    it, and a bash heredoc terminator must sit at column 0 in that
+    executed script. A terminator line indented deeper in the file
+    keeps its extra indent after the dedent — it is then not a
+    terminator — and the shell reads the rest of the step's script as
+    the heredoc's body: the "here-document delimited by end-of-file"
+    warning, then a syntax error, the step dead at run time while the
+    file parses cleanly and keeps every other structure shape the gate
+    checks (the trigger step of the published version's failed runs
+    died exactly this way — issue #112).
+
+    `text` is a workflow file; one violation per —
+    - heredoc terminator the dedent leaves off column 0 (a `<<DELIM`
+      or `<<'DELIM'`/`<<"DELIM"` terminator indented past the block's
+      base — any extra indent breaks it; a `<<-DELIM` terminator whose
+      extra indent carries a space — the dash strips leading tabs
+      only);
+    - heredoc the block opens but never terminates (the executed
+      script ends mid-heredoc: the same death, the terminator line
+      absent altogether).
+
+    Plain-stdlib by design: the check walks the file the workflow's
+    own indentation discipline defines it (the `_step_key_scan`
+    shape), no YAML engine required."""
+    violations = []
+    for step_name, _keys, run_state in _step_key_scan(text):
+        if run_state is None:
+            continue
+        _key_line, base, _count, block_lines = run_state
+        if base is None:
+            continue
+        pending = {}  # delimiter -> (the opener's dash, opener line)
+        for lineno, ln in block_lines:
+            if not ln.strip():
+                continue
+            stripped = ln.strip()
+            if stripped.startswith("#"):
+                # a comment opens no heredoc (outside a pending one it
+                # is skipped; inside one it is body — the pending set
+                # it leaves unchanged)
+                continue
+            # a pending heredoc's terminator: the line is the
+            # delimiter word itself
+            closing = [d for d in pending if stripped == d]
+            if closing:
+                for d in closing:
+                    dash, _opener = pending.pop(d)
+                    lead = ln[:len(ln) - len(ln.lstrip())]
+                    extra = lead[base:] if len(lead) > base else ""
+                    if dash:
+                        # the dash strips the terminator's leading
+                        # tabs: the executed line must be tabs (only)
+                        # plus the word
+                        ok = all(c == "\t" for c in extra) \
+                            and ln[len(lead):] == d
+                    else:
+                        # no dash: the executed line is the word alone
+                        # at column 0 — any indent past the base stands
+                        ok = extra == "" and ln[len(lead):] == d
+                    if not ok:
+                        violations.append(
+                            f"step {step_name!r}'s run block line "
+                            f"{lineno + 1}: the heredoc terminator "
+                            f"{d!r} is indented {len(lead)} — its "
+                            f"block's base is {base}; the runner's "
+                            f"dedent strips the base and leaves the "
+                            f"terminator {len(lead) - base} past "
+                            f"column 0 in the executed script, where a "
+                            f"{'<<-' if dash else '<<'}{d} terminator "
+                            "must sit at column 0: the shell would "
+                            "read the rest of the step's script as the "
+                            "heredoc's body (the 'here-document "
+                            "delimited by end-of-file' warning, then a "
+                            "syntax error) and the step dies at run "
+                            "time on a file every standard engine "
+                            "parses cleanly")
+                continue
+            # an opener line (a line inside a pending heredoc's body is
+            # body — bash reads it as that heredoc's content until the
+            # terminator)
+            if not pending:
+                for om in _HEREDOC_OPEN.finditer(ln):
+                    d = om.group(2)
+                    if d not in pending:
+                        pending[d] = (om.group(0)[2] == "-", lineno)
+        for d, (dash, opener_ln) in pending.items():
+            violations.append(
+                f"step {step_name!r}'s run block line {opener_ln + 1}: "
+                f"the `{'<<-' if dash else '<<'}{d}` heredoc is opened "
+                "but never terminated inside the block — the executed "
+                "script ends mid-heredoc (bash's 'here-document "
+                "delimited by end-of-file'), the step dies at run time "
+                "on a file every standard engine parses cleanly")
+    return violations
 
 
 def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
@@ -354,7 +483,15 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
         trigger site);
     (d) a `run` block scalar is a giant inline body past the budget
         (the flat-file discipline: the body belongs in the runtime
-        tree)."""
+        tree);
+    (e) a run block's heredoc terminator is indented past the block's
+        base indent (the block scalar's dedent leaves it off column 0
+        in the executed script — not a terminator there: the shell
+        reads the rest of the step's script as the heredoc's body and
+        the step dies at run time on a file the engines parse
+        cleanly), or a run block opens a heredoc it never terminates
+        (the executed script ends mid-heredoc: bash's "here-document
+        delimited by end-of-file")."""
     violations = []
     # (1) the engine half — every standard engine available must parse
     # the file to the pinned job/step structure
@@ -449,6 +586,17 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
                     f"{max_run_block_lines}-line budget: the body belongs "
                     "in the runtime tree (the file's step launches the "
                     "stashed script), not in the published file")
+    # (3) the heredoc-terminator half — a run block whose heredoc
+    # terminator is indented past the block's base (the dedent leaves
+    # it off column 0 in the executed script: the shell reads the rest
+    # of the step's script as the heredoc's body, the step dies at run
+    # time) or a heredoc the block opens but never terminates (the
+    # script ends mid-heredoc) — valid YAML, the pinned job/step
+    # graph, no keys after the run block, the line budget met: every
+    # other gate shape holds, and this is the one the engine half
+    # cannot see (the failure that killed the published version's
+    # trigger step — issue #112)
+    violations.extend(heredoc_terminator_violations(text))
     if violations:
         return False, ("the committed workflow file is not parser-safe — "
                        + "; ".join(violations))
@@ -458,7 +606,9 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
         + (" and ".join(n for n, _ in engines) if engines
            else "no standard engine (engine half not run)")
         + "; no step declares keys after its run block; no run block "
-        f"exceeds the {max_run_block_lines}-line giant-body budget")
+        f"exceeds the {max_run_block_lines}-line giant-body budget; no "
+        "run block's heredoc terminator is indented past the block's "
+        "base, and no block opens a heredoc it never terminates")
 
 
 def check(root: str, path: str):

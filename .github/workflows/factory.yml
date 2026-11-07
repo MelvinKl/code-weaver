@@ -558,9 +558,18 @@ jobs:
               BASE_REF="${{ inputs.target-branch }}"
               BASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE_REF" | jq -r '.commit.sha')
               TITLE=$(jq -r '.title // "(no title)"' <<<"$ISSUE_JSON" | tr '\n' ' ')
+              # the heredoc's terminator line sits at the run block's
+              # base indent, not the subshell's: the runner's dedent
+              # strips the block's base, leaving the terminator at
+              # column 0 in the executed script — four spaces deeper
+              # (the subshell's own indent) it would not be a
+              # terminator: bash would read the rest of the step's
+              # script as the heredoc's body and the step would die at
+              # run time (the trigger's failure in runs #151/#152 —
+              # issue #112)
               cat > "$RUNNER_TEMP/cw/issue-meta.json" <<EOF
               { "issue": $ISSUE, "title": $(jq -c '.title // ""' <<<"$ISSUE_JSON"), "base_ref": "$BASE_REF", "base_sha": "$BASE_SHA" }
-              EOF
+          EOF
               echo "started=true" >> "$GITHUB_OUTPUT"
               echo "base-ref=$BASE_REF" >> "$GITHUB_OUTPUT"
               echo "base-sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
@@ -1730,6 +1739,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
           set -o pipefail
           (
+              # the heredoc's terminator line sits at the run block's
+              # base indent (the dedent leaves it at column 0 in the
+              # executed script — indented, it would not be a
+              # terminator; issue #112)
               python3 - "$RUNNER_TEMP/cw" <<'EOF'
               import glob, os, sys
               cw = sys.argv[1]
@@ -1769,7 +1782,7 @@ jobs:
                   with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as f:
                       f.write("context=" + " ".join(p for _, p in ctx) + "\n")
               print(f"pr-body prompt ready: {len(ctx)} context file(s)")
-              EOF
+          EOF
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Generate the PR body with pi (from the requirements, the plan and the review)
         # The stage script runs from the stash — the runtime tree this
@@ -1809,6 +1822,10 @@ jobs:
                 exit 0
               fi
               echo "pi produced no body — assembling the template fallback"
+              # the heredoc's terminator line sits at the run block's
+              # base indent (the dedent leaves it at column 0 in the
+              # executed script — indented, it would not be a
+              # terminator; issue #112)
               python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
               import glob, os, subprocess, sys
               out = sys.argv[1]
@@ -1928,7 +1945,7 @@ jobs:
                         "outcome, its usage totals and cost — and closes the issue on a "
                         "successful run._"]
               open(out, "w").write("\n".join(lines) + "\n")
-              EOF
+          EOF
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - id: open-pr
         env:

@@ -601,3 +601,141 @@ def test_factory_file_stores_no_binary_content():
                 "the workflow file holds a base64 blob line — the "
                 "retired embed's form (the runtime tree's base64 across "
                 f"the heredoc's wrapped lines): {body[:40]!r}…")
+
+def _run_block_fixture(terminator_indent=None, *, close=True,
+                       dashed=False, terminator_extra=""):
+    """A minimal workflow the structure scan reads: one job, one step,
+    a run block (base indent 10) whose heredoc's one body line sits at
+    the block's base, its terminator at `terminator_indent` (ten — the
+    block's base — where unspecified) with `terminator_extra` between
+    the base and the word (a `<<-` dash strips leading tabs from the
+    terminator, so a tab there is still a terminator; a space is not),
+    or absent where `close` is false (the block opens the heredoc it
+    never terminates)."""
+    opener = "cat > f <<-'EOF'" if dashed else "cat > f <<EOF"
+    lines = [
+        "name: t",
+        "on: push",
+        "jobs:",
+        "  trigger:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - name: resolve",
+        "        run: |",
+        "          " + opener,
+        "          body line",
+    ]
+    if close:
+        lines.append(" " * (terminator_indent
+                            if terminator_indent is not None else 10)
+                     + terminator_extra + "EOF")
+    lines.append("          echo done")
+    return "\n".join(lines)
+
+
+def test_committed_factory_file_holds_no_heredoc_terminator_past_its_block_base():
+    """(scenario "A workflow file whose heredoc terminator indents past
+    the run block's base publishes no version" — the file the gate
+    guards; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    heredoc terminator indents past the run block's base publishes no
+    version`) the committed factory.yml's run blocks: every heredoc
+    terminator sits at its block's base indent (the runner's dedent
+    leaves it at column 0 in the executed script — indented past the
+    base, the terminator would not be a terminator: bash would read
+    the rest of the step's script as the heredoc's body and the step
+    would die at run time — the trigger step's failure in runs
+    #151/#152: its issue-meta heredoc's terminator, and the pr job's
+    two `python3 -` heredocs' terminators, all sat four deeper than
+    their blocks' base in the published file, while the structure
+    gate's other shapes — the engine parse, the keys-after-run check,
+    the line budget — all held, so the version published and every run
+    since died at trigger)."""
+    text = _read(FACTORY)
+    violations = embed.heredoc_terminator_violations(text)
+    assert not violations, (
+        "the committed factory.yml leaves heredoc terminator(s) off "
+        "column 0 in the executed script: "
+        + "; ".join(violations))
+
+
+def test_a_heredoc_terminator_indented_past_its_block_base_is_a_structure_violation():
+    """(the same scenario — the gate's check itself; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    heredoc terminator indents past the run block's base publishes no
+    version`) a run block whose heredoc terminator sits four deeper
+    than the block's base: the dedent strips the base, leaves the
+    terminator four into column 0 — not a terminator there — and the
+    structure gate fails the file with the exact cause (the step, the
+    line, the terminator, the base): the version the tag would point
+    at is not published, and a target pin never lands on a file whose
+    step script bash reads to end of file."""
+    fixture = _run_block_fixture(terminator_indent=14)
+    violations = embed.heredoc_terminator_violations(fixture)
+    assert len(violations) == 1, f"{violations!r}"
+    v = violations[0]
+    assert "resolve" in v and "'EOF'" in v, v
+    assert "indented 14" in v and "base is 10" in v, v
+    # the full structure gate carries the same verdict (the publish's
+    # pre-tag gate reads it)
+    ok, message = embed.verify_structure(
+        fixture, expected_jobs=("trigger",),
+        expected_step_counts={"trigger": 1})
+    assert not ok
+    assert "terminator" in message, message
+
+
+def test_a_heredoc_terminator_at_its_block_base_is_not_a_structure_violation():
+    """(the same scenario — the fixed shape; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    heredoc terminator indents past the run block's base publishes no
+    version`) a run block whose heredoc terminator sits at the block's
+    base: the dedent strips the base, leaves it at column 0 in the
+    executed script — a terminator there — and the gate's check
+    passes it."""
+    fixture = _run_block_fixture()
+    assert embed.heredoc_terminator_violations(fixture) == []
+    ok, message = embed.verify_structure(
+        fixture, expected_jobs=("trigger",),
+        expected_step_counts={"trigger": 1})
+    # the engine half's verdict is environment-dependent (a
+    # stdlib-only test driver's interpreter may import no YAML
+    # engine) — the shape this check pins is the heredoc half: no
+    # violation of it (the failure form names the terminator and its
+    # indent — neither marker appears in the verdict)
+    assert "is not parser-safe" not in message, message
+    assert "'EOF' is indented" not in message, message
+
+
+def test_a_dashed_heredoc_terminator_indented_with_a_space_is_a_structure_violation():
+    """(the same scenario — the `<<-` form's one legal exception;
+    reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    heredoc terminator indents past the run block's base publishes no
+    version`) a `<<-DELIM` opener strips the terminator's leading tabs
+    — a terminator whose extra indent past the base is a tab (only)
+    still terminates; one that carries a space does not, and the gate
+    fails it."""
+    assert embed.heredoc_terminator_violations(
+        _run_block_fixture(dashed=True, terminator_extra="\t")) == []
+    violations = embed.heredoc_terminator_violations(
+        _run_block_fixture(dashed=True, terminator_extra=" "))
+    assert violations, (
+        "the space-indented <<-'EOF' terminator is not reported — the "
+        "dash strips leading tabs, never a space")
+    v = violations[0]
+    assert "'EOF'" in v and "indented 11" in v and "base is 10" in v, v
+
+
+def test_a_heredoc_opened_but_never_terminated_in_its_block_is_a_structure_violation():
+    """(the same scenario — the check's other half; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    heredoc terminator indents past the run block's base publishes no
+    version`) a run block that opens a heredoc whose terminator line
+    never comes: the executed script ends mid-heredoc (bash's
+    "here-document delimited by end-of-file") — the same run-time
+    death, and the gate names the opener's line."""
+    fixture = _run_block_fixture(close=False)
+    violations = embed.heredoc_terminator_violations(fixture)
+    assert len(violations) == 1, f"{violations!r}"
+    assert "never terminated" in violations[0], violations[0]

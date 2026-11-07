@@ -95,3 +95,12 @@ Feature: Automatic release on main branch changes
     Then the run fails at the structure gate with the exact cause, before the tag
     And no new version tag is created and no new GitHub release is published
     And a target pin never lands on a file whose jobs the runner's parser mis-reads
+
+  @issue-112 @auto-release
+  Scenario: A workflow file whose heredoc terminator indents past the run block's base publishes no version
+    Given a push to the code-weaver repo's main branch
+    And the push's factory workflow file carries a step whose run block's heredoc terminator sits indented past the block's base indent, or opens a heredoc the block never terminates
+    When the release machinery gates publication on the committed version
+    Then the run fails at the structure gate with the exact cause, before the tag
+    And no new version tag is created and no new GitHub release is published
+    And a target pin never lands on a file whose step script bash reads to end of file

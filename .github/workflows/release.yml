@@ -27,9 +27,13 @@
 # step (between the publication gate and Publish below) asks the
 # shared-plumbing
 # helper whether the push's changed files are confined to that file and,
-# where they are, exits before a number is materialised, a tag is
-# created, or a release is published — no number spent on a version
-# whose content did not change. The trigger still fires on every main
+# where they are, records its skip on a step output the Publish step's
+# if: reads — a step's zero exit ends that step only, and a step exit
+# never stops the job (the flow's next step runs regardless), so the
+# skip cannot be the exit itself; the output is what keeps the Publish
+# step from running — no number materialised, no tag created, no
+# release published, no number spent on a version whose content did
+# not change. The trigger still fires on every main
 # advance — the skip is the no-op discipline above applied to a push
 # that changes nothing a version carries.
 #
@@ -122,18 +126,25 @@ jobs:
         # standard engine cannot parse, a step that declares keys after
         # its run block (the dedent that ends the block inside the step
         # mapping — the shape the runner's workflow parser diverges on),
-        # or a run block past the giant-body budget would publish a
-        # version whose jobs the runner mis-parses: the run's job graph
-        # collapses (issue #106 — a stage job missing from the graph,
-        # phantom steps in every other job, the stage outcomes lost).
-        # The gate fails before the tag, with the exact cause, on the
-        # committed file.
+        # a run block past the giant-body budget, a run block whose
+        # heredoc terminator the block's dedent leaves off column 0 in
+        # the executed script (bash reads the rest of the step's script
+        # as the heredoc's body — the step dies at run time while the
+        # run's job graph stands: runs #151/#152's trigger failure,
+        # issue #112), or a run block that opens a heredoc it never
+        # terminates — would publish a version whose jobs the runner
+        # mis-parses or whose steps die at run time: the run's job
+        # graph collapses (issue #106 — a stage job missing from the
+        # graph, phantom steps in every other job, the stage outcomes
+        # lost). The gate fails before the tag, with the exact cause,
+        # on the committed file.
         run: |
           python3 .github/scripts/embed-runtime.py --verify-structure || {
-            echo "::error::the published version's workflow file is not parser-safe — a standard engine rejects it, a step declares keys after its run block, or a run block exceeds the giant-body budget: a version whose jobs the runner's parser mis-parses must not be published"
+            echo "::error::the published version's workflow file is not parser-safe — a standard engine rejects it, a step declares keys after its run block, a run block exceeds the giant-body budget, a run block's heredoc terminator is indented past the block's base, or a block opens a heredoc it never terminates: a version whose jobs the runner mis-parses or whose steps die at run time must not be published"
             exit 1
           }
-      - name: Skip a push that changes only the consumer workflow
+      - id: consumer-only
+        name: Skip a push that changes only the consumer workflow
         # A version is the factory workflow and its runtime tree as one
         # published version — never the consumer's own workflow file
         # (.github/workflows/code-weaver.yml, the target's only
@@ -149,8 +160,18 @@ jobs:
         # re-run is not a push (it has no `before` sha) and skips this
         # check: its no-op protection stays the one-tag-per-commit guard
         # in the Publish step (a re-run at an unchanged HEAD publishes
-        # nothing).
+        # nothing). The skip's channel: the step writes its skip signal
+        # to a step output (`should_skip`) the Publish step's `if:`
+        # reads — a step's zero exit ends that step only, and a step
+        # exit never stops the job (the flow's next step runs
+        # regardless), so the skip cannot be the exit itself; the
+        # output is what keeps the Publish step from running.
         run: |
+          # the skip signal the Publish step's if: reads — written for
+          # every shape (the default is publish; a consumer-workflow-only
+          # push overwrites it below, and the last write to a step
+          # output wins)
+          echo "should_skip=false" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             ZERO=0000000000000000000000000000000000000000
             if [ -z "$GITHUB_EVENT_BEFORE" ] || [ "$GITHUB_EVENT_BEFORE" = "$ZERO" ]; then
@@ -161,11 +182,22 @@ jobs:
             CHANGED=$(git diff --name-only "$BASE" HEAD)
             SKIP=$(printf '%s\n' "$CHANGED" | python3 .github/scripts/release-number.py --changed-files)
             if [ -n "$SKIP" ]; then
-              echo "the push changes only $SKIP — a published version is the factory workflow and its runtime tree as one published version, never the consumer's own workflow file: no release is published and no number is spent"
+              echo "the push changes only $SKIP — a published version is the factory workflow and its runtime tree as one published version, never the consumer's own workflow file: the Publish step's if: reads this step's output and skips — no release is published and no number is spent"
+              echo "should_skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
       - name: Publish the release
+        # The step runs only where the pre-publish check above did not
+        # skip: a push whose changed files are confined to the
+        # consumer's own workflow file changes nothing a published
+        # version carries, and the skip is a step output this step's
+        # if: reads (a step's zero exit ends that step only — it never
+        # stops the job, so the output is what keeps this step from
+        # running: no number spent on a version whose content did not
+        # change). A workflow_dispatch re-run writes no skip — its
+        # no-op protection stays the one-tag-per-commit guard below.
+        if: ${{ steps.consumer-only.outputs.should_skip != 'true' }}
         env:
           # the gh CLI refuses to run in an Actions job unless GH_TOKEN is
           # set (no GITHUB_TOKEN fallback); the github.token context is the
