@@ -36,7 +36,7 @@ jobs:
     # Bumping the tag number is the dogfood's upgrade — one tag is one
     # complete version, and the release flow's one-tag-per-commit guard
     # keeps the series one commit per number.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@12
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@20
     with:
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
