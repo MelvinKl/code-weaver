@@ -156,6 +156,9 @@ def main() -> None:
                 common.log(f"stage 13: all {len(runs)} PR-triggered workflow(s) green")
                 open(common.state_file("stage-summary.txt"), "a").write(
                     f"stage 13 pr-gates: all {len(runs)} green\n")
+                # every gate green completes the stage: its completion
+                # marker rides with the line
+                common.record_stage_ran("cw-gates")
                 return
             # stage 14 — bounded fix loop
             common.caps_ok(fix_iter)
@@ -211,6 +214,9 @@ def main() -> None:
             open(common.state_file("stage-summary.txt"), "a").write(
                 "stage 13 pr-gates: no PR-triggered workflow on this head "
                 "(vacuously green)\n")
+            # the vacuous green completes the stage: its completion marker
+            # rides with the line
+            common.record_stage_ran("cw-gates")
             return
         common.log(f"stage 13: no PR-triggered runs visible for "
                    f"{head_sha[:12]} yet (grace poll {polls}/{EMPTY_GRACE_POLLS})")

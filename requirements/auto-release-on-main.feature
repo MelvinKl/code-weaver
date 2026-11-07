@@ -86,3 +86,12 @@ Feature: Automatic release on main branch changes
     Then the changelog is a table
     And the table has a row for every commit in the branch since the previous release
     And each row carries the commit's title, the commit's author, the commit's hash and the commit's datetime
+
+  @issue-106 @auto-release
+  Scenario: A workflow file the runner's parser mis-reads publishes no version
+    Given a push to the code-weaver repo's main branch
+    And the push's factory workflow file is not parser-safe under a standard YAML engine, declares a step key after its run block, or carries a run block past the giant-body budget
+    When the release machinery gates publication on the committed version
+    Then the run fails at the structure gate with the exact cause, before the tag
+    And no new version tag is created and no new GitHub release is published
+    And a target pin never lands on a file whose jobs the runner's parser mis-reads

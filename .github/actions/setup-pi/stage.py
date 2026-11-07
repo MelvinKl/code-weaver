@@ -455,6 +455,14 @@ def main() -> None:
     common.log(f"setup-pi: OK — installed pi for the run ({installed}), "
                f"harness written into {agent}; backend {backend} reachable, "
                f"model '{model}' in the written set, smoke check passed")
+    # the stage's outcome line + completion marker — written by the stage
+    # step itself: the job's terminal "Stage summary" step is the fallback
+    # writer (append-only), not the verdict's only writer — issue #106's
+    # collapse left the terminal step as the sole writer, and the runner's
+    # parser dropped exactly that step's write.
+    common.record_stage_outcome(
+        f"stage 2 setup-pi: verified — backend {backend}, model {model}")
+    common.record_stage_ran("cw-setup")
 
 
 if __name__ == "__main__":

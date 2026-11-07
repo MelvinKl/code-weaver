@@ -203,6 +203,10 @@ def main() -> None:
         with open(common.state_file("stage-summary.txt"), "a", encoding="utf-8") as f:
             f.write("stage 4-5 requirement extraction: no delta requirements "
                     "(empty issue body)\n")
+        # the early stop completes the stage's work: its completion marker
+        # rides with the line (the report cross-checks both to tell "the
+        # stage ran" from "the stage never ran")
+        common.record_stage_ran("cw-extract")
         return
     if first_run:
         common.log("stage 4: the target has no requirements directory — a "
@@ -274,6 +278,10 @@ def main() -> None:
         # named files as context before answering (the other stages reference
         # their context by path — one invocation never mixes the slices)
         context_as_args=True,
+        # the loop's completion point records the stage's outcome line and
+        # completion marker (the report cross-checks them; a caller with
+        # its own completion hook records its own lines instead)
+        artifact="cw-extract",
     )
 
 

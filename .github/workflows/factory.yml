@@ -13,9 +13,11 @@
 #   only a release-time rewrite of this file could make consistent (a
 #   workflow-file update the publishing principal is refused), and a
 #   relative path would resolve against the CALLING repo's checkout —
-#   where a target holds no copy of the factory's scripts. The stage
-#   steps below are the former action definitions, inlined at their
-#   former splice sites.
+#   where a target holds no copy of the factory's scripts. A stage
+#   step whose body is python launches the runtime tree's stage script
+#   from the job's stash (the flat-file discipline recorded below);
+#   the step's shell mechanics — its state files, its push, its env —
+#   stay in the file.
 # - the workflow carries NO BINARY content: the tree its stage steps
 #   execute (the .github scripts, the stage scripts, the pi prompt
 #   templates) is not embedded in this file — the base64-tarball embed
@@ -68,6 +70,33 @@
 # the inlined steps declare relay the values exactly as the former
 # composite-action boundary did, so the resolution chain is
 # unchanged.
+#
+# The stage python lives in the runtime tree, not in this file: a
+# stage step whose body is python launches the stashed stage script
+# (`python3 "$RUNNER_TEMP/cw/stash/.github/actions/<stage>/stage.py"`)
+# instead of inlining it — a giant inline block is the shape the
+# runner's workflow parser diverges on (issue #106: the extract job
+# dropped out of the run's job graph, phantom steps landed in every
+# job, and each stage's outcome line was lost to a truncated
+# artefact, so the final report read a successful run as failed).
+# Every stage step keeps `run` as its step mapping's last key (an
+# env-after-run block ends at the first dedented key — the shape the
+# parser diverges on) and its run block stays under the giant-body
+# budget; the trigger job's verify step and the release flow's
+# pre-tag structure gate (embed-runtime.py --verify-structure)
+# enforce the shape on every published version.
+#
+# On this runner build the job logs are ghosts — every job's log is
+# unreachable from the API, successful or failed — so every bash
+# step mirrors its full output into the run's artefact state dir
+# (stage-console.log, appended across the step's subshell) and every
+# stage step writes its completion marker (state/artifacts/
+# cw-<job>.txt) beside its outcome line (stage-summary.txt): the
+# artefact channel is the only durable record, and the report stage
+# cross-checks the three evidence channels — outcome lines, completion
+# markers, console log — to tell "a stage ran and recorded no outcome"
+# (a channel loss) from "a stage never ran" (its job missing from the
+# run's job graph).
 #
 # The steps use `${{ runner.temp }}`, not `env.RUNNER_TEMP` (this
 # runner build does not materialise `env.*` inside step `run:`
@@ -197,47 +226,56 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          # Every stage authenticates with GH_TOKEN. A misconfigured secret used
-          # to surface as an opaque checkout failure (403, empty logs) — so fail
-          # here, first, and name the exact cause:
-          #   empty  → the secret was never set (or the caller did not pass it)
-          #   401    → the token is invalid, expired or was revoked
-          #   403    → the token authenticates but has no access to this repo
-          #            (its user/app is not a member of the owning org, or a
-          #            fine-grained PAT is scoped to a different repository)
-          #   other  → the runner has no egress to api.github.com
-          set -uo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::GH_TOKEN secret is empty — set a repo/org secret GH_TOKEN that can read this repo, and pass it from the caller's workflow"
-            exit 1
-          fi
-          # Every factory stage shells out to these; a missing one would die
-          # mid-stage with an unhelpful exit 127 ("command not found")
-          for TOOL in git jq gh python3; do
-            command -v "$TOOL" >/dev/null 2>&1 || {
-              echo "::error::required tool '$TOOL' is not installed on this runner — install it in the runner environment (pi is installed & configured separately in stage 2)"
-              exit 1
-            }
-          done
-          echo "runner tools verified: git, jq, gh, python3"
-          HTTP=$(curl -s -o /tmp/cw-preflight.json -w '%{http_code}' --max-time 30 \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY") || {
-            echo "::error::GitHub API unreachable from this runner — check the runner's internet egress"
-            exit 1
-          }
-          case "$HTTP" in
-            200) echo "GH_TOKEN verified: authenticates and can read $GITHUB_REPOSITORY" ;;
-            401) echo "::error::GH_TOKEN was rejected by GitHub (401) — the token is invalid, expired or was revoked"; exit 1 ;;
-            403) if grep -q 'Bad credentials' /tmp/cw-preflight.json 2>/dev/null; then
-                    echo "::error::GH_TOKEN was rejected by GitHub (403, bad credentials) — the token is invalid, expired or was revoked"
-                  else
-                    echo "::error::GH_TOKEN authenticates but has NO access to $GITHUB_REPOSITORY (403) — its user/app is not a member of the owning org, or a fine-grained PAT is scoped to a different repository"
-                  fi
-                  exit 1 ;;
-            *) echo "::error::GitHub API answered HTTP $HTTP (expected 200) — check the runner's internet egress"; cat /tmp/cw-preflight.json; exit 1 ;;
-          esac
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              # Every stage authenticates with GH_TOKEN. A misconfigured secret used
+              # to surface as an opaque checkout failure (403, empty logs) — so fail
+              # here, first, and name the exact cause:
+              #   empty  → the secret was never set (or the caller did not pass it)
+              #   401    → the token is invalid, expired or was revoked
+              #   403    → the token authenticates but has no access to this repo
+              #            (its user/app is not a member of the owning org, or a
+              #            fine-grained PAT is scoped to a different repository)
+              #   other  → the runner has no egress to api.github.com
+              set -uo pipefail
+              if [ -z "${GH_TOKEN:-}" ]; then
+                echo "::error::GH_TOKEN secret is empty — set a repo/org secret GH_TOKEN that can read this repo, and pass it from the caller's workflow"
+                exit 1
+              fi
+              # Every factory stage shells out to these; a missing one would die
+              # mid-stage with an unhelpful exit 127 ("command not found")
+              for TOOL in git jq gh python3; do
+                command -v "$TOOL" >/dev/null 2>&1 || {
+                  echo "::error::required tool '$TOOL' is not installed on this runner — install it in the runner environment (pi is installed & configured separately in stage 2)"
+                  exit 1
+                }
+              done
+              echo "runner tools verified: git, jq, gh, python3"
+              HTTP=$(curl -s -o /tmp/cw-preflight.json -w '%{http_code}' --max-time 30 \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY") || {
+                echo "::error::GitHub API unreachable from this runner — check the runner's internet egress"
+                exit 1
+              }
+              case "$HTTP" in
+                200) echo "GH_TOKEN verified: authenticates and can read $GITHUB_REPOSITORY" ;;
+                401) echo "::error::GH_TOKEN was rejected by GitHub (401) — the token is invalid, expired or was revoked"; exit 1 ;;
+                403) if grep -q 'Bad credentials' /tmp/cw-preflight.json 2>/dev/null; then
+                        echo "::error::GH_TOKEN was rejected by GitHub (403, bad credentials) — the token is invalid, expired or was revoked"
+                      else
+                        echo "::error::GH_TOKEN authenticates but has NO access to $GITHUB_REPOSITORY (403) — its user/app is not a member of the owning org, or a fine-grained PAT is scoped to a different repository"
+                      fi
+                      exit 1 ;;
+                *) echo "::error::GitHub API answered HTTP $HTTP (expected 200) — check the runner's internet egress"; cat /tmp/cw-preflight.json; exit 1 ;;
+              esac
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - id: called-version
         name: Resolve the called version (from the consumer workflow at the run's base ref)
         # The called ref is not visible to the run's jobs — GitHub
@@ -266,45 +304,54 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          set -uo pipefail
-          # make room for the fetch: the step below clones the called
-          # version's tree into the stash, over any tree an earlier
-          # step left there
-          rm -rf "$RUNNER_TEMP/cw/stash"
-          CONSUMER_JSON=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/workflows/${{ inputs.workflow-name }}.yml?ref=${GITHUB_REF}") || {
-            echo "::error::could not read the consumer workflow .github/workflows/${{ inputs.workflow-name }}.yml at ${GITHUB_REF} over the GitHub API — the called ref is recovered from that file, so the recovery needs it readable (a token that cannot read the target repo fails the preflight step, before this one)"
-            exit 1
-          }
-          CONSUMER=$(jq -r '.content // ""' <<<"$CONSUMER_JSON" | base64 -d)
-          USES=$(grep -E '^[[:space:]]*uses:' <<<"$CONSUMER" \
-            | grep -F '.github/workflows/' | grep -F 'factory.yml' \
-            | head -n 1 | sed -E 's/^[[:space:]]*uses:[[:space:]]*//')
-          if [ -z "$USES" ]; then
-            echo "::error::the consumer workflow at ${GITHUB_REF} has no uses: line invoking the factory's workflow file — the called ref is recovered from that line, and the recovery found none (the consumer invokes the factory by owner, repo, path and ref — or by a relative path, the legacy dogfood shape)"
-            exit 1
-          fi
-          case "$USES" in
-            *@*)
-              # owner-qualified form — <owner>/<repo>/<workflow path>@<ref>:
-              # a declared version tag selects a published version, and
-              # the fetch is the factory repo at that tag
-              CALLED_REF="${USES#*@}"
-              CALLED_REPO=$(
-                IFS='/' read -r OWNER REPO _PATH <<<"${USES%%@*}"
-                echo "$OWNER/$REPO"
-              )
-              ;;
-            *)
-              # relative form — the legacy dogfood shape (the runner
-              # reads the file from the triggering commit): the fetch is
-              # the triggering repo itself at the run's base ref
-              CALLED_REPO="$GITHUB_REPOSITORY"
-              CALLED_REF="$GITHUB_REF"
-              ;;
-          esac
-          echo "called-repo=$CALLED_REPO" >> "$GITHUB_OUTPUT"
-          echo "called-ref=$CALLED_REF" >> "$GITHUB_OUTPUT"
-          echo "called version resolved: $CALLED_REPO at $CALLED_REF — the ref's published version carries the file GitHub fetched and the runtime tree the next step fetches together (recovered from the consumer workflow at ${GITHUB_REF}; the consumer relays nothing)"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              set -uo pipefail
+              # make room for the fetch: the step below clones the called
+              # version's tree into the stash, over any tree an earlier
+              # step left there
+              rm -rf "$RUNNER_TEMP/cw/stash"
+              CONSUMER_JSON=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/workflows/${{ inputs.workflow-name }}.yml?ref=${GITHUB_REF}") || {
+                echo "::error::could not read the consumer workflow .github/workflows/${{ inputs.workflow-name }}.yml at ${GITHUB_REF} over the GitHub API — the called ref is recovered from that file, so the recovery needs it readable (a token that cannot read the target repo fails the preflight step, before this one)"
+                exit 1
+              }
+              CONSUMER=$(jq -r '.content // ""' <<<"$CONSUMER_JSON" | base64 -d)
+              USES=$(grep -E '^[[:space:]]*uses:' <<<"$CONSUMER" \
+                | grep -F '.github/workflows/' | grep -F 'factory.yml' \
+                | head -n 1 | sed -E 's/^[[:space:]]*uses:[[:space:]]*//')
+              if [ -z "$USES" ]; then
+                echo "::error::the consumer workflow at ${GITHUB_REF} has no uses: line invoking the factory's workflow file — the called ref is recovered from that line, and the recovery found none (the consumer invokes the factory by owner, repo, path and ref — or by a relative path, the legacy dogfood shape)"
+                exit 1
+              fi
+              case "$USES" in
+                *@*)
+                  # owner-qualified form — <owner>/<repo>/<workflow path>@<ref>:
+                  # a declared version tag selects a published version, and
+                  # the fetch is the factory repo at that tag
+                  CALLED_REF="${USES#*@}"
+                  CALLED_REPO=$(
+                    IFS='/' read -r OWNER REPO _PATH <<<"${USES%%@*}"
+                    echo "$OWNER/$REPO"
+                  )
+                  ;;
+                *)
+                  # relative form — the legacy dogfood shape (the runner
+                  # reads the file from the triggering commit): the fetch is
+                  # the triggering repo itself at the run's base ref
+                  CALLED_REPO="$GITHUB_REPOSITORY"
+                  CALLED_REF="$GITHUB_REF"
+                  ;;
+              esac
+              echo "called-repo=$CALLED_REPO" >> "$GITHUB_OUTPUT"
+              echo "called-ref=$CALLED_REF" >> "$GITHUB_OUTPUT"
+              echo "called version resolved: $CALLED_REPO at $CALLED_REF — the ref's published version carries the file GitHub fetched and the runtime tree the next step fetches together (recovered from the consumer workflow at ${GITHUB_REF}; the consumer relays nothing)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Stash the factory runtime tree (fetched at the called ref, before any checkout replaces the workspace)
         # The file stores no binary content — the runtime tree its stage
         # steps execute is not embedded in it. The tree reaches the run
@@ -347,60 +394,82 @@ jobs:
         # then rides the stashed tree on the cw-trigger artifact to every
         # later stage job's first step.
         run: |
-          set -uo pipefail
-          CALLER_REPO="${{ steps.called-version.outputs.called-repo }}"
-          CALLER_REF="${{ steps.called-version.outputs.called-ref }}"
-          # the anonymous clone of the public fetch source — shallow
-          # (depth 1 over every ref), no working tree yet, and the
-          # credential helper cleared so a runner-local git
-          # configuration cannot authenticate the fetch
-          git -c credential.helper= clone --quiet --depth 1 --no-checkout \
-            "https://github.com/${CALLER_REPO}.git" "$RUNNER_TEMP/cw/stash" || {
-            echo "::error::the anonymous clone of ${CALLER_REPO} failed — the fetch source is public, so a failed clone is a runner network egress failure (or an unreachable repo); a missing stash would leave every stage job missing its stashed runtime file"
-            exit 1
-          }
-          git -C "$RUNNER_TEMP/cw/stash" fetch --quiet origin "$CALLER_REF" || {
-            echo "::error::the called ref ${CALLER_REF} does not resolve in ${CALLER_REPO} — the consumer's uses: line selected a ref the fetch source does not carry; the fetch completes with no tree, and every stage job would die on a missing stashed runtime file"
-            exit 1
-          }
-          # the curation: sparse to the curated runtime tree — the
-          # prefixes the stage scripts resolve against, repo-relative
-          # under the stash — then check out the called ref's commit
-          git -C "$RUNNER_TEMP/cw/stash" sparse-checkout set \
-            .github/scripts .github/actions pi-prompts
-          git -C "$RUNNER_TEMP/cw/stash" checkout --quiet FETCH_HEAD
-          echo "cloned ${CALLER_REPO} at ${CALLER_REF} into $RUNNER_TEMP/cw/stash — the called version's curated runtime tree (the file GitHub fetched and the tree the run executes are the two halves of that ref's commit)"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              set -uo pipefail
+              CALLER_REPO="${{ steps.called-version.outputs.called-repo }}"
+              CALLER_REF="${{ steps.called-version.outputs.called-ref }}"
+              # the anonymous clone of the public fetch source — shallow
+              # (depth 1 over every ref), no working tree yet, and the
+              # credential helper cleared so a runner-local git
+              # configuration cannot authenticate the fetch
+              git -c credential.helper= clone --quiet --depth 1 --no-checkout \
+                "https://github.com/${CALLER_REPO}.git" "$RUNNER_TEMP/cw/stash" || {
+                echo "::error::the anonymous clone of ${CALLER_REPO} failed — the fetch source is public, so a failed clone is a runner network egress failure (or an unreachable repo); a missing stash would leave every stage job missing its stashed runtime file"
+                exit 1
+              }
+              git -C "$RUNNER_TEMP/cw/stash" fetch --quiet origin "$CALLER_REF" || {
+                echo "::error::the called ref ${CALLER_REF} does not resolve in ${CALLER_REPO} — the consumer's uses: line selected a ref the fetch source does not carry; the fetch completes with no tree, and every stage job would die on a missing stashed runtime file"
+                exit 1
+              }
+              # the curation: sparse to the curated runtime tree — the
+              # prefixes the stage scripts resolve against, repo-relative
+              # under the stash — then check out the called ref's commit
+              git -C "$RUNNER_TEMP/cw/stash" sparse-checkout set \
+                .github/scripts .github/actions pi-prompts
+              git -C "$RUNNER_TEMP/cw/stash" checkout --quiet FETCH_HEAD
+              echo "cloned ${CALLER_REPO} at ${CALLER_REF} into $RUNNER_TEMP/cw/stash — the called version's curated runtime tree (the file GitHub fetched and the tree the run executes are the two halves of that ref's commit)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Verify the stashed runtime tree holds the canonical runtime files
         # The fetch materialised the called version's tree; the canonical
         # marker files the stage steps run from must be in it — a fetch
         # that came back short fails here, with the exact cause, before
         # the first checkout replaces the workspace.
         run: |
-          set -e
-          for f in \
-            .github/scripts/common.py \
-            .github/scripts/stages.py \
-            .github/scripts/gherkin-validate.py \
-            .github/scripts/release-number.py \
-            .github/actions/setup-pi/stage.py \
-            .github/actions/extract-stage/stage.py \
-            .github/actions/plan-stage/stage.py \
-            .github/actions/implement-stage/stage.py \
-            .github/actions/review-stage/stage.py \
-            .github/actions/gates-stage/stage.py \
-            .github/actions/guard-check/guard-check.py \
-            pi-prompts/requirements.md \
-            pi-prompts/plan.md \
-            pi-prompts/implement.md \
-            pi-prompts/review.md \
-            pi-prompts/pr-body.md
-          do
-            [ -f "$RUNNER_TEMP/cw/stash/$f" ] || {
-              echo "::error::the fetched runtime tree is missing $f — the called version's tree does not carry the canonical runtime files its stage steps run from"
-              exit 1
-            }
-          done
-          echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (fetched at the called ref — the ref's version carries the file and the tree together: .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files, pi-prompts: $(find "$RUNNER_TEMP/cw/stash/pi-prompts" -type f | wc -l) files)"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              set -e
+              for f in \
+                .github/scripts/common.py \
+                .github/scripts/stages.py \
+                .github/scripts/gherkin-validate.py \
+                .github/scripts/release-number.py \
+                .github/actions/setup-pi/stage.py \
+                .github/actions/baseline/stage.py \
+                .github/actions/extract-stage/stage.py \
+                .github/actions/plan-stage/stage.py \
+                .github/actions/implement-stage/stage.py \
+                .github/actions/review-stage/stage.py \
+                .github/actions/pr-open/stage.py \
+                .github/actions/pi-run/stage.py \
+                .github/actions/gates-stage/stage.py \
+                .github/actions/report/stage.py \
+                .github/actions/guard-check/guard-check.py \
+                pi-prompts/requirements.md \
+                pi-prompts/plan.md \
+                pi-prompts/implement.md \
+                pi-prompts/review.md \
+                pi-prompts/pr-body.md
+              do
+                [ -f "$RUNNER_TEMP/cw/stash/$f" ] || {
+                  echo "::error::the fetched runtime tree is missing $f — the called version's tree does not carry the canonical runtime files its stage steps run from"
+                  exit 1
+                }
+              done
+              echo "stashed the factory runtime tree to $RUNNER_TEMP/cw/stash (fetched at the called ref — the ref's version carries the file and the tree together: .github: $(find "$RUNNER_TEMP/cw/stash/.github" -type f | wc -l) files, pi-prompts: $(find "$RUNNER_TEMP/cw/stash/pi-prompts" -type f | wc -l) files)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -411,129 +480,144 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           AI_REQUIREMENTS_LABEL: ${{ inputs.ai-requirements-label }}
         run: |
-          set -uo pipefail
-          echo "started=false" >> "$GITHUB_OUTPUT"
-          ISSUE="${{ inputs.issue-number }}"
-          [ -z "$ISSUE" ] && ISSUE="${{ github.event.issue.number || '' }}"
-          if [ -z "$ISSUE" ]; then
-            echo "no issue to process (no input, no issue event) — factory idle"
-            mkdir -p "$RUNNER_TEMP/cw/state/trigger"
-            echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
-            exit 0
-          fi
-          echo "issue-number=$ISSUE" >> "$GITHUB_OUTPUT"
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            LABELS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE" | jq -r '.labels[].name')
-            if ! grep -qx -- "$AI_REQUIREMENTS_LABEL" <<<"$LABELS"; then
-              echo "issue $ISSUE does not carry '$AI_REQUIREMENTS_LABEL' — factory idle"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              set -uo pipefail
+              echo "started=false" >> "$GITHUB_OUTPUT"
+              ISSUE="${{ inputs.issue-number }}"
+              [ -z "$ISSUE" ] && ISSUE="${{ github.event.issue.number || '' }}"
+              if [ -z "$ISSUE" ]; then
+                echo "no issue to process (no input, no issue event) — factory idle"
+                mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+                echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
+                exit 0
+              fi
+              echo "issue-number=$ISSUE" >> "$GITHUB_OUTPUT"
+              if [ "${{ github.event_name }}" = "issues" ]; then
+                LABELS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE" | jq -r '.labels[].name')
+                if ! grep -qx -- "$AI_REQUIREMENTS_LABEL" <<<"$LABELS"; then
+                  echo "issue $ISSUE does not carry '$AI_REQUIREMENTS_LABEL' — factory idle"
+                  mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+                  echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
+                  exit 0
+                fi
+              fi
+              # idempotency: a second run for the same issue while the first is in progress
+              EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${{ inputs.workflow-name }}.yml/runs?status=in_progress&per_page=20" \
+                | jq -r --arg n "$ISSUE" '[.workflow_runs[]? | select((.inputs?["issue-number"] // "") == $n) | .id] | join(" ")') || true
+              if [ -n "$EXISTING" ]; then
+                mkdir -p "$RUNNER_TEMP/cw/state/trigger"
+                echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
+                gh issue comment "$ISSUE" --body "⏳ **code-weaver** — a factory run for issue #${ISSUE} is already in progress (run ${EXISTING}). This trigger exits without duplicating work."
+                exit 0
+              fi
+              # validate the run's configuration before the trigger records or
+              # accepts the run — a configuration that cannot serve the stages
+              # fails here, at trigger time, with a precise error: this step's
+              # started output stays false (the step's first line wrote it),
+              # and every stage job gates on it, so a failed trigger skips
+              # every stage — no stage runs after the trigger
+              JOB_TIMEOUT="${{ inputs.job-timeout }}"
+              if ! [[ "$JOB_TIMEOUT" =~ ^[0-9]+$ ]]; then
+                echo "::error::job-timeout '${JOB_TIMEOUT}' is not a number of minutes — a job-level timeout-minutes must be a number of minutes (the five stage jobs that make pi calls run under it); the run fails at trigger time and no stage runs after the trigger"
+                exit 1
+              fi
+              JOB_TIMEOUT_SECONDS=$(( JOB_TIMEOUT * 60 ))
+              # the headroom: the margin the stage's own non-call work
+              # (checkout, guard, loop machinery, artifact sync, push)
+              # needs around each pi call — derived, not invented: the
+              # factory's own default pair already provides it — the 480-
+              # minute default job timeout minus the 21600-second default pi
+              # call cap — 28800 s minus 21600 s = 7200 s, both anchors
+              # documented input defaults
+              HEADROOM_SECONDS=7200
+              PI_CAP="${{ inputs.pi-timeout }}"
+              # the same comparison, cap-side view: a declared pi call cap
+              # longer than the job timeout minus the headroom fails the
+              # run — one trigger-side validation discharges both views
+              if ! { [[ "$PI_CAP" =~ ^[0-9]+$ ]] && [ "$JOB_TIMEOUT_SECONDS" -ge $(( PI_CAP + HEADROOM_SECONDS )) ]; }; then
+                echo "::error::job timeout ${JOB_TIMEOUT} minutes (${JOB_TIMEOUT_SECONDS} s) does not exceed the resolved pi call cap (${PI_CAP} s) by at least the ${HEADROOM_SECONDS}-second headroom the stage's own non-call work needs around each call — the run fails at trigger time and no stage runs after the trigger"
+                exit 1
+              fi
+              echo "configuration validated: job timeout ${JOB_TIMEOUT} minutes (${JOB_TIMEOUT_SECONDS} s) leaves the ${HEADROOM_SECONDS}-second headroom over the resolved pi call cap (${PI_CAP} s)"
+              ISSUE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE")
+              mkdir -p "$RUNNER_TEMP/cw"
+              jq -r '.body // ""' <<<"$ISSUE_JSON" > "$RUNNER_TEMP/cw/issue-body.md"
+              BASE_REF="${{ inputs.target-branch }}"
+              BASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE_REF" | jq -r '.commit.sha')
+              TITLE=$(jq -r '.title // "(no title)"' <<<"$ISSUE_JSON" | tr '\n' ' ')
+              cat > "$RUNNER_TEMP/cw/issue-meta.json" <<EOF
+              { "issue": $ISSUE, "title": $(jq -c '.title // ""' <<<"$ISSUE_JSON"), "base_ref": "$BASE_REF", "base_sha": "$BASE_SHA" }
+              EOF
+              echo "started=true" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "base-sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+              echo "issue-title=$TITLE" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Code Weaver — resolved configuration (workflow log; never committed)"
+                echo "- issue: #$ISSUE (event: ${{ github.event_name }})"
+                echo "- runner: \`${{ inputs.runner }}\`"
+                          echo "- runtime tree: the called version's own — fetched from the called repo at the called ref (stage 1 fetched it into $RUNNER_TEMP/cw/stash before the first checkout — the ref's version carries the file and the tree together); one ref is one version, no second pin"
+                echo "- LLM model (which configured model): \`${{ inputs.llm-model }}\`"
+                echo "- LLM backend: provided for the run (a GitHub secret or the repo file .pi/agent/models.json) — stage 2 writes it for the run"
+                echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
+                echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
+                echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
+                echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap)"
+                # the record's job timeout line carries the resolved value —
+                # the declared value where a target declared one, the 480
+                # default where the input is undeclared: the value the five
+                # pi-calling stage jobs run under as their job-level
+                # timeout-minutes, validated by the trigger at trigger time
+                # (a run that reaches a stage has validated it)
+                echo "- job timeout: \`${{ inputs.job-timeout }}\` minutes — the value a target declared for the job-timeout input, or its 480-minute default where the input is undeclared (the 480-minute backstop such a run keeps unchanged)"
+                # the record's pi call cap line carries the resolved value —
+                # the declared value where a target declared one, the 21600
+                # default where the input is undeclared: the exceedance
+                # branch is withdrawn — with the validation moved to trigger
+                # time, a run whose declared cap leaves the stage's non-call
+                # work no headroom inside the job timeout fails before any
+                # stage runs, so the record names the resolved cap only
+                echo "- pi call cap: \`${{ inputs.pi-timeout }}\` seconds per pi invocation — the value a target declared for the pi-timeout input, or its 21600-second default (the current 360-minute cap) where the input is undeclared"
+                if [ -z "${{ inputs.dependency-install }}" ]; then
+                  echo "- dependency-install: not declared — no project-dependency-install step runs in the pipeline (the run is unchanged)"
+                else
+                  echo "- dependency-install: \`${{ inputs.dependency-install }}\` — the run's pipeline runs it in the consuming stage jobs (implement, test-and-review), after each job's checkout and before its stage"
+                fi
+                if [ "${{ inputs.dependency-upgrade }}" = "off" ]; then
+                  echo "- dependency-upgrade: \`off\` — the run's pipeline runs without the dependency-upgrade stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence)"
+                else
+                  echo "- dependency-upgrade: \`${{ inputs.dependency-upgrade }}\` (on by default) — the run's pipeline runs the dependency-upgrade stage before the implementation stage"
+                fi
+              } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
+              echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
+                | tee -a "$RUNNER_TEMP/cw/stage-summary.txt"
+              # state files — every later job reads its trigger values from these
+              # (artifact channel), never from the job-outputs relay
               mkdir -p "$RUNNER_TEMP/cw/state/trigger"
-              echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
-              exit 0
-            fi
-          fi
-          # idempotency: a second run for the same issue while the first is in progress
-          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${{ inputs.workflow-name }}.yml/runs?status=in_progress&per_page=20" \
-            | jq -r --arg n "$ISSUE" '[.workflow_runs[]? | select((.inputs?["issue-number"] // "") == $n) | .id] | join(" ")') || true
-          if [ -n "$EXISTING" ]; then
-            mkdir -p "$RUNNER_TEMP/cw/state/trigger"
-            echo "false" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
-            gh issue comment "$ISSUE" --body "⏳ **code-weaver** — a factory run for issue #${ISSUE} is already in progress (run ${EXISTING}). This trigger exits without duplicating work."
-            exit 0
-          fi
-          # validate the run's configuration before the trigger records or
-          # accepts the run — a configuration that cannot serve the stages
-          # fails here, at trigger time, with a precise error: this step's
-          # started output stays false (the step's first line wrote it),
-          # and every stage job gates on it, so a failed trigger skips
-          # every stage — no stage runs after the trigger
-          JOB_TIMEOUT="${{ inputs.job-timeout }}"
-          if ! [[ "$JOB_TIMEOUT" =~ ^[0-9]+$ ]]; then
-            echo "::error::job-timeout '${JOB_TIMEOUT}' is not a number of minutes — a job-level timeout-minutes must be a number of minutes (the five stage jobs that make pi calls run under it); the run fails at trigger time and no stage runs after the trigger"
-            exit 1
-          fi
-          JOB_TIMEOUT_SECONDS=$(( JOB_TIMEOUT * 60 ))
-          # the headroom: the margin the stage's own non-call work
-          # (checkout, guard, loop machinery, artifact sync, push)
-          # needs around each pi call — derived, not invented: the
-          # factory's own default pair already provides it — the 480-
-          # minute default job timeout minus the 21600-second default pi
-          # call cap — 28800 s minus 21600 s = 7200 s, both anchors
-          # documented input defaults
-          HEADROOM_SECONDS=7200
-          PI_CAP="${{ inputs.pi-timeout }}"
-          # the same comparison, cap-side view: a declared pi call cap
-          # longer than the job timeout minus the headroom fails the
-          # run — one trigger-side validation discharges both views
-          if ! { [[ "$PI_CAP" =~ ^[0-9]+$ ]] && [ "$JOB_TIMEOUT_SECONDS" -ge $(( PI_CAP + HEADROOM_SECONDS )) ]; }; then
-            echo "::error::job timeout ${JOB_TIMEOUT} minutes (${JOB_TIMEOUT_SECONDS} s) does not exceed the resolved pi call cap (${PI_CAP} s) by at least the ${HEADROOM_SECONDS}-second headroom the stage's own non-call work needs around each call — the run fails at trigger time and no stage runs after the trigger"
-            exit 1
-          fi
-          echo "configuration validated: job timeout ${JOB_TIMEOUT} minutes (${JOB_TIMEOUT_SECONDS} s) leaves the ${HEADROOM_SECONDS}-second headroom over the resolved pi call cap (${PI_CAP} s)"
-          ISSUE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE")
-          mkdir -p "$RUNNER_TEMP/cw"
-          jq -r '.body // ""' <<<"$ISSUE_JSON" > "$RUNNER_TEMP/cw/issue-body.md"
-          BASE_REF="${{ inputs.target-branch }}"
-          BASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE_REF" | jq -r '.commit.sha')
-          TITLE=$(jq -r '.title // "(no title)"' <<<"$ISSUE_JSON" | tr '\n' ' ')
-          cat > "$RUNNER_TEMP/cw/issue-meta.json" <<EOF
-          { "issue": $ISSUE, "title": $(jq -c '.title // ""' <<<"$ISSUE_JSON"), "base_ref": "$BASE_REF", "base_sha": "$BASE_SHA" }
-          EOF
-          echo "started=true" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "base-sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
-          echo "issue-title=$TITLE" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Code Weaver — resolved configuration (workflow log; never committed)"
-            echo "- issue: #$ISSUE (event: ${{ github.event_name }})"
-            echo "- runner: \`${{ inputs.runner }}\`"
-                      echo "- runtime tree: the called version's own — fetched from the called repo at the called ref (stage 1 fetched it into $RUNNER_TEMP/cw/stash before the first checkout — the ref's version carries the file and the tree together); one ref is one version, no second pin"
-            echo "- LLM model (which configured model): \`${{ inputs.llm-model }}\`"
-            echo "- LLM backend: provided for the run (a GitHub secret or the repo file .pi/agent/models.json) — stage 2 writes it for the run"
-            echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
-            echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
-            echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
-            echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap)"
-            # the record's job timeout line carries the resolved value —
-            # the declared value where a target declared one, the 480
-            # default where the input is undeclared: the value the five
-            # pi-calling stage jobs run under as their job-level
-            # timeout-minutes, validated by the trigger at trigger time
-            # (a run that reaches a stage has validated it)
-            echo "- job timeout: \`${{ inputs.job-timeout }}\` minutes — the value a target declared for the job-timeout input, or its 480-minute default where the input is undeclared (the 480-minute backstop such a run keeps unchanged)"
-            # the record's pi call cap line carries the resolved value —
-            # the declared value where a target declared one, the 21600
-            # default where the input is undeclared: the exceedance
-            # branch is withdrawn — with the validation moved to trigger
-            # time, a run whose declared cap leaves the stage's non-call
-            # work no headroom inside the job timeout fails before any
-            # stage runs, so the record names the resolved cap only
-            echo "- pi call cap: \`${{ inputs.pi-timeout }}\` seconds per pi invocation — the value a target declared for the pi-timeout input, or its 21600-second default (the current 360-minute cap) where the input is undeclared"
-            if [ -z "${{ inputs.dependency-install }}" ]; then
-              echo "- dependency-install: not declared — no project-dependency-install step runs in the pipeline (the run is unchanged)"
-            else
-              echo "- dependency-install: \`${{ inputs.dependency-install }}\` — the run's pipeline runs it in the consuming stage jobs (implement, test-and-review), after each job's checkout and before its stage"
-            fi
-            if [ "${{ inputs.dependency-upgrade }}" = "off" ]; then
-              echo "- dependency-upgrade: \`off\` — the run's pipeline runs without the dependency-upgrade stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence)"
-            else
-              echo "- dependency-upgrade: \`${{ inputs.dependency-upgrade }}\` (on by default) — the run's pipeline runs the dependency-upgrade stage before the implementation stage"
-            fi
-          } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
-          echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
-            | tee "$RUNNER_TEMP/cw/stage-summary.txt"
-          # state files — every later job reads its trigger values from these
-          # (artifact channel), never from the job-outputs relay
-          mkdir -p "$RUNNER_TEMP/cw/state/trigger"
-          echo "true" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
-          echo "$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/issue-number.txt"
-          echo "$TITLE" > "$RUNNER_TEMP/cw/state/trigger/issue-title.txt"
-          echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base-ref.txt"
-          echo "$BASE_SHA" > "$RUNNER_TEMP/cw/state/trigger/base-sha.txt"
-          # the pr stage's derived input set (head/base/title follow the
-          # factory's PR naming from the same resolved values)
-          echo "ai/code-weaver/$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/head.txt"
-          echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base.txt"
-          echo "🏭 code-weaver: $TITLE" > "$RUNNER_TEMP/cw/state/trigger/title.txt"
+              echo "true" > "$RUNNER_TEMP/cw/state/trigger/started.txt"
+              echo "$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/issue-number.txt"
+              echo "$TITLE" > "$RUNNER_TEMP/cw/state/trigger/issue-title.txt"
+              echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base-ref.txt"
+              echo "$BASE_SHA" > "$RUNNER_TEMP/cw/state/trigger/base-sha.txt"
+              # the pr stage's derived input set (head/base/title follow the
+              # factory's PR naming from the same resolved values)
+              echo "ai/code-weaver/$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/head.txt"
+              echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base.txt"
+              echo "🏭 code-weaver: $TITLE" > "$RUNNER_TEMP/cw/state/trigger/title.txt"
+              # the trigger's completion marker — the report stage cross-checks
+              # the markers (the state dir rides the artefact chain) to tell
+              # "a stage ran" from "a stage never ran" (a job the runner's parser
+              # dropped from the job graph leaves neither)
+              mkdir -p "$RUNNER_TEMP/cw/artifacts"
+              echo "cw-trigger: stage step completed" > "$RUNNER_TEMP/cw/artifacts/cw-trigger.txt"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         # the stashed runtime tree under cw/stash/.github/ rides this
@@ -605,11 +689,40 @@ jobs:
       - name: Stage summary
         if: always()
         run: |
-          if [ -s "$RUNNER_TEMP/cw/stage-fail-reason.txt" ]; then
-            cat "$RUNNER_TEMP/cw/stage-fail-reason.txt" > "$RUNNER_TEMP/cw/stage-summary.txt"
-          else
-            echo "stage 2 setup-pi: verified — backend ${{ steps.verify.outputs.backend-url }}, model ${{ steps.verify.outputs.model }}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
-          fi
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+                        # Append-only: the cumulative stage-summary channel inherits
+                        # every earlier stage's line from the downloaded artefact — a
+                        # truncating write would drop them (the failed run 42206491024's
+                        # collapse: each job's artefact carried a single stage's line).
+                        # The stage step itself records its outcome line (the stage
+                        # script's completion write); this step only fills the gap where
+                        # the stage step died before recording — and appends, never
+                        # truncates. The values read the state dir first (the
+                        # documented reliable channel), the job-outputs relay is the
+                        # fallback on a healthy runner.
+                        S="$RUNNER_TEMP/cw/stage-summary.txt"
+                        if [ -s "$RUNNER_TEMP/cw/stage-fail-reason.txt" ]; then
+                          cat "$RUNNER_TEMP/cw/stage-fail-reason.txt" >> "$S"
+                        elif ! grep -qF "stage 2 setup-pi:" "$S" 2>/dev/null; then
+                          B=""; M=""
+                          if [ -f "$RUNNER_TEMP/cw/setup-env" ]; then
+                            B=$(grep -m1 '^BACKEND_URL=' "$RUNNER_TEMP/cw/setup-env" | cut -d= -f2-)
+                            M=$(grep -m1 '^MODEL=' "$RUNNER_TEMP/cw/setup-env" | cut -d= -f2-)
+                          fi
+                          B=${B:-${{ steps.verify.outputs.backend-url }}}
+                          M=${M:-${{ steps.verify.outputs.model }}}
+                          echo "stage 2 setup-pi: verified — backend $B, model $M" >> "$S"
+                        else
+                          echo "stage 2 setup-pi: outcome already recorded by the stage step — the summary step appends nothing"
+                        fi
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -652,218 +765,108 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.state.outputs.base-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - name: Stage 3 — cut the AI branch, record the baseline
-        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
-        working-directory: ${{ github.workspace }}
-        run: |
-          try:
-              import os, subprocess, sys
-              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "baseline")
-              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-              if os.path.isdir(scripts):
-                  sys.path.insert(0, scripts)
-              try:
-                  from common import state_dir, state_file, log
-              except ImportError:
-                  def state_dir():
-                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                      os.makedirs(d, exist_ok=True)
-                      return d
-                  def state_file(n):
-                      return os.path.join(state_dir(), n)
-                  def log(m):
-                      print(m, flush=True)
-
-              # a crashed stage must leave a persistent diagnosis (the job log dies
-              # with the run; a ghost run's logs are unreachable from the API) —
-              # the full traceback goes to the runner's diag dir + one line to the
-              # stage-fail-reason state file the summary/upload steps carry on
-              def _cw_persist(stage, dump, value):
-                  # one writer for both paths (the explicit try/except wrap and the
-                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
-                  # state file (carried on by the summary/upload steps), and the
-                  # runner's durable diag log (the job log dies with the run)
-                  if globals().get("_cw_persisted"):
-                      return
-                  globals()["_cw_persisted"] = True
-                  try:
-                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                      os.makedirs(d, exist_ok=True)
-                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                          f.write(f"stage {stage} FAILED — {value}\n")
-                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
-                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-                  except Exception:
-                      print(f"::error::stage {stage} failed — {value}")
-
-              def _cw_on_uncaught(t, v, tb):
-                  import traceback as _tb
-                  # the hook receives (type, value, traceback) from the interpreter —
-                  # sys.exc_info() is already cleared by the time it runs, so the
-                  # arguments are the source of truth; format_exc() is the fallback
-                  if tb is not None:
-                      dump = "".join(_tb.format_exception(t, v, tb))
-                  else:
-                      dump = _tb.format_exc()
-                      if not dump.strip() or dump.strip() == "NoneType: None":
-                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
-                  _cw_persist("3 baseline", dump, v)
-                  raise SystemExit(1)
-              sys.excepthook = _cw_on_uncaught
-              def _cw_in(name):
-                  # INPUT_<name> (a healthy runner's action-input binding) or
-                  # CW_<name> (the job/step env the factory sets — on this
-                  # runner build, composite actions' with: values never reach
-                  # the inner steps as INPUT_* at all; see probe v4)
-                  n = name.upper().replace("-", "_")
-                  for k in (f"INPUT_{n}", f"CW_{n}"):
-                      v = os.environ.get(k)
-                      if v:
-                          return v
-                  # state files — this runner build's composite-action inner
-                  # steps also miss the job-level GITHUB_ENV values, so the
-                  # files the triggering stage wrote into the artifact are
-                  # the authoritative source
-                  import pathlib
-                  for d in ("trigger", "pr"):
-                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
-                      if f.is_file():
-                          v = f.read_text().strip()
-                          if v:
-                              return v
-                  # a value that ends in a separator is a mangled derivation
-                  # (e.g. an empty issue number in 'ai/code-weaver/') — treat
-                  # it as unbound rather than creating a broken ref
-                  for k in (f"INPUT_{n}", f"CW_{n}"):
-                      v = os.environ.get(k) or ""
-                      if v and v.endswith(("/", ".", "_")):
-                          raise SystemExit(
-                              f"::error::input '{name}' value {v!r} is a "
-                              f"mangled derivation (empty component)")
-                  raise SystemExit(
-                      f"::error::input '{name}' unbound (no INPUT_{n}, "
-                      f"no CW_{n}, no state file)")
-              base_ref = _cw_in("base-ref")
-              ai_branch = _cw_in("ai-branch")
-              repo = os.environ["GITHUB_WORKSPACE"]
-
-              # The factory's single git entry point — one function every
-              # git call in the factory's python routes through, so the test
-              # suite can mock that one function (a test never spawns the
-              # real git binary). This step's python runs in its own
-              # interpreter, so it carries its own copy; a test-injected
-              # entry point in this script's globals is honoured over it.
-              if "git_exec" not in globals():
-                  def git_exec(argv, **kw):
-                      return subprocess.run(["git"] + list(argv), **kw)
-
-              def g(*args, check=True):
-                  r = git_exec(list(args), cwd=repo,
-                               capture_output=True, text=True)
-                  if check and r.returncode != 0:
-                      # surface git's own diagnosis (a bare check=True traceback
-                      # hides it in e.stderr) before the uncaught-exception hook
-                      # persists everything
-                      print(f"::error::git {' '.join(args)} failed (exit {r.returncode}): "
-                            f"{r.stderr.strip()[:400]}")
-                      raise subprocess.CalledProcessError(r.returncode, ["git", *args],
-                                                          output=r.stdout, stderr=r.stderr)
-                  return r
-
-              # baseline ref = head of the target branch
-              g("fetch", "--no-recurse-submodules", "origin", base_ref)
-              base_sha = g("rev-parse", f"origin/{base_ref}").stdout.strip()
-
-              # A NEW run for an issue whose AI branch already exists (the
-              # owner's re-trigger after a failed/aborted run) REUSES that
-              # branch: every stage runs again, in place, from the branch's
-              # current state (the idempotent re-run contract — generated
-              # files are updated in place; the guard measures against the
-              # baseline ref below, so the accumulated work is what it sees).
-              # Only an absent branch is cut fresh from the target — re-cutting
-              # would discard the previous run's committed work.
-              g("fetch", "--no-recurse-submodules", "origin", ai_branch, check=False)
-              if g("rev-parse", f"origin/{ai_branch}", check=False).returncode == 0:
-                  resume_sha = g("rev-parse", f"origin/{ai_branch}").stdout.strip()
-                  g("checkout", "-B", ai_branch, f"origin/{ai_branch}")
-                  log(f"baseline: reusing existing {ai_branch} at {resume_sha} "
-                      f"(previous run's work); baseline ref = head of "
-                      f"{base_ref} {base_sha}")
-              else:
-                  g("checkout", "-B", ai_branch, base_sha)
-                  log(f"baseline: {ai_branch} cut at {base_sha} (head of "
-                      f"{base_ref}); fresh cut")
-              g("config", "user.name", "Code Weaver")
-              g("config", "user.email", "code-weaver@users.noreply.github.com")
-
-              # the issue's change set, snapshotted as state (empty at a fresh cut —
-              # it grows as stages write, and anchors every guard check)
-              state = state_dir()
-              with open(state_file("baseline.sha"), "w") as f:
-                  f.write(base_sha + "\n")
-              diff = g("diff", base_sha).stdout
-              with open(state_file("baseline.diff"), "w") as f:
-                  f.write(diff)
-
-              log(f"baseline: {ai_branch} cut at {base_sha} (head of {base_ref}); "
-                  f"baseline diff {len(diff)} bytes → state (not the repo tree)")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write(f"baseline-ref={base_sha}\n")
-                  f.write(f"ai-branch={ai_branch}\n")
-          except SystemExit:
-              raise
-          except BaseException as e:
-              # explicit wrap: inside this handler the exception
-              # context is alive, so the persisted traceback is always
-              # complete; the excepthook below is the backstop
-              import traceback as _tb
-              _cw_persist("3 baseline", _tb.format_exc(), e)
-              raise
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the
+        # target.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        working-directory: ${ github.workspace }
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/baseline/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Push the AI branch (a crashed run resumes cleanly)
         run: |
-          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" \
-            "ai/code-weaver/${ISSUE_NUMBER}"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" \
+                "ai/code-weaver/${ISSUE_NUMBER}"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Stage summary
         if: always()
         run: |
-          if [ -s "$RUNNER_TEMP/cw/stage-fail-reason.txt" ]; then
-            cat "$RUNNER_TEMP/cw/stage-fail-reason.txt" > "$RUNNER_TEMP/cw/stage-summary.txt"
-          else
-            echo "stage 3 baseline: branch ai/code-weaver/${ISSUE_NUMBER} at ${CW_BASE_SHA}" | tee "$RUNNER_TEMP/cw/stage-summary.txt"
-          fi
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+                        # Append-only: the cumulative stage-summary channel inherits
+                        # every earlier stage's line from the downloaded artefact — a
+                        # truncating write would drop them (the failed run
+                        # 42206491024's collapse: the baseline stage ran its work, its
+                        # terminal summary step — the sole writer of its line — wrote
+                        # nothing, and the artefact kept only the earlier stages'
+                        # lines). The stage step itself records its outcome line (the
+                        # stage script's completion write); this step only fills the gap
+                        # where the stage step died before recording — and appends,
+                        # never truncates. The values read the trigger's state files
+                        # (the documented reliable channel).
+                        S="$RUNNER_TEMP/cw/stage-summary.txt"
+                        T="$RUNNER_TEMP/cw/state/trigger"
+                        if [ -s "$RUNNER_TEMP/cw/stage-fail-reason.txt" ]; then
+                          cat "$RUNNER_TEMP/cw/stage-fail-reason.txt" >> "$S"
+                        elif ! grep -qF "stage 3 baseline:" "$S" 2>/dev/null; then
+                          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null || true)
+                          V_SHA=$(cat "$T/base-sha.txt" 2>/dev/null || true)
+                          echo "stage 3 baseline: branch ai/code-weaver/${V_ISSUE} at ${V_SHA}" >> "$S"
+                        else
+                          echo "stage 3 baseline: outcome already recorded by the stage step — the summary step appends nothing"
+                        fi
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/download-artifact@v8
         with:
           name: cw-trigger
@@ -918,33 +921,42 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -962,7 +974,17 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Requirement-extraction loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
@@ -975,7 +997,17 @@ jobs:
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
           python3 "$S"
       - name: Push the AI branch
-        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -1023,33 +1055,42 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1067,7 +1108,17 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Plan loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
@@ -1080,7 +1131,17 @@ jobs:
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
           python3 "$S"
       - name: Push the AI branch
-        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -1128,33 +1189,42 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1183,12 +1253,21 @@ jobs:
         env:
           CW_DEPENDENCY_INSTALL: ${{ inputs.dependency-install }}
         run: |
-          if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
-            echo "no project-dependency-install step is declared (the dependency-install input is empty) — the run proceeds unchanged"
-            exit 0
-          fi
-          echo "installing the target project's dependencies: $CW_DEPENDENCY_INSTALL"
-          bash -c "$CW_DEPENDENCY_INSTALL"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
+                echo "no project-dependency-install step is declared (the dependency-install input is empty) — the run proceeds unchanged"
+                exit 0
+              fi
+              echo "installing the target project's dependencies: $CW_DEPENDENCY_INSTALL"
+              bash -c "$CW_DEPENDENCY_INSTALL"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Upgrade the target project's dependencies (the dependency-upgrade setting)
         # The dependency-upgrade mechanism (issue 18): beside the
         # dependency-install step above, the run's pipeline upgrades the
@@ -1240,37 +1319,46 @@ jobs:
           CW_DEPENDENCY_UPGRADE: ${{ inputs.dependency-upgrade }}
           CW_DEPENDENCY_INSTALL: ${{ inputs.dependency-install }}
         run: |
-          if [ "${CW_DEPENDENCY_UPGRADE:-on}" = "off" ]; then
-            echo "the dependency-upgrade setting is off — the run's pipeline runs without the dependency-upgrade stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence)"
-            exit 0
-          fi
-          if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
-            echo "no dependency-install command is declared (the dependency-install input is empty) — there is no upgrade to run; the step is a no-op and the run proceeds unchanged"
-            exit 0
-          fi
-          echo "upgrading the target project's dependencies to newer versions (before the implementation stage): $CW_DEPENDENCY_INSTALL"
-          bash -c "$CW_DEPENDENCY_INSTALL"
-          if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-            echo "the upgrade left no footprint in the workspace — nothing to commit; the run proceeds unchanged"
-            exit 0
-          fi
-          # The footprint commits to the AI branch (the checked-out
-          # branch) and rides the implementation's branch work — the
-          # branch is the only documented cross-job workspace channel.
-          git add -A
-          # The documented factory identity (the baseline job's):
-          # repo-local, a fallback for a runner whose environment carries
-          # no git identity — it never rides a commit or the PR
-          git config user.name "Code Weaver"
-          git config user.email "code-weaver@users.noreply.github.com"
-          git commit -q -m "dependency-upgrade: upgrade the project's dependencies to newer versions"
-          # The completed stage's work is committed and pushed to the AI
-          # branch — the push inside the step, not only this job's tail
-          # (a step a run terminated, or the implementation stage
-          # failing, never reaches): a run that dies after the commit
-          # loses none of the upgrade's work.
-          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
-          echo "the upgrade's footprint is committed and pushed to the AI branch (${AI_BRANCH:-the AI branch}) — the consuming stages (the implementation stage, the review job's suite run) work against the upgraded project"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              if [ "${CW_DEPENDENCY_UPGRADE:-on}" = "off" ]; then
+                echo "the dependency-upgrade setting is off — the run's pipeline runs without the dependency-upgrade stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence)"
+                exit 0
+              fi
+              if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
+                echo "no dependency-install command is declared (the dependency-install input is empty) — there is no upgrade to run; the step is a no-op and the run proceeds unchanged"
+                exit 0
+              fi
+              echo "upgrading the target project's dependencies to newer versions (before the implementation stage): $CW_DEPENDENCY_INSTALL"
+              bash -c "$CW_DEPENDENCY_INSTALL"
+              if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+                echo "the upgrade left no footprint in the workspace — nothing to commit; the run proceeds unchanged"
+                exit 0
+              fi
+              # The footprint commits to the AI branch (the checked-out
+              # branch) and rides the implementation's branch work — the
+              # branch is the only documented cross-job workspace channel.
+              git add -A
+              # The documented factory identity (the baseline job's):
+              # repo-local, a fallback for a runner whose environment carries
+              # no git identity — it never rides a commit or the PR
+              git config user.name "Code Weaver"
+              git config user.email "code-weaver@users.noreply.github.com"
+              git commit -q -m "dependency-upgrade: upgrade the project's dependencies to newer versions"
+              # The completed stage's work is committed and pushed to the AI
+              # branch — the push inside the step, not only this job's tail
+              # (a step a run terminated, or the implementation stage
+              # failing, never reaches): a run that dies after the commit
+              # loses none of the upgrade's work.
+              git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+              echo "the upgrade's footprint is committed and pushed to the AI branch (${AI_BRANCH:-the AI branch}) — the consuming stages (the implementation stage, the review job's suite run) work against the upgraded project"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/download-artifact@v8
         with:
           name: cw-plan
@@ -1283,7 +1371,17 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Implementation loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
@@ -1296,7 +1394,17 @@ jobs:
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
           python3 "$S"
       - name: Push the AI branch
-        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -1344,33 +1452,42 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1399,12 +1516,21 @@ jobs:
         env:
           CW_DEPENDENCY_INSTALL: ${{ inputs.dependency-install }}
         run: |
-          if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
-            echo "no project-dependency-install step is declared (the dependency-install input is empty) — the run proceeds unchanged"
-            exit 0
-          fi
-          echo "installing the target project's dependencies: $CW_DEPENDENCY_INSTALL"
-          bash -c "$CW_DEPENDENCY_INSTALL"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              if [ -z "${CW_DEPENDENCY_INSTALL:-}" ]; then
+                echo "no project-dependency-install step is declared (the dependency-install input is empty) — the run proceeds unchanged"
+                exit 0
+              fi
+              echo "installing the target project's dependencies: $CW_DEPENDENCY_INSTALL"
+              bash -c "$CW_DEPENDENCY_INSTALL"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/download-artifact@v8
         with:
           name: cw-implement
@@ -1417,7 +1543,17 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Test & review loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
@@ -1430,7 +1566,17 @@ jobs:
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
           python3 "$S"
       - name: Push the AI branch
-        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -1473,33 +1619,42 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1535,301 +1690,77 @@ jobs:
           path: ${{ runner.temp }}/cw
       - id: prepare-body
         name: Prepare the PR-body prompt (issue meta + the context file list)
-        run: |
-          python3 - "$RUNNER_TEMP/cw" <<'EOF'
-          import glob, os, sys
-          cw = sys.argv[1]
-          issue = os.environ.get("CW_ISSUE", "?")
-          title = os.environ.get("CW_TITLE", "")
-          target = os.environ.get("CW_TARGET", "main")
-          repo = os.environ.get("GITHUB_WORKSPACE", ".")
-          ctx = []
-          req = os.path.join(repo, os.environ.get("REQUIREMENTS_DIR", "requirements"))
-          if os.path.isdir(req):
-              for f in sorted(glob.glob(os.path.join(req, "**", "*.feature"), recursive=True)):
-                  ctx.append(("the Gherkin oracle (requirements/)", f))
-          plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
-                              f"{issue}.md")
-          if os.path.isfile(plan):
-              ctx.append(("the plan for this issue", plan))
-          for f in (os.path.join(cw, "pi-review.md.out"),):
-              if os.path.isfile(f):
-                  ctx.append(("the review (per-scenario verdicts)", f))
-          for pat in ("review-iteration-*.md", "test-run-*.txt"):
-              for f in sorted(glob.glob(os.path.join(cw, pat))):
-                  ctx.append(("the review (iteration log / test output)", f))
-          prompt = ["# PR body target",
-                    f"- Issue: #{issue} — {title}",
-                    f"- Target branch the PR opens against: {target}",
-                    "- Write the COMPLETE pull request body (markdown) to:",
-                    f"    {os.path.join(cw, 'pr-body.md')}",
-                    "",
-                    "The context files the pi call carries — the body is generated from all of them, each role naming the part of the body its source supplies:"]
-          for role, p in ctx:
-              prompt.append(f"- {role}: {p}")
-          open(os.path.join(cw, "pr-prompt.md"), "w").write("\n".join(prompt) + "\n")
-          # the space-separated context list — this runner build relays a
-          # value to the next step via the step's own outputs (a GITHUB_ENV
-          # write is not that build's reliable channel; see the baseline job)
-          if ctx:
-              with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as f:
-                  f.write("context=" + " ".join(p for _, p in ctx) + "\n")
-          print(f"pr-body prompt ready: {len(ctx)} context file(s)")
-          EOF
         env:
           CW_ISSUE: ${{ env.CW_ISSUE_NUMBER }}
           CW_TITLE: ${{ env.CW_ISSUE_TITLE }}
           CW_TARGET: ${{ inputs.target-branch }}
           REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
           PLAN_DIR: ${{ inputs.plan-dir }}
-      - id: gen-body
-        env:
-          CW_MODEL: ${{ inputs.llm-model }}
-          CW_TEMPLATE: pr-body
-          CW_PROMPT_FILE: ${{ runner.temp }}/cw/pr-prompt.md
-          CW_CONTEXT: ${{ steps.prepare-body.outputs.context }}
-        name: Generate the PR body with pi (from the requirements, the plan and the review)
-        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
-        working-directory: ${{ github.workspace }}
         run: |
-          try:
-              import os, sys
-              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "pi-run")
-              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-              if os.path.isdir(scripts):
-                  sys.path.insert(0, scripts)
-              # a crashed stage must leave a persistent diagnosis (the job log dies
-              # with the run; a ghost run's logs are unreachable from the API) —
-              # the full traceback goes to the runner's diag dir + one line to the
-              # stage-fail-reason state file the summary/upload steps carry on
-              def _cw_persist(stage, dump, value):
-                  # one writer for both paths (the explicit try/except wrap and the
-                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
-                  # state file (carried on by the summary/upload steps), and the
-                  # runner's durable diag log (the job log dies with the run)
-                  if globals().get("_cw_persisted"):
-                      return
-                  globals()["_cw_persisted"] = True
-                  try:
-                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                      os.makedirs(d, exist_ok=True)
-                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                          f.write(f"stage {stage} FAILED — {value}\n")
-                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
-                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-                  except Exception:
-                      print(f"::error::stage {stage} failed — {value}")
-
-              def _cw_on_uncaught(t, v, tb):
-                  import traceback as _tb
-                  # the hook receives (type, value, traceback) from the interpreter —
-                  # sys.exc_info() is already cleared by the time it runs, so the
-                  # arguments are the source of truth; format_exc() is the fallback
-                  if tb is not None:
-                      dump = "".join(_tb.format_exception(t, v, tb))
-                  else:
-                      dump = _tb.format_exc()
-                      if not dump.strip() or dump.strip() == "NoneType: None":
-                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
-                  _cw_persist("pi-run (LLM stages)", dump, v)
-                  raise SystemExit(1)
-              sys.excepthook = _cw_on_uncaught
-              from common import pi_invoke, resolve_pi_timeout, state_file
-              def _cw_in(name):
-                  # INPUT_<name> (a healthy runner's action-input binding) or
-                  # CW_<name> (the job/step env the factory sets — on this
-                  # runner build, composite actions' with: values never reach
-                  # the inner steps as INPUT_* at all; see probe v4)
-                  n = name.upper().replace("-", "_")
-                  for k in (f"INPUT_{n}", f"CW_{n}"):
-                      v = os.environ.get(k)
-                      if v:
-                          return v
-                  # state files — this runner build's composite-action inner
-                  # steps also miss the job-level GITHUB_ENV values, so the
-                  # files the triggering stage wrote into the artifact are
-                  # the authoritative source
-                  import pathlib
-                  for d in ("trigger", "pr"):
-                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
-                      if f.is_file():
-                          v = f.read_text().strip()
-                          if v:
-                              return v
-                  raise SystemExit(
-                      f"::error::input '{name}' unbound (no INPUT_{n}, "
-                      f"no CW_{n}, no state file)")
-              def _cw_in_opt(name):
-                  n = name.upper().replace("-", "_")
-                  for k in (f"INPUT_{n}", f"CW_{n}"):
-                      v = os.environ.get(k)
-                      if v:
-                          return v
-                  import pathlib
-                  for d in ("trigger", "pr"):
-                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
-                      if f.is_file():
-                          v = f.read_text().strip()
-                          if v:
-                              return v
-                  return None
-
-              prompts = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(action_dir))), "pi-prompts")
-              template = _cw_in("template")
-              sp = os.path.join(prompts, template + ".md")
-              if not os.path.exists(sp):
-                  print(f"::error::unknown pi prompt template '{template}' (have: "
-                        f"{sorted(os.path.basename(p) for p in os.listdir(prompts)) if os.path.isdir(prompts) else 'none'})")
-                  sys.exit(1)
-              r = pi_invoke(
-                  model=_cw_in("model"),
-                  system_prompt_file=sp,
-                  prompt_file=_cw_in_opt("prompt-file"),
-                  context=(_cw_in_opt("context") or "").split(),
-                  timeout=resolve_pi_timeout(),
-              )
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write(f"pi-exit-code={r.returncode}\n")
-                  f.write(f"pi-out-file={state_file('last-pi.out')}\n")
-              if r.returncode != 0:
-                  sys.exit(1)
-          except SystemExit:
-              raise
-          except BaseException as e:
-              # explicit wrap: inside this handler the exception
-              # context is alive, so the persisted traceback is always
-              # complete; the excepthook below is the backstop
-              import traceback as _tb
-              _cw_persist("pi-run (LLM stages)", _tb.format_exc(), e)
-              raise
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              python3 - "$RUNNER_TEMP/cw" <<'EOF'
+              import glob, os, sys
+              cw = sys.argv[1]
+              issue = os.environ.get("CW_ISSUE", "?")
+              title = os.environ.get("CW_TITLE", "")
+              target = os.environ.get("CW_TARGET", "main")
+              repo = os.environ.get("GITHUB_WORKSPACE", ".")
+              ctx = []
+              req = os.path.join(repo, os.environ.get("REQUIREMENTS_DIR", "requirements"))
+              if os.path.isdir(req):
+                  for f in sorted(glob.glob(os.path.join(req, "**", "*.feature"), recursive=True)):
+                      ctx.append(("the Gherkin oracle (requirements/)", f))
+              plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
+                                  f"{issue}.md")
+              if os.path.isfile(plan):
+                  ctx.append(("the plan for this issue", plan))
+              for f in (os.path.join(cw, "pi-review.md.out"),):
+                  if os.path.isfile(f):
+                      ctx.append(("the review (per-scenario verdicts)", f))
+              for pat in ("review-iteration-*.md", "test-run-*.txt"):
+                  for f in sorted(glob.glob(os.path.join(cw, pat))):
+                      ctx.append(("the review (iteration log / test output)", f))
+              prompt = ["# PR body target",
+                        f"- Issue: #{issue} — {title}",
+                        f"- Target branch the PR opens against: {target}",
+                        "- Write the COMPLETE pull request body (markdown) to:",
+                        f"    {os.path.join(cw, 'pr-body.md')}",
+                        "",
+                        "The context files the pi call carries — the body is generated from all of them, each role naming the part of the body its source supplies:"]
+              for role, p in ctx:
+                  prompt.append(f"- {role}: {p}")
+              open(os.path.join(cw, "pr-prompt.md"), "w").write("\n".join(prompt) + "\n")
+              # the space-separated context list — this runner build relays a
+              # value to the next step via the step's own outputs (a GITHUB_ENV
+              # write is not that build's reliable channel; see the baseline job)
+              if ctx:
+                  with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as f:
+                      f.write("context=" + " ".join(p for _, p in ctx) + "\n")
+              print(f"pr-body prompt ready: {len(ctx)} context file(s)")
+              EOF
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Generate the PR body with pi (from the requirements, the plan and the review)
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the
+        # target.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        working-directory: ${ github.workspace }
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/pi-run/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - name: Assemble the PR body (template fallback — only when pi produced none; stage 15 completes it)
-        run: |
-          if [ -s "$RUNNER_TEMP/cw/pr-body.md" ]; then
-            echo "PR body generated by pi from the requirements, the plan and the review — keeping it"
-            exit 0
-          fi
-          echo "pi produced no body — assembling the template fallback"
-          python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
-          import glob, os, subprocess, sys
-          out = sys.argv[1]
-          cw = os.path.join(os.environ["RUNNER_TEMP"], "cw")
-          repo = os.environ.get("GITHUB_WORKSPACE", ".")
-
-          # The factory's single git entry point (one function every git
-          # call routes through — the test suite mocks that one function,
-          # so no test spawns the real git binary). This step runs in a
-          # fresh interpreter with no common module, so it carries its own
-          # copy; a test-injected entry point in this script's globals is
-          # honoured over it.
-          if "git_exec" not in globals():
-              def git_exec(argv, **kw):
-                  return subprocess.run(["git"] + list(argv), **kw)
-
-          def trigger_state(name):
-              # the trigger's state files are the authoritative channel: this
-              # runner build's job-env relay has been observed dropping the
-              # CW_* trigger values (a body once opened for 'issue: # —'); the
-              # env is the fallback for healthy runners, not the source
-              try:
-                  v = open(os.path.join(cw, "state", "trigger",
-                                        name + ".txt")).read().strip()
-              except OSError:
-                  v = ""
-              return v or os.environ.get("CW_" + name.upper().replace("-", "_"), "")
-
-          issue = trigger_state("issue-number") or "?"
-          title = trigger_state("issue-title")
-          target = os.environ.get("CW_TARGET", "main")
-
-          # the body describes the issue the run implements — not the
-          # configuration the run used (that lives in the workflow log, which
-          # the resolved-config file itself marks 'never committed')
-          lines = ["# %s" % (title or "AI work for issue #%s" % issue),
-                   "",
-                   "Opened by the Code Weaver factory — branch "
-                   "`ai/code-weaver/%s` → target `%s`. This pull request is "
-                   "the run's status report — stage 15 completes it." % (issue, target),
-                   "",
-                   "## The issue this run implements",
-                   "- **Issue:** #%s%s" % (issue, (" — " + title) if title else ""),
-                   "- **Target branch:** `%s`" % target,
-                   ""]
-
-          # the plan — what the run set out to build, task by task — embedded
-          # so the body stands on its own (the plan file is the issue's plan,
-          # in the repo)
-          plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
-                              issue + ".md")
-          if os.path.isfile(plan):
-              lines += ["## The plan for this issue", "```markdown"]
-              lines += open(plan, encoding="utf-8",
-                            errors="replace").read().splitlines()
-              lines += ["```", ""]
-
-          # the requirement scenarios the run changed — parsed from the
-          # diff's ADDED scenario lines (the delta's shape), not from all
-          # the scenarios of a merely touched file
-          req_rel = os.environ.get("REQUIREMENTS_DIR", "requirements")
-          base = trigger_state("base-sha")
-          changed = None
-          if base and os.path.isdir(os.path.join(repo, ".git")):
-              r = git_exec(["diff", "--name-only", base, "--", req_rel],
-                           cwd=repo, capture_output=True, text=True)
-              if r.returncode == 0:
-                  changed = [l for l in r.stdout.splitlines()
-                             if l.endswith(".feature")
-                             and os.path.isfile(os.path.join(repo, l))]
-          listed = []
-          any_diff = False
-          if changed is not None:
-              for rel in sorted(changed):
-                  r = git_exec(["diff", base, "--", rel],
-                               cwd=repo, capture_output=True, text=True)
-                  if r.returncode != 0 or not r.stdout.strip():
-                      continue
-                  any_diff = True
-                  for ln in r.stdout.splitlines():
-                      if ln.startswith("+") and not ln.startswith("+++"):
-                          s = ln[1:].strip()
-                          for kw in ("Scenario Outline: ", "Scenario: "):
-                              if s.startswith(kw):
-                                  listed.append("- %s — %s" %
-                                                (s[len(kw):].strip(),
-                                                 os.path.basename(rel)))
-                                  break
-              if listed:
-                  lines += (["## The requirement scenarios this run changed"]
-                             + listed + [""])
-              elif any_diff:
-                  lines += ["## The requirement scenarios this run changed",
-                            "- no scenario title was added — the run's delta "
-                            "to the oracle is recorded in the run's artifacts "
-                            "(the workflow log)",
-                            ""]
-              else:
-                  lines += ["## The requirement scenarios this run changed",
-                            "- the run changed no requirement scenario "
-                            "(a vacuous delta)",
-                            ""]
-          else:
-              lines += ["## The requirement scenarios this run changed",
-                        "- (the run's delta is recorded in the run's artifacts "
-                        "— the workflow log)",
-                        ""]
-
-          stages = []
-          for f in sorted(glob.glob(os.path.join(cw, "**", "stage-summary.txt"),
-                                    recursive=True)):
-              stages += [l.strip() for l in open(f) if l.strip()]
-          lines.append("## Stage outcomes so far")
-          lines += ["- " + l for l in dict.fromkeys(stages)] or ["- (none captured yet)"]
-          lines += ["",
-                    "_Stage 15 (final status) completes this description with the run's "
-                    "outcome, its usage totals and cost — and closes the issue on a "
-                    "successful run._"]
-          open(out, "w").write("\n".join(lines) + "\n")
-          EOF
         env:
           # the state files are the source; the env is the fallback (this
           # runner build's job-env relay has been observed dropping these
@@ -1839,6 +1770,141 @@ jobs:
           CW_TARGET: ${{ inputs.target-branch }}
           REQUIREMENTS_DIR: ${{ inputs.requirements-dir }}
           PLAN_DIR: ${{ inputs.plan-dir }}
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              if [ -s "$RUNNER_TEMP/cw/pr-body.md" ]; then
+                echo "PR body generated by pi from the requirements, the plan and the review — keeping it"
+                exit 0
+              fi
+              echo "pi produced no body — assembling the template fallback"
+              python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
+              import glob, os, subprocess, sys
+              out = sys.argv[1]
+              cw = os.path.join(os.environ["RUNNER_TEMP"], "cw")
+              repo = os.environ.get("GITHUB_WORKSPACE", ".")
+
+              # The factory's single git entry point (one function every git
+              # call routes through — the test suite mocks that one function,
+              # so no test spawns the real git binary). This step runs in a
+              # fresh interpreter with no common module, so it carries its own
+              # copy; a test-injected entry point in this script's globals is
+              # honoured over it.
+              if "git_exec" not in globals():
+                  def git_exec(argv, **kw):
+                      return subprocess.run(["git"] + list(argv), **kw)
+
+              def trigger_state(name):
+                  # the trigger's state files are the authoritative channel: this
+                  # runner build's job-env relay has been observed dropping the
+                  # CW_* trigger values (a body once opened for 'issue: # —'); the
+                  # env is the fallback for healthy runners, not the source
+                  try:
+                      v = open(os.path.join(cw, "state", "trigger",
+                                            name + ".txt")).read().strip()
+                  except OSError:
+                      v = ""
+                  return v or os.environ.get("CW_" + name.upper().replace("-", "_"), "")
+
+              issue = trigger_state("issue-number") or "?"
+              title = trigger_state("issue-title")
+              target = os.environ.get("CW_TARGET", "main")
+
+              # the body describes the issue the run implements — not the
+              # configuration the run used (that lives in the workflow log, which
+              # the resolved-config file itself marks 'never committed')
+              lines = ["# %s" % (title or "AI work for issue #%s" % issue),
+                       "",
+                       "Opened by the Code Weaver factory — branch "
+                       "`ai/code-weaver/%s` → target `%s`. This pull request is "
+                       "the run's status report — stage 15 completes it." % (issue, target),
+                       "",
+                       "## The issue this run implements",
+                       "- **Issue:** #%s%s" % (issue, (" — " + title) if title else ""),
+                       "- **Target branch:** `%s`" % target,
+                       ""]
+
+              # the plan — what the run set out to build, task by task — embedded
+              # so the body stands on its own (the plan file is the issue's plan,
+              # in the repo)
+              plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
+                                  issue + ".md")
+              if os.path.isfile(plan):
+                  lines += ["## The plan for this issue", "```markdown"]
+                  lines += open(plan, encoding="utf-8",
+                                errors="replace").read().splitlines()
+                  lines += ["```", ""]
+
+              # the requirement scenarios the run changed — parsed from the
+              # diff's ADDED scenario lines (the delta's shape), not from all
+              # the scenarios of a merely touched file
+              req_rel = os.environ.get("REQUIREMENTS_DIR", "requirements")
+              base = trigger_state("base-sha")
+              changed = None
+              if base and os.path.isdir(os.path.join(repo, ".git")):
+                  r = git_exec(["diff", "--name-only", base, "--", req_rel],
+                               cwd=repo, capture_output=True, text=True)
+                  if r.returncode == 0:
+                      changed = [l for l in r.stdout.splitlines()
+                                 if l.endswith(".feature")
+                                 and os.path.isfile(os.path.join(repo, l))]
+              listed = []
+              any_diff = False
+              if changed is not None:
+                  for rel in sorted(changed):
+                      r = git_exec(["diff", base, "--", rel],
+                                   cwd=repo, capture_output=True, text=True)
+                      if r.returncode != 0 or not r.stdout.strip():
+                          continue
+                      any_diff = True
+                      for ln in r.stdout.splitlines():
+                          if ln.startswith("+") and not ln.startswith("+++"):
+                              s = ln[1:].strip()
+                              for kw in ("Scenario Outline: ", "Scenario: "):
+                                  if s.startswith(kw):
+                                      listed.append("- %s — %s" %
+                                                    (s[len(kw):].strip(),
+                                                     os.path.basename(rel)))
+                                      break
+                  if listed:
+                      lines += (["## The requirement scenarios this run changed"]
+                                 + listed + [""])
+                  elif any_diff:
+                      lines += ["## The requirement scenarios this run changed",
+                                "- no scenario title was added — the run's delta "
+                                "to the oracle is recorded in the run's artifacts "
+                                "(the workflow log)",
+                                ""]
+                  else:
+                      lines += ["## The requirement scenarios this run changed",
+                                "- the run changed no requirement scenario "
+                                "(a vacuous delta)",
+                                ""]
+              else:
+                  lines += ["## The requirement scenarios this run changed",
+                            "- (the run's delta is recorded in the run's artifacts "
+                            "— the workflow log)",
+                            ""]
+
+              stages = []
+              for f in sorted(glob.glob(os.path.join(cw, "**", "stage-summary.txt"),
+                                        recursive=True)):
+                  stages += [l.strip() for l in open(f) if l.strip()]
+              lines.append("## Stage outcomes so far")
+              lines += ["- " + l for l in dict.fromkeys(stages)] or ["- (none captured yet)"]
+              lines += ["",
+                        "_Stage 15 (final status) completes this description with the run's "
+                        "outcome, its usage totals and cost — and closes the issue on a "
+                        "successful run._"]
+              open(out, "w").write("\n".join(lines) + "\n")
+              EOF
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - id: open-pr
         env:
           CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
@@ -1850,161 +1916,35 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - id: open
         env:
           CW_BODY_FILE: ${{ runner.temp }}/cw/pr-body.md
         name: Push the AI branch and open (or update) the PR
         if: ${{ env.CW_STARTED == 'true' }}
-        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the
+        # target.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
         working-directory: ${{ github.workspace }}
-        run: |
-          try:
-              import os, sys, json
-              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "pr-open")
-              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-              if os.path.isdir(scripts):
-                  sys.path.insert(0, scripts)
-              try:
-                  import common
-              except ImportError:
-                  common = None
-
-              # The factory's single git entry point (one function every
-              # git call routes through — the test suite mocks that one
-              # function, so no test spawns the real git binary; this step
-              # runs in its own interpreter, so it carries its own copy,
-              # and a test-injected entry point in its globals wins)
-              if "git_exec" not in globals():
-                  def git_exec(argv, **kw):
-                      import subprocess
-                      return subprocess.run(["git"] + list(argv), **kw)
-
-              # a crashed stage must leave a persistent diagnosis (the job log dies
-              # with the run; a ghost run's logs are unreachable from the API) —
-              # the full traceback goes to the runner's diag dir + one line to the
-              # stage-fail-reason state file the summary/upload steps carry on
-              def _cw_persist(stage, dump, value):
-                  # one writer for both paths (the explicit try/except wrap and the
-                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
-                  # state file (carried on by the summary/upload steps), and the
-                  # runner's durable diag log (the job log dies with the run)
-                  if globals().get("_cw_persisted"):
-                      return
-                  globals()["_cw_persisted"] = True
-                  try:
-                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                      os.makedirs(d, exist_ok=True)
-                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                          f.write(f"stage {stage} FAILED — {value}\n")
-                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
-                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-                  except Exception:
-                      print(f"::error::stage {stage} failed — {value}")
-
-              def _cw_on_uncaught(t, v, tb):
-                  import traceback as _tb
-                  # the hook receives (type, value, traceback) from the interpreter —
-                  # sys.exc_info() is already cleared by the time it runs, so the
-                  # arguments are the source of truth; format_exc() is the fallback
-                  if tb is not None:
-                      dump = "".join(_tb.format_exception(t, v, tb))
-                  else:
-                      dump = _tb.format_exc()
-                      if not dump.strip() or dump.strip() == "NoneType: None":
-                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
-                  _cw_persist("12 pr-open", dump, v)
-                  raise SystemExit(1)
-              sys.excepthook = _cw_on_uncaught
-              def _cw_in(name):
-                  # INPUT_<name> (a healthy runner's action-input binding) or
-                  # CW_<name> (the job/step env the factory sets — on this
-                  # runner build, composite actions' with: values never reach
-                  # the inner steps as INPUT_* at all; see probe v4)
-                  n = name.upper().replace("-", "_")
-                  for k in (f"INPUT_{n}", f"CW_{n}"):
-                      v = os.environ.get(k)
-                      if v:
-                          return v
-                  # state files — this runner build's composite-action inner
-                  # steps also miss the job-level GITHUB_ENV values, so the
-                  # files the triggering stage wrote into the artifact are
-                  # the authoritative source
-                  import pathlib
-                  for d in ("trigger", "pr"):
-                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
-                      if f.is_file():
-                          v = f.read_text().strip()
-                          if v:
-                              return v
-                  raise SystemExit(
-                      f"::error::input '{name}' unbound (no INPUT_{n}, "
-                      f"no CW_{n}, no state file)")
-              head, base = _cw_in("head"), _cw_in("base")
-              title, body_file, issue = (_cw_in("title"),
-                                         _cw_in("body-file"),
-                                         _cw_in("issue-number"))
-              repo = os.environ["GITHUB_WORKSPACE"]
-              token = os.environ.get("GH_TOKEN", "")
-
-              if common:
-                  common.push_branch(head)
-              else:
-                  # minimal push without the shared script (degenerate checkout) —
-                  # token rides in the push URL only; the origin remote is untouched
-                  git_exec(
-                      ["push", "--force",
-                       f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}",
-                       head],
-                      cwd=repo, check=True,
-                      env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
-
-              def gh(*a):
-                  import subprocess
-                  return subprocess.run(["gh", *a], cwd=repo, capture_output=True,
-                                        text=True, env={**os.environ, "GH_TOKEN": token})
-
-              # a PR from this head already exists? update it, don't duplicate
-              view = gh("pr", "view", head, "--json", "number,url")
-              if view.returncode == 0 and view.stdout.strip():
-                  pr = json.loads(view.stdout)
-                  gh("pr", "edit", str(pr["number"]), "--body-file", body_file)
-                  number, url = str(pr["number"]), pr["url"]
-              else:
-                  cr = gh("pr", "create", "--base", base, "--head", head,
-                          "--title", title, "--body-file", body_file)
-                  if cr.returncode != 0:
-                      print(f"::error::pr create failed: {cr.stderr.strip()[:300]}")
-                      sys.exit(1)
-                  view = gh("pr", "view", head, "--json", "number,url")
-                  pr = json.loads(view.stdout)
-                  number, url = str(pr["number"]), pr["url"]
-
-              if common:
-                  common.log(f"stage 12: PR #{number} open — {url} (ai-branch {head} → {base})")
-              gh("issue", "comment", issue,
-                 "--body", f"🏭 **code-weaver** — pull request open: {url}\n\n"
-                           f"Base: `{base}` — head: `{head}`. The PR body carries the "
-                           f"final status report (stage 15 completes it). Merging is a human decision.")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write(f"pr-number={number}\npr-url={url}\n")
-              # state files — the gates & report jobs read the PR identity from
-              # the artifact (the job-outputs relay is not their value channel)
-              st = os.path.join(os.environ.get("RUNNER_TEMP", ""),
-                                "cw", "state", "pr")
-              os.makedirs(st, exist_ok=True)
-              open(os.path.join(st, "pr-number.txt"), "w").write(str(number))
-              open(os.path.join(st, "pr-url.txt"), "w").write(url)
-          except SystemExit:
-              raise
-          except BaseException as e:
-              # explicit wrap: inside this handler the exception
-              # context is alive, so the persisted traceback is always
-              # complete; the excepthook below is the backstop
-              import traceback as _tb
-              _cw_persist("12 pr-open", _tb.format_exc(), e)
-              raise
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/pr-open/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -2054,33 +1994,42 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -2092,36 +2041,54 @@ jobs:
           path: ${{ runner.temp }}/cw
       - name: Read PR state
         run: |
-          T="$RUNNER_TEMP/cw/state/pr"
-          [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
-          echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
-          [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
-          echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/pr"
+              [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
+              echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
+              [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
+              echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - id: head
         name: Resolve the PR's head sha
         run: |
-          # Self-contained on purpose: on this runner build the GITHUB_ENV
-          # write from the previous step (Read PR state) has been observed
-          # NOT to reach the next step's env — an empty CW_PR_NUMBER here
-          # means `pulls//head.sha` → 404 → step failure (deterministic in
-          # the re-run of run 40081410050's gates job). The state file is
-          # the authoritative relay (the job-outputs binding has the same
-          # ghost family); the env stays as fallback for healthy runners.
-          PR=$(cat "$RUNNER_TEMP/cw/state/pr/pr-number.txt" 2>/dev/null) || true
-          [ -n "$PR" ] || PR="${CW_PR_NUMBER}"
-          # The sha comes from the FULL PR object via jq: the field-suffix
-          # form of the endpoint (`pulls/<n>/head.sha`) 404s on this API
-          # surface — and its 404 body echoed into GITHUB_OUTPUT is an
-          # invalid file command, so the step died before the gate loop ever
-          # started (run 40219192721's gates job: 4 s from start to death,
-          # against a perfectly healthy PR #48 whose full object carried
-          # head.sha all along).
-          HEAD_SHA=$(gh api repos/$GITHUB_REPOSITORY/pulls/"$PR" --jq .head.sha 2>/dev/null) || true
-          if [ -z "$HEAD_SHA" ]; then
-            echo "::error::could not resolve the head sha of PR #${PR} — the gates have nothing to poll; check the PR and the token's access to the repo"
-            exit 1
-          fi
-          echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              # Self-contained on purpose: on this runner build the GITHUB_ENV
+              # write from the previous step (Read PR state) has been observed
+              # NOT to reach the next step's env — an empty CW_PR_NUMBER here
+              # means `pulls//head.sha` → 404 → step failure (deterministic in
+              # the re-run of run 40081410050's gates job). The state file is
+              # the authoritative relay (the job-outputs binding has the same
+              # ghost family); the env stays as fallback for healthy runners.
+              PR=$(cat "$RUNNER_TEMP/cw/state/pr/pr-number.txt" 2>/dev/null) || true
+              [ -n "$PR" ] || PR="${CW_PR_NUMBER}"
+              # The sha comes from the FULL PR object via jq: the field-suffix
+              # form of the endpoint (`pulls/<n>/head.sha`) 404s on this API
+              # surface — and its 404 body echoed into GITHUB_OUTPUT is an
+              # invalid file command, so the step died before the gate loop ever
+              # started (run 40219192721's gates job: 4 s from start to death,
+              # against a perfectly healthy PR #48 whose full object carried
+              # head.sha all along).
+              HEAD_SHA=$(gh api repos/$GITHUB_REPOSITORY/pulls/"$PR" --jq .head.sha 2>/dev/null) || true
+              if [ -z "$HEAD_SHA" ]; then
+                echo "::error::could not resolve the head sha of PR #${PR} — the gates have nothing to poll; check the PR and the token's access to the repo"
+                exit 1
+              fi
+              echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Stage 13-14 — wait for every PR-triggered workflow; fix reds
         env:
           CW_HEAD_SHA: ${{ steps.head.outputs.head-sha }}
@@ -2132,7 +2099,17 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Gate loop — all PR-triggered workflows green (bounded; never merges)
         env:
           CW_HEAD_SHA: ${{ steps.head.outputs.head-sha }}
@@ -2148,7 +2125,17 @@ jobs:
           python3 "$S"
       - name: Push the AI branch (post-fix state)
         if: ${{ success() || failure() }}
-        run: git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}" || true
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}" || true
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -2206,33 +2193,42 @@ jobs:
       - id: state
         name: Read trigger state
         run: |
-          T="$RUNNER_TEMP/cw/state/trigger"
-          [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
-          # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
-          # this shell — deriving from $CW_* here would export empty values
-          V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
-          V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
-          V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
-          V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
-          V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
-          { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-          for k in started issue-number issue-title base-ref base-sha head title base; do
-            v=$(cat "$T/$k.txt" 2>/dev/null || true)
-            [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
-          done
-          echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
-          echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
-          # GITHUB_OUTPUT — the checkout steps take their refs from this step
-          # output, not from the env context: on this runner build the env
-          # context does not reliably see GITHUB_ENV entries in a later step's
-          # expression (observed: baseline's checkout got the value, extract's
-          # did not, from the same file); a step's own outputs are the
-          # deterministic in-job relay
-          echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/trigger"
+              [ -f "$T/started.txt" ] || { echo "::error::no trigger state under $T (empty artifact?)"; exit 1; }
+              # read into shell vars first: GITHUB_ENV feeds the LATER steps, not
+              # this shell — deriving from $CW_* here would export empty values
+              V_STARTED=$(cat "$T/started.txt" 2>/dev/null)
+              V_ISSUE=$(cat "$T/issue-number.txt" 2>/dev/null)
+              V_TITLE=$(cat "$T/issue-title.txt" 2>/dev/null)
+              V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
+              V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
+              { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
+              for k in started issue-number issue-title base-ref base-sha head title base; do
+                v=$(cat "$T/$k.txt" 2>/dev/null || true)
+                [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
+              echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
+              echo "BASELINE_REF=$V_BASE_SHA" >> "$GITHUB_ENV"
+              # GITHUB_OUTPUT — the checkout steps take their refs from this step
+              # output, not from the env context: on this runner build the env
+              # context does not reliably see GITHUB_ENV entries in a later step's
+              # expression (observed: baseline's checkout got the value, extract's
+              # did not, from the same file); a step's own outputs are the
+              # deterministic in-job relay
+              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -2281,11 +2277,20 @@ jobs:
 
       - name: Read PR state
         run: |
-          T="$RUNNER_TEMP/cw/state/pr"
-          [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
-          echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
-          [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
-          echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              T="$RUNNER_TEMP/cw/state/pr"
+              [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
+              echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
+              [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
+              echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Stage 15 — PR body = final status; issue comment; arc42 activity
         # The guard judges THIS stage's work only: earlier stages' committed
         # outputs must not look like off-limits changes against the trigger's
@@ -2294,496 +2299,31 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        run: git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+        run: |-
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Write the final status report (PR body + issue comment + arc42 activity)
-        shell: /usr/bin/env python3 {0}  # bare "python3" is not a runner-accepted shell form
-        working-directory: ${{ github.workspace }}
-        run: |
-          try:
-              import os, sys, glob, json, re, datetime
-
-              # The factory's single git entry point — one function every
-              # git call in the factory's python routes through, so the test
-              # suite can mock that one function (a test never spawns the
-              # real git binary). This step's python may run without the
-              # common module, so it carries its own copy; a test-injected
-              # entry point in this script's globals is honoured over it.
-              if "git_exec" not in globals():
-                  def git_exec(argv, **kw):
-                      import subprocess
-                      return subprocess.run(["git"] + list(argv), **kw)
-              action_dir = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "stash", ".github", "actions", "report")
-              scripts = os.path.join(os.path.dirname(os.path.dirname(action_dir)), "scripts")
-              if os.path.isdir(scripts):
-                  sys.path.insert(0, scripts)
-              try:
-                  import common
-                  # import path — the shared module resolved from the stashed
-                  # runtime tree: bind the body's five bare-name plumbing calls
-                  # (the state dir, the state file, the log, the gh api, the
-                  # branch push) to the shared module's definitions, so the
-                  # body's bare-name calls resolve on that path and the step
-                  # completes its report instead of dying with an
-                  # undefined-name error before any of its report work; a
-                  # runner where the module does not resolve falls through to
-                  # the ImportError branch below, whose local fallback
-                  # definitions bind the same names
-                  state_dir = common.state_dir
-                  state_file = common.state_file
-                  log = common.log
-                  gh_api = common.gh_api
-                  push_branch = common.push_branch
-              except ImportError:
-                  def state_dir():
-                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                      os.makedirs(d, exist_ok=True)
-                      return d
-                  def state_file(n):
-                      return os.path.join(state_dir(), n)
-                  def log(m):
-                      print(m, flush=True)
-                  def gh_api(p, accept="application/vnd.github+json", data=None):
-                      import subprocess
-                      env = {**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")}
-                      args = ["gh", "api", "-H", f"Accept: {accept}"]
-                      if data is not None:
-                          args += ["-f", f"body={data}"]
-                      args.append(p)
-                      r = subprocess.run(args, capture_output=True, text=True, env=env)
-                      if r.returncode != 0:
-                          raise RuntimeError(r.stderr.strip()[:300])
-                      return r.stdout
-                  def push_branch(branch, force=True):
-                      token = os.environ.get("GH_TOKEN", "")
-                      git_exec(["push", "--force",
-                                f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}", branch],
-                               cwd=os.environ["GITHUB_WORKSPACE"], check=True,
-                               env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
-
-              # a crashed stage must leave a persistent diagnosis (the job log dies
-              # with the run; a ghost run's logs are unreachable from the API) —
-              # the full traceback goes to the runner's diag dir + one line to the
-              # stage-fail-reason state file the summary/upload steps carry on
-              def _cw_persist(stage, dump, value):
-                  # one writer for both paths (the explicit try/except wrap and the
-                  # excepthook) — the job-visible ::error:: line, the stage-fail-reason
-                  # state file (carried on by the summary/upload steps), and the
-                  # runner's durable diag log (the job log dies with the run)
-                  if globals().get("_cw_persisted"):
-                      return
-                  globals()["_cw_persisted"] = True
-                  try:
-                      d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
-                      os.makedirs(d, exist_ok=True)
-                      with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
-                          f.write(f"stage {stage} FAILED — {value}\n")
-                      with open("/opt/actions-runner/_diag/cw-diag.log", "a") as f:
-                          f.write(f"=== stage {stage} FAILED ===\n{dump}\n")
-                      print(f"::error::stage {stage} failed — full diagnosis: /opt/actions-runner/_diag/cw-diag.log")
-                  except Exception:
-                      print(f"::error::stage {stage} failed — {value}")
-
-              def _cw_on_uncaught(t, v, tb):
-                  import traceback as _tb
-                  # the hook receives (type, value, traceback) from the interpreter —
-                  # sys.exc_info() is already cleared by the time it runs, so the
-                  # arguments are the source of truth; format_exc() is the fallback
-                  if tb is not None:
-                      dump = "".join(_tb.format_exception(t, v, tb))
-                  else:
-                      dump = _tb.format_exc()
-                      if not dump.strip() or dump.strip() == "NoneType: None":
-                          dump = f"(no exception context at hook time — type: {t!r}, value: {v!r})"
-                  _cw_persist("15 report", dump, v)
-                  raise SystemExit(1)
-              sys.excepthook = _cw_on_uncaught
-              def _cw_in(name):
-                  # INPUT_<name> (a healthy runner's action-input binding) or
-                  # CW_<name> (the job/step env the factory sets — on this
-                  # runner build, composite actions' with: values never reach
-                  # the inner steps as INPUT_* at all; see probe v4)
-                  n = name.upper().replace("-", "_")
-                  for k in (f"INPUT_{n}", f"CW_{n}"):
-                      v = os.environ.get(k)
-                      if v:
-                          return v
-                  # state files — this runner build's composite-action inner
-                  # steps also miss the job-level GITHUB_ENV values, so the
-                  # files the triggering stage wrote into the artifact are
-                  # the authoritative source
-                  import pathlib
-                  for d in ("trigger", "pr"):
-                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
-                      if f.is_file():
-                          v = f.read_text().strip()
-                          if v:
-                              return v
-                  raise SystemExit(
-                      f"::error::input '{name}' unbound (no INPUT_{n}, "
-                      f"no CW_{n}, no state file)")
-              def _cw_in_opt(name):
-                  n = name.upper().replace("-", "_")
-                  for k in (f"INPUT_{n}", f"CW_{n}"):
-                      v = os.environ.get(k)
-                      if v:
-                          return v
-                  import pathlib
-                  for d in ("trigger", "pr"):
-                      f = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "cw" / "state" / d / (name + ".txt")
-                      if f.is_file():
-                          v = f.read_text().strip()
-                          if v:
-                              return v
-                  return None
-              repo = os.environ["GITHUB_WORKSPACE"]
-              result = _cw_in("run-result")
-              pr = (_cw_in_opt("pr-number") or "").strip()
-              issue = _cw_in("issue-number")
-              now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
-
-              # merge every stage's summary line (the jobs downloaded their
-              # cw-* state artifacts into the state dir before calling us)
-              stage_lines = []
-              for f in sorted(glob.glob(os.path.join(state_dir(), "**", "stage-summary.txt"), recursive=True)):
-                  for line in open(f):
-                      if line.strip() and line.strip() not in stage_lines:
-                          stage_lines.append(line.strip())
-              # the stage-outcome assembly renders from those lines: the
-              # implement stage records its per-step state on this channel
-              # (one "stage 8 implementation: step <k>/<n> done" line per
-              # step it finished, a "stage complete" line only when its
-              # plan is fully tracked). A stage that is done — its lines
-              # carry one that says "stage complete" — is reported
-              # "stage complete": its per-step lines stay out of the
-              # outcome. A stage that will re-run — per-step lines without
-              # a completion line — is reported per step, "step <k>/<n>
-              # done" for each of its finished steps. Both report surfaces
-              # the report completes (the PR body and the issue comment)
-              # render the same table.
-              _per_step = re.compile(r"^step \d+/\d+ done$")
-              _rendered = []
-              _group = None
-              _glines = []
-              def _flush():
-                  if _group is None:
-                      # a line not in the "stage …:" form stays as recorded
-                      _rendered.extend(_glines)
-                  elif any("stage complete" in l for l in _glines):
-                      # a stage that is done: reported "stage complete" —
-                      # the per-step lines it recorded along the way stay
-                      # out of the outcome
-                      _rendered.extend(l for l in _glines
-                                      if not _per_step.match(
-                                          l.split(": ", 1)[1]))
-                  else:
-                      # a stage that will re-run (per-step lines, no
-                      # completion line) is reported per step; every other
-                      # stage's lines stay as recorded
-                      _rendered.extend(_glines)
-              for l in stage_lines:
-                  _label, _sep, _rest = l.partition(": ")
-                  g = (_label
-                       if (_sep and _label.startswith("stage "))
-                       else None)
-                  if g != _group:
-                      if _glines:
-                          _flush()
-                      _group, _glines = g, []
-                  _glines.append(l)
-              if _glines:
-                  _flush()
-              stage_table = "\n".join(f"- {l}" for l in _rendered) or "- (no stage summaries captured)"
-              # run usage & cost for the final status report — assembled from
-              # the per-call usage records in the state dir: one tokens.txt
-              # line per pi call carrying the call's input and output token
-              # counts (the shared pi-call plumbing appends a record as each
-              # call finishes, and the record travels with the run's state
-              # artifacts like every other stage value). Each stage's artifact
-              # carries the cumulative ledger, and the report job downloads the
-              # stages' artifacts in pipeline order — the ledger surviving the
-              # downloads is the complete one: it covers every pi call the run
-              # made, and a stage that never ran (its artifact never uploaded)
-              # contributes nothing
-              tot_in = tot_out = 0
-              have_usage = False
-              led = state_file("tokens.txt")
-              if os.path.isfile(led):
-                  for line in open(led, encoding="utf-8", errors="replace"):
-                      p = line.split()
-                      if len(p) != 2:
-                          continue
-                      try:
-                          i, o = int(p[0]), int(p[1])
-                      except ValueError:
-                          continue
-                      tot_in += i
-                      tot_out += o
-                      have_usage = True
-              # the total cost is derived from the recorded usage, keyed on the
-              # run's resolved model — the llm-model setting, the only
-              # documented adjustable LLM setting; its resolved value rides the
-              # trigger's resolved-config state, which the report job downloads
-              # first. The rates come from the run's model configuration itself
-              # — the provider the setup stage materialised (a non-empty
-              # models-configuration secret wins over the repo file
-              # .pi/agent/models.json, which this job resolves the same way): the per-model `cost`
-              # object in its models.json entry carries the USD-per-1M-tokens
-              # rates, and the report lists the rates used with the source it
-              # read them from, so the listed cost is auditable and consistent
-              # with the recorded usage; a model the configuration carries no
-              # cost entry for is listed as unpriced
-              model = ""
-              cfg = state_file("resolved-config.txt")
-              if os.path.isfile(cfg):
-                  for line in open(cfg, encoding="utf-8", errors="replace"):
-                      if line.startswith("- LLM model"):
-                          p = line.split("`")
-                          if len(p) >= 2:
-                              model = p[1].strip()
-                          break
-              # the run's model configuration — resolved the way the setup
-              # stage resolves it: a non-empty models-configuration secret
-              # (the CW_ relay this job's env carries) wins over the repo
-              # file .pi/agent/models.json in the workspace
-              models_raw = _cw_in_opt("pi-models")
-              models_source = ("the run's model configuration (a GitHub secret)"
-                                if models_raw
-                                else "the repo file .pi/agent/models.json")
-              if not models_raw:
-                  fp = os.path.join(os.environ.get("GITHUB_WORKSPACE") or ".",
-                                    ".pi", "agent", "models.json")
-                  if os.path.isfile(fp):
-                      try:
-                          with open(fp, encoding="utf-8") as f:
-                              models_raw = f.read()
-                      except OSError:
-                          models_raw = None
-              # USD per 1M tokens for the resolved model — the `cost`
-              # object of its models.json entry (input, output,
-              # cacheRead, cacheWrite). The usage ledger records input and
-              # output only, so the cost is the input/output part of it
-              r_in = r_out = None
-              if models_raw:
-                  try:
-                      data = json.loads(models_raw)
-                  except Exception:
-                      data = None
-                  if data is not None:
-                      def _walk(o):
-                          # the providers' models lists — the same shape the
-                          # setup stage's model-set check walks
-                          if isinstance(o, dict):
-                              for k, v in o.items():
-                                  if k == "models" and isinstance(v, list):
-                                      for m in v:
-                                          yield m
-                                  else:
-                                      yield from _walk(v)
-                          elif isinstance(o, list):
-                              for v in o:
-                                  yield from _walk(v)
-                      for m in _walk(data):
-                          if isinstance(m, dict) and m.get("id") == model:
-                              c = m.get("cost")
-                              if isinstance(c, dict):
-                                  try:
-                                      r_in = float(c.get("input"))
-                                      r_out = float(c.get("output"))
-                                  except (TypeError, ValueError):
-                                      r_in = r_out = None
-                              break
-              if not have_usage:
-                  usage_lines = ("- **Total input tokens:** 0\n"
-                                 "- **Total output tokens:** 0\n"
-                                 "- **Total cost:** $0.00 (no pi call recorded usage)")
-              elif r_in is None or r_out is None:
-                  usage_lines = (f"- **Total input tokens:** {tot_in}\n"
-                                 f"- **Total output tokens:** {tot_out}\n"
-                                 f"- **Total cost:** unpriced (model `{model}` "
-                                 "has no cost rates in the run's model "
-                                 "configuration — put the model's cost rates "
-                                 "in .pi/agent/models.json (or the models-"
-                                 "configuration secret))")
-              else:
-                  usage_lines = (f"- **Total input tokens:** {tot_in}\n"
-                                 f"- **Total output tokens:** {tot_out}\n"
-                                 f"- **Total cost:** ${(tot_in * r_in + tot_out * r_out) / 1e6:.4f} "
-                                 f"(model `{model}` @ ${r_in:.2f}/M input, ${r_out:.2f}/M output — "
-                                 f"rates from {models_source})")
-
-              if pr:
-                  view = json.loads(gh_api(
-                      f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}"))
-                  body = view.get("body") or ""
-                  head = view["head"]["sha"]
-                  final = (body.split("\n## Final status")[0]
-                           + "\n## Final status\n"
-                           + f"- **Run result:** {result}\n- **Completed:** {now}\n"
-                           + f"- **AI branch:** `{view['head']['ref']}` @ `{head[:12]}`\n"
-                           + f"- **Source issue:** #{issue}\n"
-                           + usage_lines + "\n"
-                           + "### Stage outcomes\n" + stage_table + "\n"
-                           + "\n_Merging this PR is a human decision — the factory never merges._\n")
-                  import subprocess
-                  with open(state_file("final-pr-body.md"), "w") as f:
-                      f.write(final)
-                  subprocess.run(["gh", "pr", "edit", pr, "--body-file", state_file("final-pr-body.md")],
-                                 cwd=repo, env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")},
-                                 check=False)
-                  # the completion must be VERIFIED on the PR before the
-                  # comment claims 'final status is in the PR body': gh pr edit
-                  # is a GraphQL mutation a PR that was merged in the meantime
-                  # refuses — and check=False would swallow that, leaving an
-                  # issue comment claiming the description carries the final
-                  # status it never got (the PR description would then disagree
-                  # with the usage numbers the issue comment posts). Re-read the
-                  # PR: its body must carry the completion.
-                  def _body_landed():
-                      try:
-                          again = json.loads(gh_api(
-                              f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}"))
-                      except Exception as e:
-                          log(f"stage 15: could not re-read PR #{pr} after the edit: "
-                              f"{str(e).strip()[:120]}")
-                          return False
-                      return "\n## Final status" in (again.get("body") or "")
-                  completed = _body_landed()
-                  if not completed:
-                      # the REST edit is a different write path than the GraphQL
-                      # mutation — a merged PR's description can still be edited
-                      # over REST; try it, then verify again. If it still does
-                      # not land, the comment below is self-contained.
-                      log(f"stage 15: PR #{pr} body did not take the completion — "
-                          f"trying the REST edit")
-                      subprocess.run(["gh", "api", "-X", "PATCH",
-                                      f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{pr}",
-                                      "-f", f"body={final}"],
-                                     cwd=repo, capture_output=True, text=True,
-                                     env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")})
-                      completed = _body_landed()
-                  # the arc42 docs get the AI-activity section (docs changes are
-                  # within the implementation allow-set — this commit is the
-                  # report stage's own, made after the guards have run)
-                  doc_dir = (os.environ.get("DOC_DIR") or "").strip().rstrip("/")
-                  entry = (f"\n### {now} — code-weaver run for issue #{issue}\n"
-                           f"- result: {result}\n- PR: {pr}\n"
-                           + usage_lines + "\n"
-                           + "- stages:\n"
-                           + "\n".join(f"  - {l}" for l in stage_lines) + "\n")
-                  touched = False
-                  # arc42 activity commits only land on the AI branch — if the run
-                  # died before the branch existed, the checkout is at the base ref
-                  # and the target tree must stay untouched
-                  on_ai_branch = git_exec(["branch", "--show-current"], cwd=repo,
-                                          capture_output=True, text=True).stdout.strip() \
-                      == os.environ.get("AI_BRANCH", "")
-                  if on_ai_branch:
-                      if doc_dir and os.path.isdir(doc_dir):
-                          arc42_files = sorted(glob.glob(
-                              os.path.join(doc_dir, "**", "*.md"), recursive=True))
-                      elif os.path.isfile("PLAN.md"):
-                          # a repo without a doc dir documents itself in its
-                          # top-level arc42 markdown — fall back to it so the
-                          # AI-activity section still lands on the arc42 set
-                          arc42_files = [os.path.join(repo, "PLAN.md")]
-                      else:
-                          arc42_files = []
-                      for md in arc42_files:
-                          text = open(md).read()
-                          marker = "## AI activity (code-weaver)"
-                          if marker in text:
-                              text = text.rstrip("\n") + entry
-                          elif text:
-                              text = text.rstrip("\n") + f"\n\n{marker}\n" + entry
-                          else:
-                              text = f"{marker}\n" + entry
-                          open(md, "w").write(text)
-                          touched = True
-                          break  # the first arc42 file carries the activity log
-                  if touched:
-                      git_exec(["add", "-A"], cwd=repo, check=True)
-                      st = git_exec(["status", "--porcelain"], cwd=repo,
-                                    capture_output=True, text=True)
-                      if st.stdout.strip():
-                          git_exec(["commit", "-q",
-                                    "-m", "report: AI-activity recorded"],
-                                   cwd=repo, check=True)
-                          push_branch(os.environ.get("AI_BRANCH", ""))
-                  url = view.get("html_url", "")
-                  ok = result == "success"
-                  # a successful run closes the issue it was working on: the
-                  # work is done, the PR is the remaining human gate, and a
-                  # closed issue stays out of the trigger's lane. A failed run
-                  # leaves the issue open for a re-trigger. The close is
-                  # best-effort — a refusal (e.g. a token without the scope)
-                  # must not sink the report that already landed
-                  closed = None
-                  if ok:
-                      r = subprocess.run(["gh", "api", "-X", "PATCH",
-                                          f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}",
-                                          "-f", "state=closed",
-                                          "-f", "state_reason=completed"],
-                                         capture_output=True, text=True,
-                                         env={**os.environ, "GH_TOKEN": os.environ.get("GH_TOKEN", "")})
-                      closed = r.returncode == 0
-                      if not closed:
-                          log(f"::warning::stage 15: could not close issue #{issue}: "
-                              f"{r.stderr.strip()[:120]}")
-                  close_note = ("closed — the run succeeded" if closed is True else
-                                "close refused — the run succeeded, but the issue "
-                                "stays open (see the workflow log)" if closed is False else
-                                "left open — re-trigger to retry")
-                  if ok and completed:
-                      data = ("✅ **code-weaver run finished** — final status is in the PR body.\n"
-                              f"- result: **{result}**\n- completed: {now}\n"
-                              f"- pull request: {url}\n- source: #{issue} ({close_note})\n"
-                              f"{usage_lines}\n")
-                  elif ok:
-                      # the completion could not be applied to the description
-                      # (the PR was already merged, or the edit was refused on
-                      # both write paths): the comment then carries the full
-                      # final status itself — the same usage numbers and stage
-                      # outcomes the PR body was to get — and makes no claim
-                      # that the PR body carries them
-                      data = ("✅ **code-weaver run finished** — the PR body could not be "
-                              "completed (the PR was already merged or the edit was "
-                              "refused), so this comment carries the full final status.\n"
-                              f"- result: **{result}**\n- completed: {now}\n"
-                              f"- pull request: {url}\n- source: #{issue} ({close_note})\n"
-                              + usage_lines + "\n"
-                              + "### Stage outcomes\n" + stage_table + "\n")
-                  else:
-                      data = (f"❌ **code-weaver run failed** — the pull request is incomplete.\n"
-                              f"- result: **{result}**\n- completed: {now}\n"
-                              f"- pull request: {url}\n- source: #{issue} ({close_note})\n"
-                              f"- stage outcomes:\n{stage_table}\n"
-                              f"{usage_lines}\n")
-                  gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
-                         data=data)
-                  log(f"stage 15: PR #{pr} body completion "
-                      f"{'verified on the PR' if completed else 'NOT applied — the issue comment is self-contained'}; "
-                      f"issue #{issue} {'closed' if closed else 'left open'}; "
-                      f"arc42 activity {'recorded' if touched else 'n/a'}")
-              else:
-                  gh_api(f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue}/comments",
-                         data=("❌ **code-weaver run failed** before a pull request could "
-                               "be opened.\n"
-                               f"- result: **{result}**\n- completed: {now}\n"
-                               f"- stage outcomes:\n{stage_table}\n"
-                               f"{usage_lines}\n"
-                               "- full logs: the workflow run's artifacts (the repo tree "
-                               "is never used for report files).\n"))
-                  log(f"stage 15: no PR — failure reported on issue #{issue} "
-                      f"(stage outcomes: {len(stage_lines)} line(s))")
-          except SystemExit:
-              raise
-          except BaseException as e:
-              # explicit wrap: inside this handler the exception
-              # context is alive, so the persisted traceback is always
-              # complete; the excepthook below is the backstop
-              import traceback as _tb
-              _cw_persist("15 report", _tb.format_exc(), e)
-              raise
+        # The stage script runs from the stash — the runtime tree this
+        # job's first step copied from the called repo at the called ref,
+        # before the stage's checkout replaced the workspace with the
+        # target.
+        # shell: is declared on every script step — this runner build's
+        # manifest loader rejects a composite step that has run: but no
+        # shell: (v2.338: "Required property is missing: shell").
+        shell: bash
+        working-directory: ${ github.workspace }
+        run: |-
+          S="$RUNNER_TEMP/cw/stash/.github/actions/report/stage.py"
+          [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+          python3 "$S"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -57,6 +57,55 @@ def log(msg: str) -> None:
         pass
 
 
+def record_stage_outcome(line: str) -> None:
+    """Append the stage's outcome line to the stage-summary channel, and
+    mirror it into the stage console.
+
+    The stage's STAGE STEP calls this at its completion point — not only
+    the job's terminal `if: always()` "Stage summary" step. The terminal
+    step is exactly the position a runner whose workflow parser mangles
+    late steps drops (issue #106's baseline job: the stage ran its work,
+    its terminal summary step ran as a no-op, and the artifact kept only
+    the earlier stages' lines): a line written by the stage step itself
+    is in the state dir while the step that wrote it is still executing,
+    so it rides the artefact even where the job's tail steps are ghosts.
+    The terminal step keeps its role as the fallback writer (it appends —
+    never truncates — only where the stage step died before recording).
+    """
+    try:
+        d = state_dir()
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "stage-summary.txt"), "a",
+                  encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+    log(line)
+
+
+def record_stage_ran(artifact: str) -> None:
+    """The stage job's completion marker: state/artifacts/<artifact>.txt.
+
+    Each stage job's stage step writes its own job's marker the moment
+    its stage work completes. The markers ride the cumulative artefact
+    chain (every job's upload carries the state dir, earlier jobs'
+    markers included) to the report job, where their union is the set of
+    stage jobs whose stage step completed. That set is the report's
+    evidence separating "stage N ran" (a marker or a console line of
+    its) from "stage N never ran" (its job missing from the run's job
+    graph — neither the marker nor the artefact exists): the distinction
+    the failed run 42206491024's false 'run failed' verdict collapsed.
+    """
+    try:
+        d = os.path.join(state_dir(), "artifacts")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"{artifact}.txt"), "w",
+                  encoding="utf-8") as f:
+            f.write(f"{artifact}: stage step completed\n")
+    except OSError:
+        pass
+
+
 def install_crash_diagnostics(stage: str) -> None:
     """Crash-parity for the stage scripts — the safety scenario *"a crashed
     stage leaves a persistent diagnosis on the runner"*.

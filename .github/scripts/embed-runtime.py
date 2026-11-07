@@ -35,6 +35,37 @@ file, the committed tree — is consistent:
   canonical-marker check: a curation drift that the stage steps'
   references would not anticipate fails the gate, before the tag).
 
+The structure check (its `--verify-structure` mode; the release flow
+runs it as the second pre-tag gate step) verifies the committed file is
+PARSER-SAFE — issue #106: the runner's workflow parser diverged from
+the standard YAML engines on the published file (N+1 phantom steps per
+job, the `extract` job dropped from the run's job graph, a step script
+truncated mid-body — a run that collapsed while every listed job read
+success/skipped). Standard engines (PyYAML, YAML 1.1; ruamel, YAML
+1.2) read the same bytes cleanly, so the trigger is a file shape the
+runner's parser mishandles — the gate keeps the file in the shape both
+standard engines agree on, and fails a publish that would leave it out
+of that shape:
+
+- the job/step structure parses to the pinned graph under every
+  standard engine available to the checker (the release flow installs
+  both PyYAML and ruamel before the gate; an interpreter with neither
+  reports the engine half as not run, and the line lint below still
+  guards the file) — the 10 jobs in pipeline order (`extract` among
+  them: its absence is the run's collapse), and the pinned step count
+  of every job (a drift in either fails the gate until it is re-pinned
+  deliberately);
+- no step mapping declares keys after its `run` block scalar — a block
+  that terminates inside the step mapping (a dedented sibling key
+  ending the block) is the divergence's trigger site (the published
+  file's two `pr` job steps declared `env:` after their `run: |`
+  blocks); every step's `run` is its step mapping's last key;
+- no step carries a giant inline body — the flat-file discipline: the
+  stage scripts live in the runtime tree (the file's steps launch them
+  from the stash), and a `run` block over the line budget would be
+  exactly the body shape the parser mishandles (the published file's
+  486-line report body, its 165-line baseline body).
+
 A maintainer who changes the runtime tree commits the tree; the tag
 the release flow cuts points at a commit whose tree is consistent
 with the file — no per-release rewrite of the file is owed. Versions
@@ -86,11 +117,15 @@ CANONICAL_RUNTIME_FILES = (
     ".github/scripts/gherkin-validate.py",
     ".github/scripts/release-number.py",
     ".github/actions/setup-pi/stage.py",
+    ".github/actions/baseline/stage.py",
     ".github/actions/extract-stage/stage.py",
     ".github/actions/plan-stage/stage.py",
     ".github/actions/implement-stage/stage.py",
     ".github/actions/review-stage/stage.py",
+    ".github/actions/pr-open/stage.py",
+    ".github/actions/pi-run/stage.py",
     ".github/actions/gates-stage/stage.py",
+    ".github/actions/report/stage.py",
     ".github/actions/guard-check/guard-check.py",
     "pi-prompts/requirements.md",
     "pi-prompts/plan.md",
@@ -143,6 +178,287 @@ def runtime_files(root: str):
                 out.append((arcname.replace(os.sep, "/"), abspath))
     out.sort(key=lambda p: p[0])
     return out
+
+
+def parse_engines():
+    """[(name, loader)] — the standard YAML engines importable in this
+    interpreter: PyYAML (YAML 1.1) and ruamel (YAML 1.2, pure python).
+    The structure check's engine half runs the published file through
+    every engine available: with both, both must agree on the job/step
+    structure; with one, that one's parse is the assertion; with
+    neither, the engine half reports not run (the line lint still
+    guards the file) — the release flow installs both before its gate
+    step, so the gate itself always runs the engine half.
+    (The issue's parse comparison is the basis: the published file's
+    bytes parse cleanly under exactly these engines — 10 jobs including
+    `extract`, the per-job step counts — while the runner's parser
+    reads the same bytes differently. The gate's job is to keep the
+    file in the shape the standard engines agree on, so a divergence is
+    caught at publish, not at the run's collapse.)"""
+    engines = []
+    try:
+        import io
+        import yaml
+        engines.append(("PyYAML (YAML 1.1)",
+                        lambda t: yaml.safe_load(io.StringIO(t))))
+    except ImportError:
+        pass
+    try:
+        import io
+        from ruamel.yaml import YAML
+        def _ruamel(t):
+            y = YAML(typ="safe", pure=True)
+            return y.load(io.StringIO(t))
+        engines.append(("ruamel (YAML 1.2)", _ruamel))
+    except ImportError:
+        pass
+    return engines
+
+
+# The published workflow's job graph — the 10 jobs in pipeline order
+# (the file's own header: "15 logical stages over 10 jobs"). The
+# structure check asserts the parse yields exactly this set of job keys
+# in this order — `extract` among them: its absence from the run's job
+# graph is the failed run's collapse (the runner's parser dropped the
+# job; every downstream stage skipped; the report's old verdict read
+# the missing stage's absent outcome line as a failure).
+EXPECTED_JOBS = ("trigger", "setup-pi", "baseline", "extract", "plan",
+                 "implement", "review", "pr", "gates", "report")
+
+# The pinned step count of every job — the parse comparison of the
+# published file under the standard engines (the issue's repro table).
+# The gate asserts a standard-engine parse reproduces exactly these
+# counts: a change to the file's job/step SHAPE fails the gate until it
+# is re-pinned deliberately here — the published file must not drift in
+# structure silently (a drift is where a parser divergence would enter
+# unpublish-verified), and the pin names the exact expected shape in
+# the gate's failure message.
+EXPECTED_STEP_COUNTS = {
+    "trigger": 7,
+    "setup-pi": 5,
+    "baseline": 8,
+    "extract": 8,
+    "plan": 8,
+    "implement": 10,
+    "review": 9,
+    "pr": 16,
+    "gates": 10,
+    "report": 15,
+}
+
+# A step's `run` block scalar over this many lines is a giant inline
+# body: the flat-file discipline moves the stage bodies into the
+# runtime tree (the file's steps launch the scripts from the stash),
+# and the oversized block is the body shape the runner's parser
+# mishandles (the published file's 486-line report body and 165-line
+# baseline body were the candidate trigger sites).
+MAX_RUN_BLOCK_LINES = 200
+
+
+def _step_key_scan(text: str):
+    """The line-lint half of the structure check — engine-independent
+    (plain stdlib, it runs where no YAML engine imports): walk the file
+    the way the workflow's own indentation discipline defines it (jobs
+    at two indent, job keys at four, step list items at six, step keys
+    at eight), and yield, for every step, (the step's name, the
+    ordered keys of its mapping with their line numbers, and the extent
+    of its `run` block scalar as [key line, content start, block
+    indent, line count]). The two divergence-shape tests then run on
+    that scan: a step that declares keys AFTER its `run` key (a block
+    scalar that terminates inside the step mapping — the divergence's
+    trigger site), and a `run` block scalar past the giant-body
+    budget."""
+    lines = text.splitlines()
+    jobs_key = None
+    for i, ln in enumerate(lines):
+        if ln.startswith("jobs:"):
+            jobs_key = i
+            break
+    if jobs_key is None:
+        return
+    step = [None, [], None]  # name, [(line, key)], run-state
+    def flush():
+        if step[0] is not None:
+            yield (step[0], list(step[1]), step[2])
+        step[0], step[1], step[2] = None, [], None
+    for i in range(jobs_key + 1, len(lines)):
+        ln = lines[i]
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        ind = len(ln) - len(ln.lstrip())
+        body = ln.strip()
+        if ind < 2:
+            for st in flush():
+                yield st
+            continue
+        if ind == 2:
+            # a job key ends the current job's last step
+            for st in flush():
+                yield st
+            continue
+        if ind == 4:
+            for st in flush():
+                yield st
+            continue
+        if ind == 6 and body.startswith("- "):
+            for st in flush():
+                yield st
+            rest = body[2:].strip()
+            step[0] = rest
+            if ":" in rest:
+                k = rest.split(":", 1)[0].strip()
+                v = rest.split(":", 1)[1].strip()
+                if k:
+                    step[1].append((i, k))
+                if k == "run" and v.startswith(("|", ">")):
+                    step[2] = [i, None, 0]
+            continue
+        if ind == 8 and ":" in body and not body.startswith("-"):
+            k = body.split(":", 1)[0].strip()
+            v = body.split(":", 1)[1].strip()
+            if k:
+                step[1].append((i, k))
+            if k == "run" and v.startswith(("|", ">")):
+                step[2] = [i, None, 0]
+            continue
+        # a line at or below the run block's content indent ends the
+        # block; a line at or beyond it extends it
+        if step[2] is not None:
+            if step[2][1] is None and ln.strip():
+                step[2][1] = ind
+            if step[2][1] is not None:
+                if ind >= step[2][1]:
+                    step[2][2] += 1
+                    continue
+                step[2] = None
+    for st in flush():
+        yield st
+
+
+def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
+                     expected_step_counts=EXPECTED_STEP_COUNTS,
+                     max_run_block_lines=MAX_RUN_BLOCK_LINES):
+    """(ok, message) — the parser-safety gate: the committed file's
+    job/step structure (under every standard engine available) and its
+    line shapes (the engine-independent lint) match the pinned safe
+    form. Fails, with the exact cause, when —
+    (a) a standard engine's parse does not yield the pinned job graph
+        (a job missing — `extract`'s absence is the run's collapse — or
+        a job's step count off the pin);
+    (b) the available engines disagree with each other on the
+        job/step structure (a file the standard engines themselves
+        read differently is not a file a runner parser can be trusted
+        with);
+    (c) a step mapping declares keys after its `run` block scalar
+        (the block terminates inside the step mapping — the divergence's
+        trigger site);
+    (d) a `run` block scalar is a giant inline body past the budget
+        (the flat-file discipline: the body belongs in the runtime
+        tree)."""
+    violations = []
+    # (1) the engine half — every standard engine available must parse
+    # the file to the pinned job/step structure
+    engines = parse_engines()
+    if not engines:
+        violations.append(
+            "no standard YAML engine (PyYAML, ruamel.yaml) is importable "
+            "in the checker — the engine half of the structure check did "
+            "not run (the line lint below still guards the file; the "
+            "release flow installs both engines before its gate step)")
+    else:
+        structures = {}
+        for name, load in engines:
+            try:
+                doc = load(text)
+            except Exception as e:
+                violations.append(
+                    f"{name} failed to parse the committed workflow "
+                    f"file ({e}) — a file a standard engine cannot parse "
+                    "is not a version to publish")
+                continue
+            jobs = doc.get("jobs") if isinstance(doc, dict) else None
+            if not isinstance(jobs, dict):
+                violations.append(
+                    f"{name}'s parse of the committed workflow file holds "
+                    "no jobs mapping — the file is not a workflow the "
+                    "pinned job graph reads from")
+                continue
+            structures[name] = (
+                list(jobs.keys()),
+                {k: len(v.get("steps", [])) if isinstance(v, dict) else -1
+                 for k, v in jobs.items()})
+        for name, (job_keys, counts) in structures.items():
+            for j in expected_jobs:
+                if j not in job_keys:
+                    violations.append(
+                        f"{name}'s parse of the committed workflow file "
+                        f"is missing the `{j}` job — the pinned job graph "
+                        f"({', '.join(expected_jobs)}) is the factory's "
+                        "shape: a missing job is a run whose downstream "
+                        "stages skip and whose report reads a false "
+                        "failure (the issue's collapse)")
+            extra = [j for j in job_keys if j not in expected_jobs]
+            if extra:
+                violations.append(
+                    f"{name}'s parse of the committed workflow file holds "
+                    f"job(s) outside the pinned graph: {extra} — the "
+                    "published file's job shape has drifted")
+            if list(job_keys) != list(expected_jobs):
+                violations.append(
+                    f"{name}'s parse reads the jobs in a different order "
+                    f"than the pinned pipeline ({', '.join(expected_jobs)}): "
+                    f"{job_keys}")
+            for j, want in expected_step_counts.items():
+                got = counts.get(j)
+                if got != want:
+                    violations.append(
+                        f"{name}'s parse counts {got} steps in the `{j}` "
+                        f"job — the pinned count is {want} (the published "
+                        "file's job/step shape drifted; re-pin the gate "
+                        "deliberately where the change is intended)")
+        names = list(structures)
+        for i in range(len(names)):
+            for j2 in range(i + 1, len(names)):
+                if structures[names[i]] != structures[names[j2]]:
+                    violations.append(
+                        f"the standard engines disagree on the committed "
+                        f"file's structure — {names[i]} and {names[j2]} "
+                        "parse different job/step shapes: a file the "
+                        "standard YAML families read differently is not a "
+                        "file a runner's parser can be trusted with")
+    # (2) the line-lint half — engine-independent shape checks
+    for step_name, keys, run_state in _step_key_scan(text):
+        key_names = [k for _, k in keys]
+        if "run" in key_names:
+            ri = key_names.index("run")
+            after = [k for k in key_names[ri + 1:]]
+            if after:
+                violations.append(
+                    f"step {step_name!r} declares keys {after} AFTER its "
+                    "`run` key — the step's block scalar terminates inside "
+                    "the step mapping (a dedented sibling key ends the "
+                    "block): the shape the runner's workflow parser "
+                    "diverges on (issue #106's two `pr` job steps), and "
+                    "the published file's steps keep `run` as their step "
+                    "mapping's last key (reorder the step — env before "
+                    "run)")
+            if run_state is not None and run_state[2] > max_run_block_lines:
+                violations.append(
+                    f"step {step_name!r}'s `run` block is "
+                    f"{run_state[2]} lines — a giant inline body past the "
+                    f"{max_run_block_lines}-line budget: the body belongs "
+                    "in the runtime tree (the file's step launches the "
+                    "stashed script), not in the published file")
+    if violations:
+        return False, ("the committed workflow file is not parser-safe — "
+                       + "; ".join(violations))
+    return True, (
+        "the committed workflow file is parser-safe — its job/step "
+        "structure parses to the pinned graph under "
+        + (" and ".join(n for n, _ in engines) if engines
+           else "no standard engine (engine half not run)")
+        + "; no step declares keys after its run block; no run block "
+        f"exceeds the {max_run_block_lines}-line giant-body budget")
 
 
 def check(root: str, path: str):
@@ -218,16 +534,32 @@ def main(argv=None) -> int:
     path = next(
         (a for a in argv if not a.startswith("-")),
         default_factory_path())
-    # The check is the only mode: the file is static plain text —
-    # nothing here writes it (the splice that once rewrote the file's
-    # payload region retires with the embed: a maintainer who changes
-    # the runtime tree commits the tree, and the gate verifies the
-    # tag's commit against the file). `--check` names the release
-    # flow's publication gate; the no-argument form is the same check
-    # as a local run.
-    ok, message = check(root, path)
-    print(("ok:   " if ok else "INCONSISTENT: ") + message)
-    return 0 if ok else 1
+    # The release flow's two publication gates are the only modes: the
+    # file↔tree consistency check (`--check` — the file is static plain
+    # text, nothing here rewrites it: the splice that once rewrote the
+    # file's payload region retires with the embed, a maintainer who
+    # changes the runtime tree commits the tree, and the gate verifies
+    # the tag's commit against the file) and the parser-safety structure
+    # check (`--verify-structure` — the file's job/step graph and its
+    # line shapes stay in the form the standard engines agree on, where
+    # the runner's parser does not diverge). The no-argument form runs
+    # both, a local rehearsal of the flow's two pre-tag gates.
+    if "--verify-structure" in argv:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        ok, message = verify_structure(text)
+        print(("ok:   " if ok else "INCONSISTENT: ") + message)
+        return 0 if ok else 1
+    if "--check" in argv:
+        ok, message = check(root, path)
+        print(("ok:   " if ok else "INCONSISTENT: ") + message)
+        return 0 if ok else 1
+    ok1, m1 = check(root, path)
+    with open(path, encoding="utf-8") as f:
+        ok2, m2 = verify_structure(f.read())
+    print(("ok:   " if ok1 else "INCONSISTENT: ") + m1)
+    print(("ok:   " if ok2 else "INCONSISTENT: ") + m2)
+    return 0 if (ok1 and ok2) else 1
 
 
 if __name__ == "__main__":

@@ -318,7 +318,8 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                          context_as_args: bool = False,
                          deny: list[str] | tuple[str, ...] = (),
                          rerun_on_repair: bool = False,
-                         completion_line=None) -> None:
+                         completion_line=None,
+                         artifact: str = "") -> None:
     """generate → commit → guard → (clean, or a violation the guard's
     repair call cleared in place: post_ok check / break; a repair cap
     exhausted without clearing the violation: the guard exits the stage
@@ -356,6 +357,14 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
     without re-running (guard-rail: the leaking stage is repaired by the pi
     call, not restarted; a requirement edit during implementation is
     reverted in place).
+
+    `artifact` (default: "") names the stage job's run artefact
+    (cw-extract, cw-plan, …): where the caller keeps the loop's plain
+    completion form (no completion hook), the loop's completion point
+    records the stage's completion marker (state/artifacts/<artifact>.txt)
+    the report stage cross-checks to tell "the stage ran" from "the stage
+    never ran" — a caller with its own completion hook writes its own
+    marker at its own completion point instead.
 
     `completion_line` (default: None) is the caller's own completion-line
     hook — a zero-argument callable that returns the line to log where the
@@ -528,6 +537,18 @@ def run_generation_stage(stage: str, template: str, allow: list[str],
                 continue
             if completion_line is None:
                 common.log(f"{stage}: clean — stage complete")
+                # the completion line rides the stage-summary channel too,
+                # written by the stage step itself: the job's terminal
+                # summary step is the fallback writer, not the stage's
+                # verdict's only writer (issue #106's collapse — the
+                # terminal step the runner's parser mangled into a no-op
+                # would otherwise be the sole writer of the stage's line).
+                # A caller with its own completion hook (the implement
+                # stage's per-step line) records its own channel lines and
+                # writes its own marker.
+                common.record_stage_outcome(f"{stage}: clean — stage complete")
+                if artifact:
+                    common.record_stage_ran(artifact)
             else:
                 line = completion_line()
                 if line:

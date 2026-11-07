@@ -46,12 +46,18 @@
 # relayed ref, because there is no second ref to relay. The rewrite the
 # old design did at release time (on a throwaway branch, a push the
 # publishing principal is refused) is gone: this flow's role in the
-# version is the publication gate — the step below checks the committed
-# file and the committed tree for consistency, and a version that is
-# not consistent — a file that is not plain text or is past 500kb, or a
-# tagged commit whose tree carries no runtime tree the file's stage
-# steps execute — is not published, before the tag, with the exact
-# cause. The gate governs versions published from this change on:
+# version is the publication gate — the steps below check the committed
+# file and the committed tree for consistency, and the committed file's
+# structure: a file a standard engine cannot parse, a step that declares
+# keys after its run block (the shape the runner's workflow parser
+# diverges on — the one that dropped a stage job from the run's job
+# graph and phantom-stepped every other job), or a run block past the
+# giant-body budget. A version that is not consistent — a file that is
+# not plain text or is past 500kb, a tagged commit whose tree carries no
+# runtime tree the file's stage steps execute, or a file whose structure
+# the runner's parser mis-reads — is not published, before the tag, with
+# the exact cause. The gate governs versions published from this change
+# on:
 # versions published before it keep the embedded form — those files are
 # immutable published artifacts that still decode their own tree — so
 # every published version is self-sufficient under its own mechanism
@@ -109,6 +115,22 @@ jobs:
         run: |
           python3 .github/scripts/embed-runtime.py --check || {
             echo "::error::the published version is not consistent — the committed factory.yml is not plain text within the max allowed size, or the tagged commit's tree does not carry the runtime tree the file's stage steps execute: an inconsistent version must not be published"
+            exit 1
+          }
+      - name: Gate publication on the workflow file's structure
+        # A published version must also be structurally safe: a file a
+        # standard engine cannot parse, a step that declares keys after
+        # its run block (the dedent that ends the block inside the step
+        # mapping — the shape the runner's workflow parser diverges on),
+        # or a run block past the giant-body budget would publish a
+        # version whose jobs the runner mis-parses: the run's job graph
+        # collapses (issue #106 — a stage job missing from the graph,
+        # phantom steps in every other job, the stage outcomes lost).
+        # The gate fails before the tag, with the exact cause, on the
+        # committed file.
+        run: |
+          python3 .github/scripts/embed-runtime.py --verify-structure || {
+            echo "::error::the published version's workflow file is not parser-safe — a standard engine rejects it, a step declares keys after its run block, or a run block exceeds the giant-body budget: a version whose jobs the runner's parser mis-parses must not be published"
             exit 1
           }
       - name: Skip a push that changes only the consumer workflow

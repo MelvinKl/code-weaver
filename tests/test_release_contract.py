@@ -595,6 +595,45 @@ def test_workflow_runs_the_changed_files_check_as_a_pre_publish_step():
         "exit before any tag is created")
 
 
+def test_structure_gate_sits_between_the_consistency_gate_and_the_changed_files_check():
+    """(scenario "A workflow file the runner's parser mis-reads publishes
+    no version"; reference
+    `requirements/auto-release-on-main.feature::A workflow file the
+    runner's parser mis-reads publishes no version`)
+    release.yml runs the helper's structure gate — the one that fails a
+    file a standard engine cannot parse, a step that declares keys after
+    its run block (the shape the runner's workflow parser diverges on:
+    the dedent that ends the block inside the step mapping, or a key on
+    the block line — issue #106's collapsed run graph), or a run block
+    past the giant-body budget — as a dedicated pre-tag step: after the
+    version-consistency gate and before the changed-files check, failing
+    the run with the exact cause before any tag is created, so a version
+    whose jobs the runner mis-parses is never published and a target pin
+    never lands on it."""
+    lines = _read(RELEASE_WORKFLOW).splitlines()
+    check = _first_line_index(lines, "embed-runtime.py --check")
+    structure = _first_line_index(lines, "embed-runtime.py --verify-structure")
+    skip = _first_line_index(lines, "release-number.py --changed-files")
+    tag = _first_line_index(lines, r'git tag "$NEXT" HEAD')
+    assert check != -1 and structure != -1 and skip != -1 and tag != -1, (
+        "release.yml lost one of its pre-tag gates — the version-"
+        "consistency gate, the workflow-structure gate (the parser-safe "
+        "shape the runner's workflow parser is exercised on), and the "
+        "changed-files check")
+    assert check < structure < skip < tag, (
+        "the structure gate is not a dedicated pre-tag step — it must "
+        "sit after the version-consistency gate and before the "
+        "changed-files check, so a file the runner's parser mis-reads "
+        "fails the run with the exact cause before a tag is created")
+    window = lines[structure:structure + 12]
+    assert any(l.strip() == "exit 1" for l in window), (
+        "the structure gate does not fail the run — a file the runner's "
+        "parser mis-reads must exit the flow non-zero, before the tag")
+    assert not any(l.strip() == "exit 0" for l in window), (
+        "the structure gate exits zero on an unsafe file — a version "
+        "whose jobs the runner mis-parses must not be published")
+
+
 def test_release_notes_name_the_changes_since_the_previous_release():
     """(scenario "The release notes name the changes since the
     previous release"; reference

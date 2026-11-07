@@ -193,6 +193,9 @@ def run_plan_stage() -> None:
         # re-checks the re-run (plan: "the plan stage may only touch its own
         # plan file")
         rerun_on_repair=True,
+        # the loop's completion point records the stage's outcome line and
+        # completion marker (the report cross-checks them)
+        artifact="cw-plan",
     )
 
 

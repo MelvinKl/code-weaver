@@ -436,6 +436,9 @@ def main() -> None:
             open(common.state_file("stage-summary.txt"), "a").write(
                 "stage 10 test-and-review: green — no changed "
                 "requirements and no test-referenced scenario to judge\n")
+            # the vacuous pass completes the stage: its completion marker
+            # rides with the line
+            common.record_stage_ran("cw-review")
             # the completion push: the vacuous pass commits nothing, the
             # branch tip is where the fix loop left it — the push is the
             # redundant sync that makes the push-at-completion guarantee
@@ -462,6 +465,9 @@ def main() -> None:
                 common.log(f"stage 10: suite green — all {len(verdicts)} scenarios FULFILLED")
                 open(common.state_file("stage-summary.txt"), "a").write(
                     f"stage 10 test-and-review: green — {len(verdicts)} scenarios fulfilled\n")
+                # all scenarios fulfilled completes the stage: its
+                # completion marker rides with the line
+                common.record_stage_ran("cw-review")
                 # the completion push: the fix iterations already pushed
                 # after each fix commit, so in the normal case this is the
                 # no-op that keeps the guarantee explicit and uniform — a

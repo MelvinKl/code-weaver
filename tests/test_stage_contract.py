@@ -1643,32 +1643,29 @@ def _pr_fallback_source() -> str:
             start = i
             break
     assert start is not None, "the pr job's fallback step is gone"
-    # the body runs from the `run: |` line (the step content's own indent
-    # is the dedent base — the `run: |` line's would under-strip)
-    run_line = next((i for i in range(start + 1, len(lines))
-                     if lines[i].strip() == "run: |"), None)
-    assert run_line is not None, "the fallback step lost its `run: |` block"
-    body, indent = [], None
-    for cont in lines[run_line + 1:]:
-        if not cont.strip():
-            body.append("")
-            continue
-        ind = len(cont) - len(cont.lstrip(" "))
-        if indent is None:
-            indent = ind
-        body.append(cont[indent:])
-    src = body
+    # the heredoc is located by its markers, not its indent: the step's
+    # body now runs inside the run's console-mirror subshell (issue #106
+    # made the step mirror its full output into the run's artefact state
+    # dir), so the heredoc sits 4 deeper than the run block's dedent base
     her_start = None
-    for j, l in enumerate(src):
+    for j in range(start + 1, len(lines)):
+        l = lines[j]
+        if l.strip() and (len(l) - len(l.lstrip(" "))) < 6:
+            break  # left the step's block without finding the heredoc
         if "<<" in l and "EOF" in l:
             her_start = j
             break
+        if l.strip() == "EOF" and "<<" not in l:
+            break  # a heredoc closed before its opener — shape changed
     assert her_start is not None, \
         "the fallback step no longer runs python via a heredoc"
-    her_end = next((k for k in range(her_start + 1, len(src))
-                    if src[k].strip() == "EOF"), None)
+    her_end = next((k for k in range(her_start + 1, len(lines))
+                    if lines[k].strip() == "EOF"), None)
     assert her_end is not None, "the fallback heredoc never closes"
-    return "\n".join(src[her_start + 1:her_end])
+    body = lines[her_start + 1:her_end]
+    indents = [len(l) - len(l.lstrip(" ")) for l in body if l.strip()]
+    base = min(indents) if indents else 0
+    return "\n".join(l[base:] if l.strip() else "" for l in body)
 
 
 def test_pr_body_fallback_describes_the_issue():
@@ -1785,7 +1782,10 @@ def test_report_falls_back_to_top_level_arc42():
     review`) the report stage appends the
     AI-activity section to the arc42 markdown under the doc dir — and
     falls back to the top-level PLAN.md where a target has no doc dir."""
-    action = _read(".github/workflows/factory.yml")
+    # the arc42-activity logic lives in the runtime tree's stage script
+    # (issue #106's giant-body collapse moved it out of the workflow);
+    # the workflow's step only launches the stashed copy
+    action = _read(".github/actions/report/stage.py")
     assert '## AI activity (code-weaver)' in action
     assert 'elif os.path.isfile("PLAN.md")' in action
     docs = os.path.join(ROOT, "docs")
@@ -1796,42 +1796,29 @@ def test_report_falls_back_to_top_level_arc42():
 
 
 def _report_action_source() -> str:
-    """The report stage's inline python — its `run: |` block (the step's
-    whole body), dedented to a runnable source. The stage's steps are
-    inlined in the workflow (the former action file is gone), so the block
-    is read off the report job's inlined status-report step. The tests exec
-    it against a sandboxed state dir: the assembled report is a function of
-    the state dir's contents (the per-call usage ledger, the trigger's
-    resolved configuration) and the step's env, so no live workflow is
-    needed."""
-    lines = _read(".github/workflows/factory.yml").splitlines()
-    lines = lines[lines.index(next(ln for ln in lines
-                                   if ln.startswith("  report:"))):]
-    step = None
-    for i, ln in enumerate(lines):
-        if "Write the final status report" in ln:
-            step = i
-            break
-    assert step is not None, "the report stage's status-report step is gone"
-    for i in range(step, len(lines)):
-        if lines[i].lstrip() == "run: |":
-            body, indent = [], None
-            for cont in lines[i + 1:]:
-                if not cont.strip():
-                    body.append("")
-                    continue
-                ind = len(cont) - len(cont.lstrip(" "))
-                if ind <= 8:
-                    break
-                if indent is None:
-                    indent = ind
-                body.append(cont[indent:])
-            src = "\n".join(body)
-            assert src.lstrip().startswith("try:"), \
-                "the step's run block is no longer the status-report python"
-            return src
-    raise AssertionError(
-        "no `run: |` block on the report stage's status-report step")
+    """The report stage's status-report python, read from the runtime
+    tree's stage script and reduced to its runnable body. The stage's
+    body used to inline in the workflow (the former action file is
+    gone); issue #106's giant-body collapse moved it into the tree, and
+    the workflow's step only launches the stashed script — so the source
+    is the tree file, and the tests exec its body against a sandboxed
+    state dir: the assembled report is a function of the state dir's
+    contents (the per-call usage ledger, the trigger's resolved
+    configuration) and the step's env, so no live workflow is needed.
+    The body keeps the RUNNER_TEMP-relative stash resolution (not a
+    `__file__` one), so the exec's sandboxed RUNNER_TEMP stands in for
+    the run's."""
+    # The status-report body no longer inlines in the workflow: issue
+    # #106's giant-body collapse moved it into the runtime tree's stage
+    # script (the workflow's step only launches it from the job's
+    # stash), so the source is read from the tree file the launcher
+    # runs — the same file the stash carries, and the same file the
+    # step's python executes.
+    src = _read(".github/actions/report/stage.py")
+    m = re.search(r"^try:", src, re.M)
+    assert m is not None, \
+        "the stage script is no longer the status-report python"
+    return src[m.start():]
 
 
 def _models_config(r_in: float, r_out: float) -> str:

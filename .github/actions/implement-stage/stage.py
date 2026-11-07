@@ -253,6 +253,8 @@ def main() -> None:
             with open(common.state_file("stage-summary.txt"), "a",
                       encoding="utf-8") as f:
                 f.write("stage 8 implementation: stage complete\n")
+            # the stage is done — its completion marker rides with the line
+            common.record_stage_ran("cw-implement")
             return
         before = set(common.changed_files(stages.baseline_sha()))
         stages.run_generation_stage(
