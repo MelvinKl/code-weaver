@@ -35,7 +35,12 @@ jobs:
     # triggered in the factory's own repo works on that repo's code").
     # Bumping the tag number is the dogfood's upgrade — one tag is one
     # complete version, and the release flow's one-tag-per-commit guard
-    # keeps the series one commit per number.
+    # keeps the series one commit per number. A bump like this one
+    # changes only this file, so the release flow's changed-files check
+    # — run pre-publish, and again inside the publish step over the
+    # committed tree, because a run's push metadata is not a contract
+    # — skips it: no number is spent on a version this file does not
+    # belong to.
     uses: MelvinKl/code-weaver/.github/workflows/factory.yml@22
     with:
       max-loops: 25
