@@ -27,8 +27,13 @@ maintainer adds the `ai-requirements` label to an issue in a target project, and
 this repo's reusable workflow takes over:
 
 1. **trigger** — a label addition to an issue (or a manual dispatch with
-   an issue number) starts a run; re-entrant triggers on the same issue are
-   idempotent;
+   an issue number) starts a run — the run's recorded state additionally
+   carries the bug-issue flag: the issue's labels compared against the
+   resolved bug label (the `bug-label` input's value, its `bug` default
+   where a consumer leaves it undeclared); the flag is recorded, never
+   gated on (an issue carrying only the bug label starts no factory), and it
+   rides the trigger's artifact to every later stage job; re-entrant
+   triggers on the same issue are idempotent;
 2. **setup-pi** — installs pi for the run and configures it for the
    workflow run: every later pi invocation in the run uses that installed
    copy, and the stage materialises the run's provided harness — the model
@@ -44,9 +49,18 @@ this repo's reusable workflow takes over:
    property of the runner);
 3. **baseline** — cuts the AI branch `ai/code-weaver/<issue>` and records the
    baseline;
-4. **requirement-extraction** — pi derives the **delta requirements** from the
-   project itself (the arc42 markdown + the issue + the change-set diff) and
-   writes them as **Gherkin** into `requirements/` — the project context is
+4. **requirement-extraction** — a run for an issue that carries the resolved
+   bug label skips the derivation: no pi call is made for the stage, no
+   requirement file is written, the requirement check passes with nothing
+   changed, and the run proceeds directly to the plan stage (a bug-labelled
+   issue with an empty body instead stops cleanly there with `no delta
+   requirements` — the stop records its run-level half, the `no-delta-stop`
+   flag in the run's state dir (it rides the artefact chain to every later
+   stage job, and the per-job env relay, like the other trigger-state keys),
+   and the run is not forwarded to the plan stage); otherwise
+   pi derives the **delta requirements** from the project itself (the arc42
+   markdown + the issue + the change-set diff) and writes them as **Gherkin**
+   into `requirements/` — the project context is
    handed to pi in two parts: the arc42 markdown, `README.md` and the
    baseline diff as `@`-file arguments, which pi reads as context before
    answering, and the oracle as the requirements directory named in the
@@ -58,7 +72,8 @@ this repo's reusable workflow takes over:
    never named after an issue — a changed existing file that no longer
    parses is a guard violation, reverted and re-run — an empty body writes
    nothing and the factory stops cleanly there, where the target has a
-   requirements directory; a first run on a target without one derives the
+   requirements directory (the same `no-delta-stop` flag rides with the
+   stop); a first run on a target without one derives the
    full requirements set from the project's code, documentation and tests
    and creates the directory; the result is validated with Cucumber's
    official parser (skipped-not-failed where the parser port is absent);
@@ -70,7 +85,13 @@ this repo's reusable workflow takes over:
    place and keeps the stage's own work valid; the stage is not re-run;
 6. **plan** — markdown plan(s) under `plans/`, covering **every** requirement
    change, grounded in the arc42 documentation (the `docs/` set — the
-   top-level `PLAN.md` where a target has no doc dir); the instructions
+   top-level `PLAN.md` where a target has no doc dir); before its prompt
+   assembly the stage checks the run's `no-delta-stop` flag (the extract
+   stage records it when its extraction stops with no delta): set, the
+   stage stops cleanly without a pi call — no plan file, its outcome line
+   the report renders as skipped, never as "stage complete" — and the run
+   is not forwarded to the plan stage (the bug branch's empty-body form is
+   never assembled); the instructions
    carry the delta — which requirement files changed and what those files
    changed — the files ride the path-referenced context (read on demand,
    never embedded; the whole oracle is not injected into the planner) — and
@@ -79,7 +100,12 @@ this repo's reusable workflow takes over:
    directory, so the baseline knows none of them), the instructions attach
    the brownfield scope: the plan names the extracted scenarios it must
    cover and scopes its steps to adjusting the tests to reference those
-   scenarios — no plan step implements code;
+   scenarios — no plan step implements code; and where the run's issue is a
+   bug issue and no requirement file changed since the baseline (the run
+   skipped the extraction for it), the delta is empty: the instructions name
+   no requirement file as changed and carry the issue itself — its number,
+   title and body — as what the plan must cover (the brownfield scope is not
+   attached to this shape: a bug run's delta is empty — no files at all);
 7. **plan check** — same guard idiom — a change outside the one allowed
    plan file is reverted by the guard's pi call and the plan stage re-runs
    (the guard re-checks the re-run; only the plan file is left changed; a
@@ -134,10 +160,15 @@ this repo's reusable workflow takes over:
 15. **final status report** — the PR body is completed (and verified on the
     PR — where it could not be applied, the issue comment carries the full
     final status itself, so the description and the comment never disagree
-    on the run's usage numbers), the source issue is commented and closed
-    when the run succeeded (a failed run leaves it open), and an AI-activity
-    section lands in the arc42 docs (the `docs/` set — a target without a doc
-    dir gets it in its top-level arc42 markdown).
+    on the run's usage numbers); the stage outcomes it lists render from the
+    stages' recorded summary lines — a done stage is reported "stage
+    complete", and a stage whose work was intentionally skipped — the
+    extraction stage on a bug-labelled run, or the plan stage on a run
+    whose extraction stopped with no delta — is listed as skipped, never as
+    "stage complete"; the source issue is commented and closed when the run
+    succeeded (a failed run leaves it open), and an AI-activity section lands
+    in the arc42 docs (the `docs/` set — a target without a doc dir gets it
+    in its top-level arc42 markdown).
 
 **Merging is never the factory's job.** It opens the PR, closes the issue
 behind it, and stops.
@@ -167,6 +198,7 @@ jobs:
     with:
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
       ai-requirements-label: ai-requirements
+      bug-label: bug  # the label that marks an issue as a bug — a run for an issue that carries the trigger label and this label skips the requirements extraction (the plan is built from the issue itself); omit the line where the target runs on the "bug" default
       target-branch: main
       llm-model: Ornith-1.5-35B-A3B  # which configured model — the one adjustable LLM setting
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
@@ -239,6 +271,7 @@ never empty for a release that publishes changes.
 |---|---|---|
 | `issue-number` | *(the triggering issue)* | which issue to process |
 | `ai-requirements-label` | `ai-requirements` | the trigger label |
+| `bug-label` | `bug` | the label that marks an issue as a bug — a run for an issue that carries the trigger label and this label skips the requirements extraction (the plan is built from the issue itself); a consumer that leaves it undeclared runs unchanged on the default |
 | `target-branch` | `main` | PR base branch |
 | `requirements-dir` | `requirements` | where Gherkin requirements live |
 | `plan-dir` | `plans` | where plans live |
@@ -350,7 +383,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 201 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 208 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -358,7 +391,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **201 Gherkin scenarios** — the oracle this
+`requirements/` holds **208 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

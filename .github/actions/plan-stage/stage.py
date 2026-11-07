@@ -16,7 +16,33 @@ were extracted from the project's existing code, the plan names the
 extracted scenarios it must cover, its steps are scoped to adjusting the
 tests to reference those scenarios, and no plan step implements code;
 where a changed existing file is among the delta (the standing runs),
-the clause is not attached. The guard verifies only that one plan file
+the clause is not attached. Where the run's issue is a bug issue —
+the trigger's recorded bug-issue flag, derived against the resolved
+bug label — and the run skipped the extraction for it, so no
+requirement file changed since the baseline, the target takes the
+empty-delta branch: the instructions name no requirement file as
+changed and carry the issue itself — its number, title and body — as
+what the plan must cover; the issue data rides the trigger's state
+files (the documented authoritative channel for the issue's number
+and title, plus the body file the extract stage reads). The plan
+still lands at one file per issue, and the brownfield clause is not
+attached to this shape — a bug run's delta is empty (no files at
+all), unlike the brownfield shape where every changed file is *new*.
+Where the run's extraction stopped instead of skipping — the no-delta
+stop (a bug-labelled issue with an empty body, or the standing
+empty-body stop): the extract stage records the run-level no-delta-stop
+flag in the run's state dir (beside the trigger's recorded state — it
+rides the cumulative artefact chain to every later stage job, the
+per-job env relay in-process, like the other trigger-state keys), and
+the plan stage checks that flag before its own work: the run is not
+forwarded to the plan stage — the stage stops cleanly without a pi call
+(no plan file, no prompt assembly — the bug branch's empty-body form,
+which would plan from the issue title alone, is never reached) and
+records its own outcome line on the stage-summary channel, which the
+report renders as skipped, never as "stage complete". A bug-labelled
+run whose extraction merely skipped (a non-empty-body bug issue) records
+no flag and proceeds to the empty-delta branch above.
+The guard verifies only that one plan file
 changed;
 any other change is reverted by the guard's pi call and the plan stage
 re-runs — the guard records the cleared repair in the state dir, and the
@@ -112,10 +138,21 @@ def delta_section() -> str:
     instructions carry: the changed requirement files, named one per line,
     followed by their changes — the run's baseline diff scoped to them.
     A run with no changed requirement files names none and carries no
-    diff — there is no delta to plan."""
+    diff — there is no delta to plan, except a bug-labelled run whose
+    extraction was skipped: its empty delta names none the same way, and
+    the plan is built from the issue itself, which the target's issue
+    section carries."""
     files, diff = requirement_delta()
     s = "\n## The requirement delta (your task's input)\n\n"
     if not files:
+        if _is_bug_run():
+            # the empty-delta branch the bug skip creates: no requirement
+            # file is named as changed — the plan is built from the issue
+            # itself (the target's issue section carries it)
+            return s + ("No requirement files changed since the run's "
+                        "baseline — the run skipped the requirements "
+                        "extraction (a bug-labelled issue), so no "
+                        "requirement file is named as changed.\n")
         return s + ("No requirement files changed since the run's baseline "
                     "— there is no delta to plan.\n")
     s += ("The following requirement files changed since the run's "
@@ -133,6 +170,53 @@ def delta_section() -> str:
     return s
 
 
+def _is_bug_run() -> bool:
+    """Whether the run's issue is a bug issue — the trigger's recorded
+    state value (the issue's labels compared against the resolved bug
+    label): the state file in the trigger's state dir is the documented
+    record (it rides the trigger's artifact to every later stage job),
+    and the per-job env relay (CW_BUG_ISSUE) is the in-process channel
+    the same value rides. A run the trigger did not record the flag for
+    is not a bug run — the standing prompt assembly is unchanged for
+    it."""
+    v = (common.cw_state("bug-issue")
+         or common.cw_input_opt("bug-issue") or "")
+    return v.strip().lower() == "true"
+
+
+def _issue_section(issue: str) -> str:
+    """The empty-delta branch's payload: the issue itself — its number,
+    title and body — as what the plan must cover. The issue data rides
+    the trigger's state files — `issue-title.txt` from the trigger's
+    state dir, the body from `issue-body.md`, the state file the extract
+    stage reads — the documented authoritative channel for the issue's
+    number and title (both ride the trigger's artifact to every stage
+    job, the per-job env relay in-process). A body the trigger did not
+    record is carried as empty — the plan is still built from the
+    number and title."""
+    title = common.cw_state("issue-title") or ""
+    try:
+        body = open(common.state_file("issue-body.md"),
+                    encoding="utf-8").read().strip()
+    except OSError:
+        body = ""
+    s = ("\n## The plan must cover the issue itself\n\n"
+         "This run skipped the requirements extraction (the issue is a "
+         "bug issue) and no requirement file changed since the run's "
+         "baseline: no requirement file is named as changed, and the "
+         "plan you write is built from the issue itself — the issue "
+         "below is what the plan must cover.\n\n"
+         f"Issue number: #{issue}\n\n"
+         f"Issue title: {title or '(no title recorded)'}\n\n"
+         "Issue body:\n\n")
+    if body:
+        s += body + "\n"
+    else:
+        s += ("(the issue body is empty — plan from the number and "
+              "title)\n")
+    return s
+
+
 def build_target(issue: str, plan_dir: str) -> str:
     """The plan stage's prompt file — passed to pi as the prompt alongside
     the plan template. It names the exact output path and the "one file
@@ -142,8 +226,13 @@ def build_target(issue: str, plan_dir: str) -> str:
     cover). Where the delta is the brownfield shape (every changed
     requirement file new against the baseline), the target also attaches
     the brownfield marker — the scope the template's brownfield clause
-    governs. The changed files stay referenced by path in the call's
-    context; the instructions carry the delta, never the whole oracle.
+    governs. Where the run is a bug issue and no requirement file
+    changed since the baseline (the extraction was skipped for it), the
+    target also carries the issue itself — its number, title and body —
+    as what the plan must cover (the empty-delta branch the skip
+    creates), and the brownfield marker is not attached to that shape.
+    The changed files stay referenced by path in the call's context; the
+    instructions carry the delta, never the whole oracle.
     Rebuilt every run so a re-run overwrites the same file."""
     pf = common.state_file("plan-target.md")
     with open(pf, "w", encoding="utf-8") as f:
@@ -159,18 +248,75 @@ def build_target(issue: str, plan_dir: str) -> str:
                 "NOT create an overall/aggregate plan: every issue gets its "
                 "own single plan file.\n")
         f.write(delta_section())
+        # The empty-delta branch the bug skip creates: where the run is a
+        # bug issue and no requirement file changed since the baseline,
+        # the instructions carry the issue itself — its number, title and
+        # body — as what the plan must cover.
+        if _is_bug_run() and not requirement_delta()[0]:
+            f.write(_issue_section(issue))
         # The brownfield scope attaches only where the delta is the
         # all-new-files shape — where a changed existing file is among the
         # delta (the standing runs), the instructions are exactly the
-        # standing ones and the marker is not written.
+        # standing ones and the marker is not written. A bug run's delta
+        # is empty (no files at all), so the marker is not attached to
+        # that shape either.
         if delta_is_brownfield():
             f.write(BROWNFIELD_MARKER)
     return pf
 
 
+def extract_stopped_no_delta() -> bool:
+    """Whether the run's requirement extraction stopped with no delta —
+    the run-level stop signal the extract stage records in the run's
+    state dir when it takes the no-delta stop (a bug-labelled issue with
+    an empty body, or the standing empty-body stop): a state file beside
+    the trigger's recorded state (`no-delta-stop`) — the state file
+    rides the cumulative artefact chain to every later stage job, the
+    per-job env relay (CW_NO_DELTA_STOP) is the in-process channel, like
+    the other trigger-state keys. The plan stage checks that flag before
+    its own work: the run that stopped at the extraction is not forwarded
+    to the plan stage — the stage stops cleanly on the signal without a
+    pi call (no plan file, no prompt assembly — the bug branch's
+    empty-body form, which would plan from the issue title alone, is
+    never reached), recording its own outcome line on the stage-summary
+    channel, which the report renders as skipped, never as "stage
+    complete". A bug-labelled run that merely skipped the derivation (a
+    non-empty-body bug issue) records no flag: its run proceeds to a plan
+    built from the issue itself (the empty-delta branch the skip
+    creates)."""
+    v = (common.cw_state("no-delta-stop")
+         or common.cw_input_opt("no-delta-stop") or "")
+    return v.strip().lower() == "true"
+
+
 def run_plan_stage() -> None:
     plan_dir = common.env_dir("PLAN_DIR")
     issue = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
+    # The no-delta stop's run-level half: where the run's requirement
+    # extraction stopped with no delta (a bug-labelled issue with an
+    # empty body, or the standing empty-body stop), the extract stage
+    # recorded the stop flag in the run's state dir, and the run is not
+    # forwarded to the plan stage: the stage checks the flag before
+    # build_target() and its generation loop, and stops cleanly on it —
+    # no pi call, no plan file, and no prompt assembly (the bug branch's
+    # empty-body form, which would plan from the issue title alone, is
+    # never reached) — recording its own outcome line on the
+    # stage-summary channel (the report renders it as skipped, never as
+    # "stage complete"); the completion marker rides with the line, as on
+    # the extract stage's clean stops. A bug-labelled run whose extraction
+    # merely skipped (a non-empty-body bug issue) records no flag: its run
+    # proceeds to a plan built from the issue itself.
+    if extract_stopped_no_delta():
+        common.log("stage 6: the run's requirement extraction stopped "
+                   "with no delta — the run is not forwarded to the plan "
+                   "stage: no pi call is made for the stage, no plan file "
+                   "is written, the stage stops cleanly")
+        common.record_stage_outcome(
+            "stage 6 planning: skipped (the run's requirement extraction "
+            "stopped with no delta — the run is not forwarded to the plan "
+            "stage; no pi call, no plan file written)")
+        common.record_stage_ran("cw-plan")
+        return
     context = project_context()
 
     # The plan lives at one file per issue. Allow ONLY that file in the

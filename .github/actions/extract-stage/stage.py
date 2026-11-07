@@ -4,14 +4,32 @@
   pi (requirements.md prompt, issue body as the prompt, the project files as
   context) derives the delta requirements for the issue and writes them as
   Gherkin into the requirements dir, placed by topic — an existing topic file
-  extended in place, a new file only for a topic no file yet covers. A target
-  without a requirements directory is a first factory run on that project: the
-  entry logic takes its first-run branch there (the full-derivation prompt —
-  pi derives the full requirement set from the project's current code,
-  documentation and tests, a source the project does not have is skipped
-  rather than failing, and the .feature files it writes create the directory);
-  the empty-body "no delta requirements" stop applies only where a
-  requirements directory exists. The guard
+  extended in place, a new file only for a topic no file yet covers. A run for
+  an issue that carries the bug label (the trigger records the bug-issue flag
+  in the run's state, derived against the resolved bug label) skips the
+  derivation entirely — the entry logic's first branch, checked before the
+  directory branch: no pi call is made for the stage, no requirement file is
+  written, the requirement check passes with no requirement file changed, the
+  stage records its skip on the stage-summary channel, and the run proceeds
+  directly to the planning stage (the plan is built from the issue itself);
+  a bug-labelled issue with an empty body instead reaches the "no delta
+  requirements" clean stop: the stop records its run-level half in the run's
+  state dir (the no-delta-stop flag beside the trigger's recorded state — it
+  rides the cumulative artefact chain to every later stage job, and the
+  per-job env relay, like the other trigger-state keys), and the plan stage
+  checks that flag before its own pi call — set, the plan stage stops
+  cleanly without a pi call (no plan file, its own outcome line on the
+  stage-summary channel, the report rendering it as skipped, never as
+  "stage complete"): the run is not forwarded to the plan stage. A
+  target without a requirements directory is a first factory run on that
+  project: the entry logic takes its first-run branch there (the
+  full-derivation prompt — pi derives the full requirement set from the
+  project's current code, documentation and tests, a source the project does
+  not have is skipped rather than failing, and the .feature files it writes
+  create the directory); the empty-body "no delta requirements" stop applies
+  only where a requirements directory exists — the standing stop records
+  the same run-level no-delta-stop flag, so a run that stops there is not
+  forwarded to the plan stage either. The guard
   (the one shared idiom) then verifies that ONLY the requirements dir changed
   — a leak is repaired in place by the guard's pi call (the off-limits files
   named, told to be reverted, the stage's own work told to stay valid) and a
@@ -181,12 +199,98 @@ def post_ok() -> bool:
     return False
 
 
+def _is_bug_run() -> bool:
+    """Whether the run's issue is a bug issue — the trigger's recorded
+    state value (the issue's labels compared against the resolved bug
+    label): the state file in the trigger's state dir is the documented
+    record (it rides the trigger's artifact to every later stage job), and
+    the per-job env relay (CW_BUG_ISSUE) is the in-process channel the same
+    value rides. A run the trigger did not record the flag for is not a bug
+    run — the standing entry logic is unchanged for it."""
+    v = (common.cw_state("bug-issue")
+         or common.cw_input_opt("bug-issue") or "")
+    return v.strip().lower() == "true"
+
+
+def _record_no_delta_stop() -> None:
+    """The no-delta stop's run-level half: the stop flag in the run's state
+    dir — a state file beside the trigger's recorded state
+    (`no-delta-stop`), riding the same channels every trigger-state value
+    rides (the cumulative artefact chain to every later stage job — every
+    upload carries the whole state dir — and the per-job env relay, like
+    the other trigger-state keys). The plan stage checks that flag before
+    its own work: the run that stopped at the extraction is not forwarded
+    to the plan stage — the plan stage stops cleanly on the signal without
+    a pi call (no plan file, and its own outcome line on the stage-summary
+    channel, which the report renders as skipped, never as "stage
+    complete"). A bug-labelled run that merely skipped the derivation (a
+    non-empty-body bug issue) records no flag: its run proceeds to a plan
+    built from the issue itself."""
+    d = os.path.join(common.state_dir(), "state", "trigger")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "no-delta-stop.txt"), "w", encoding="utf-8") as f:
+        f.write("true\n")
+
+
 def main() -> None:
     common.install_crash_diagnostics("stage 4 requirements-extraction")
     req = common.env_dir("REQUIREMENTS_DIR")
     body = common.state_file("issue-body.md")
     body_empty = (not os.path.exists(body)
                   or not open(body, encoding="utf-8").read().strip())
+    # The bug-skip branch — the entry logic's first branch, checked before
+    # the directory branch: a run for an issue that carries the resolved
+    # bug label skips the derivation. No pi call is made for the stage and
+    # no requirement file is written, so the requirement check passes with
+    # no requirement file changed (the guard's whitelist over the
+    # requirements dir is trivially satisfied — no file is touched, so no
+    # repair call; the guard machinery is untouched). The stage records its
+    # skip on the documented stage-summary channel and the run proceeds
+    # directly to the planning stage (the plan is built from the issue
+    # itself; the 15-stage / 9-job pipeline count is unchanged — the skip
+    # is a recorded outcome inside the existing job, not a new stage or
+    # job). The branch's empty-body edge: a bug-labelled issue whose body
+    # is empty or describes no change reaches the standing empty-body
+    # stop's identical observable outcome (no requirement file written;
+    # "no delta requirements" reported; the run stops cleanly) — by the
+    # skip instead of by the extraction running and writing nothing — and
+    # the run is NOT forwarded to the plan stage: the stop records its
+    # run-level no-delta-stop flag in the run's state dir (the signal the
+    # plan stage checks before its own pi call), while the skip itself
+    # records no flag — the bug-labelled run's way through to the plan.
+    if _is_bug_run():
+        if body_empty:
+            common.log("stage 4: the issue is a bug issue and its body is "
+                       "empty or describes no change — no delta "
+                       "requirements; the stage writes nothing and stops "
+                       "cleanly (the run is not forwarded to the plan "
+                       "stage); the stop records its run-level flag in the "
+                       "run's state dir — the plan stage checks it before "
+                       "its own pi call")
+            with open(common.state_file("stage-summary.txt"), "a",
+                      encoding="utf-8") as f:
+                f.write("stage 4-5 requirement extraction: no delta "
+                        "requirements (bug-labelled issue, empty issue "
+                        "body)\n")
+            _record_no_delta_stop()
+        else:
+            common.log("stage 4: the issue is a bug issue — the run skips "
+                       "the requirement extraction: no pi call is made for "
+                       "the stage, no requirement file is written; the "
+                       "requirement check passes with no requirement file "
+                       "changed, and the run proceeds directly to the "
+                       "planning stage (the plan is built from the issue "
+                       "itself)")
+            with open(common.state_file("stage-summary.txt"), "a",
+                      encoding="utf-8") as f:
+                f.write("stage 4-5 requirement extraction: skipped "
+                        "(bug-labelled issue — no pi call, no requirement "
+                        "file written)\n")
+        # the skip (like the early stop) completes the stage's work: its
+        # completion marker rides with the line (the report cross-checks
+        # both to tell "the stage ran" from "the stage never ran")
+        common.record_stage_ran("cw-extract")
+        return
     # The empty-body stop is conditioned on the target project HAVING a
     # requirements directory: a missing body and an empty body are the same
     # case there — no change is described, so there are no delta
@@ -199,10 +303,14 @@ def main() -> None:
     first_run = bool(req) and not os.path.isdir(req)
     if not first_run and body_empty:
         common.log("stage 4: issue body is empty — no delta requirements; the "
-                   "stage writes nothing and stops cleanly")
+                   "stage writes nothing and stops cleanly; the stop records "
+                   "its run-level flag in the run's state dir — the plan "
+                   "stage checks it before its own pi call, so the run is "
+                   "not forwarded to the plan stage")
         with open(common.state_file("stage-summary.txt"), "a", encoding="utf-8") as f:
             f.write("stage 4-5 requirement extraction: no delta requirements "
                     "(empty issue body)\n")
+        _record_no_delta_stop()
         # the early stop completes the stage's work: its completion marker
         # rides with the line (the report cross-checks both to tell "the
         # stage ran" from "the stage never ran")

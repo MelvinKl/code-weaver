@@ -5,7 +5,16 @@
 manual dispatch with `issue_number`. The trigger job resolves the run
 configuration (issue number/title/body, the base ref+sha, the AI branch
 name), validates it before the run is recorded or accepted, records it
-as state files, and lists the run's resolved job timeout — the target's
+as state files — the recorded state carries, beside them, the
+bug-issue flag: the issue's labels compared against the resolved bug
+label (the `bug-label` input's value, its `bug` default where the
+consumer leaves the input undeclared); the flag is recorded, never
+gated on — the trigger label, or a manual dispatch, starts the run, and
+an issue carrying only the bug label starts no factory — and it rides
+the state channel like every other trigger value (every value a file;
+the files travel on the trigger's artifact to every later stage job,
+whose Read trigger state step relays them into the job's env) — and
+lists the run's resolved job timeout — the target's
 declared `job-timeout` value, or the `480`-minute default where the
 consumer leaves the input undeclared — in the resolved-configuration
 record that stays in the workflow log, never committed to the repo —
@@ -38,7 +47,20 @@ dropping a value for one downstream job while the next job received it;
 `GITHUB_ENV`, fed by the trigger artifact's state files, is the per-job
 in-process channel). The stage records its stage baseline (the branch
 tip as the stage started) so its guard judges only that stage's work;
-earlier stages' committed outputs are never off-limits. The two
+earlier stages' committed outputs are never off-limits. The no-delta
+stop's run-level signal rides the same state channel: where the extract
+stage takes the no-delta stop (a bug-labelled issue with an empty body,
+or the standing empty-body stop), it records a stop flag in the run's
+state dir beside the trigger's recorded state (`no-delta-stop`) — the
+cumulative artefact chain carries it to every later stage job, whose
+Read trigger state step relays it into the job's env like the other
+trigger-state keys; the plan stage checks that flag before its own pi
+call — set, the stage stops cleanly without a pi call (no plan file;
+its own outcome line on the stage-summary channel the report renders as
+skipped, never as "stage complete") — the run that stopped at the
+extraction is not forwarded to the plan stage, and a bug-labelled run
+whose extraction merely skipped (the flag stays absent) proceeds to a
+plan built from the issue itself. The two
 consuming jobs (implement, review) additionally run the target's
 dependency-install step — the command the optional `dependency-install`
 input declares — after each of their checkouts of the AI branch and
@@ -159,11 +181,17 @@ reported with the usage and cost of the pi calls made before the stop, and
 a stage that never ran contributes nothing. The stage outcomes the report
 lists render from the stages' recorded summary lines: a stage that is done
 is reported "stage complete" (its per-step lines stay out of the outcome),
-and a stage that will re-run — the implement stage's per-step
-"step <k>/<n> done" lines recorded without a completion line — is reported
-per step for each of its finished steps. The report stage re-reads the
-PR after editing its body and keeps the pointer comment ("final status is
-in the PR body") only where that completion verified; where it could not
+a stage whose work was intentionally skipped — the extract stage on a
+bug-labelled run, whose skip its bug-skip branch records on this channel,
+or the plan stage on a run whose extraction stopped with no delta, whose
+stop line its no-delta-stop gate records on this channel —
+is listed as skipped, never as "stage complete" (a stage that did no work
+is not a done stage; a completion line it recorded alongside stays out of
+the outcome), and a stage that will re-run — the implement stage's
+per-step "step <k>/<n> done" lines recorded without a completion line —
+is reported per step for each of its finished steps. The report stage
+re-reads the PR after editing its body and keeps the pointer comment
+("final status is in the PR body") only where that completion verified; where it could not
 be applied — the PR was already merged, or the edit was refused on both
 write paths — the issue comment carries the full final status itself, so
 the PR description and the issue comment never disagree on the run's

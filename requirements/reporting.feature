@@ -81,3 +81,10 @@ Feature: Reporting
     When the step runs in that environment
     Then the step's body runs on its local fallback definitions
     And the step completes its report as on the import path
+
+  @report
+  Scenario: A skipped extraction stage is reported as skipped, not as complete
+    Given the run skipped the extraction stage for a bug-labelled issue
+    When the report stage assembles the stage outcomes
+    Then the stage summary lists the extraction stage as skipped
+    And the summary does not report the stage as "stage complete"

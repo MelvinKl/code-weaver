@@ -351,3 +351,92 @@ def test_declared_pi_call_cap_the_job_timeout_cannot_exceed_fails_the_run_at_tri
          "accepts the run — a failed trigger would not keep the stages "
          "skipped")
     _stage_jobs_gate_on_the_trigger()
+
+def test_trigger_records_the_bug_issue_flag():
+    """(scenario "The trigger records whether the issue carries the bug
+    label"; reference
+    `requirements/trigger.feature::The trigger records whether the issue
+    carries the bug label`) when the trigger stage records a run for an
+    issue that carries both the trigger label and the bug label, the
+    run's recorded state carries that the issue is a bug issue: the
+    trigger derives the flag against the resolved bug label (the
+    bug-label input's value — the target's declared value, its "bug"
+    default where the consumer leaves the input undeclared), not a
+    hard-coded one, and records it as a state file in the trigger's
+    state dir — the documented record of the run, every value a file;
+    the state file travels on the trigger's artifact to every later
+    stage job (whose first step downloads the artifact back into its
+    state dir), and the per-job env relay the Read trigger state step
+    feeds from the restored files carries it in-process (the relay line
+    carries the run's trigger-state keys — the bug-issue flag and the
+    extract stage's no-delta stop flag). The trigger's
+    gate stays untouched — the flag is recorded, never gated on: the
+    trigger label (or a manual dispatch) starts a run, and an issue
+    carrying only the bug label still starts no factory."""
+    step = _resolve_step()
+    # the flag is derived against the RESOLVED bug label — the step's
+    # env entry the workflow's bug-label input feeds (Step 1's setting:
+    # a target that declares another value in its with: block has that
+    # value resolve through the documented settings channel)
+    assert "BUG_LABEL: ${{ inputs.bug-label }}" in step, \
+        ("the trigger's resolve step does not bind the resolved bug "
+         "label from the workflow's bug-label input")
+    assert 'grep -qx -- "$BUG_LABEL"' in step, \
+        ("the trigger does not derive the bug-issue flag by comparing "
+         "the issue's labels against the resolved bug label")
+    # the flag is recorded in the run's recorded state — a state file in
+    # the trigger's state dir, written for every accepted run (both
+    # truth values: the run's state carries whether the issue carries
+    # the bug label, "true" and "false" alike)
+    assert ('echo "$BUG_ISSUE" > '
+            '"$RUNNER_TEMP/cw/state/trigger/bug-issue.txt"') in step, \
+        ("the trigger does not record the bug-issue flag as a state "
+         "file in the trigger's state dir")
+    # the state file travels on the trigger's artifact — the upload
+    # covers the whole cw state dir (with the hidden-file opt-in) and
+    # runs always(), so the flag rides it to every later stage job
+    region = _trigger_region()
+    assert "name: cw-trigger" in region, \
+        "the trigger's artifact is not named cw-trigger"
+    assert "path: ${{ runner.temp }}/cw" in region, \
+        ("the trigger's upload does not cover the cw state dir the "
+         "bug-issue flag file lives in")
+    assert "include-hidden-files: true" in region, \
+        "the trigger's upload does not opt into hidden files"
+    # and every later stage job's state dir receives it: each stage
+    # job whose section carries a Read trigger state step (which feeds
+    # the per-job env relay from the restored state files) relays the
+    # key, so the flag reaches the stage's environment in every job
+    # that reads the trigger state
+    lines = _read(".github/workflows/factory.yml").splitlines()
+    job_keys = ("setup-pi", "baseline", "extract", "plan", "implement",
+                "review", "pr", "gates", "report")
+    starts = [i for i, ln in enumerate(lines)
+              if ln.startswith("  ") and not ln.startswith("   ")
+              and ln.strip() in {k + ":" for k in job_keys}]
+    assert len(starts) == len(job_keys), \
+        ("the factory's nine stage jobs are not all found in the "
+         f"workflow file: {len(starts)}")
+    relay = ("for k in started issue-number issue-title base-ref "
+             "base-sha head title base bug-issue no-delta-stop; do")
+    relayed = 0
+    for a, b in zip(starts, starts[1:] + [len(lines)]):
+        name = lines[a].strip()[:-1]
+        section = "\n".join(lines[a:b])
+        if "Read trigger state" in section:
+            relayed += 1
+            assert relay in section, \
+                (f"the {name} job's Read trigger state step does not "
+                 "relay the bug-issue flag into the job's env — the "
+                 "later stage job's state dir receives the flag, but "
+                 "the per-job env channel does not carry it")
+    assert relayed == 8, \
+        (f"the bug-issue flag is relayed by {relayed} of the eight "
+         "stage jobs that read the trigger state")
+    # the gate stays untouched: the flag is a newly recorded value, not
+    # a new gate — the standing trigger gate scenarios keep holding
+    # beside the new one (an issue carrying only the bug label still
+    # starts no factory, the trigger label is the gate)
+    assert "factory idle" in step
+    assert "started.txt" in step
+    assert 'grep -qx -- "$AI_REQUIREMENTS_LABEL"' in step

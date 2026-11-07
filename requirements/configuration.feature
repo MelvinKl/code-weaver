@@ -165,6 +165,12 @@ Feature: Configuration surface
     And a single call stays within the pi call's own time cap
 
   @config
+  Scenario: The bug label is configurable
+    Given the default bug label is "bug"
+    When a target sets the bug label to another value
+    Then a run for an issue that carries the trigger label and that value skips the requirements extraction
+
+  @config
   Scenario: Project files are referenced by path, not injected into the pi call
     Given a stage builds a headless pi invocation with project files available (the arc42 docs, the Gherkin oracle, the README, the test output)
     When the stage passes those files to pi

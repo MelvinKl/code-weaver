@@ -119,6 +119,11 @@ on:
         description: Label whose presence on an issue starts the factory
         type: string
         default: ai-requirements
+      bug-label:
+        description: Label that marks an issue as a bug — a run for an issue that carries the trigger label and this label skips the requirements extraction (the plan is built from the issue itself)
+        type: string
+        required: false
+        default: "bug"
       target-branch:
         description: Base branch the PR is opened against
         type: string
@@ -479,6 +484,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           AI_REQUIREMENTS_LABEL: ${{ inputs.ai-requirements-label }}
+          BUG_LABEL: ${{ inputs.bug-label }}
         run: |
           # the step's full output mirrors into the run's artefact
           # state dir (stage-console.log) — on this runner build the
@@ -567,6 +573,7 @@ jobs:
                 echo "- LLM model (which configured model): \`${{ inputs.llm-model }}\`"
                 echo "- LLM backend: provided for the run (a GitHub secret or the repo file .pi/agent/models.json) — stage 2 writes it for the run"
                 echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
+                echo "- bug label: \`$BUG_LABEL\`"
                 echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
                 echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
                 echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap)"
@@ -611,6 +618,24 @@ jobs:
               echo "ai/code-weaver/$ISSUE" > "$RUNNER_TEMP/cw/state/trigger/head.txt"
               echo "$BASE_REF" > "$RUNNER_TEMP/cw/state/trigger/base.txt"
               echo "🏭 code-weaver: $TITLE" > "$RUNNER_TEMP/cw/state/trigger/title.txt"
+              # the bug-issue flag — the issue's labels compared against
+              # the resolved bug label (the bug-label input's value, its
+              # "bug" default where the consumer leaves the input
+              # undeclared). The flag is recorded in the run's state —
+              # the state files ride the trigger's artifact to every
+              # later stage job, whose Read trigger state step relays
+              # them into the job's env — and it is never gated on:
+              # the trigger label (or a manual dispatch) starts the run,
+              # and an issue carrying only the bug label starts no
+              # factory.
+              ISSUE_LABELS=$(jq -r '.labels[].name' <<<"$ISSUE_JSON")
+              if [ -n "$ISSUE_LABELS" ] && grep -qx -- "$BUG_LABEL" <<<"$ISSUE_LABELS"; then
+                BUG_ISSUE="true"
+              else
+                BUG_ISSUE="false"
+              fi
+              echo "$BUG_ISSUE" > "$RUNNER_TEMP/cw/state/trigger/bug-issue.txt"
+              echo "trigger state: bug-issue=$BUG_ISSUE (the issue's labels against the resolved bug label '$BUG_LABEL') — recorded, never gated on"
               # the trigger's completion marker — the report stage cross-checks
               # the markers (the state dir rides the artefact chain) to tell
               # "a stage ran" from "a stage never ran" (a job the runner's parser
@@ -783,7 +808,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -939,7 +964,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1073,7 +1098,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1207,7 +1232,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1470,7 +1495,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1637,7 +1662,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -2012,7 +2037,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -2211,7 +2236,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done

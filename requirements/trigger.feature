@@ -71,3 +71,10 @@ Feature: Factory trigger
     Then the run reuses the branch "ai/code-weaver/7" without re-cutting or deleting it
     And every stage of the run executes from the branch's current state
     And a fresh cut from the base branch happens only when the issue's AI branch does not exist
+
+  @trigger
+  Scenario: The trigger records whether the issue carries the bug label
+    Given the factory is configured with the trigger label "ai-requirements" and a bug label "bug"
+    When the trigger stage records a run for an issue that carries both labels
+    Then the run's recorded state carries that the issue is a bug issue
+    And every later stage job receives that state through the trigger's artifact

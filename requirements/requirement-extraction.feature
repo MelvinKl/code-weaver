@@ -121,3 +121,27 @@ Feature: Requirement extraction
     Then pi derives the full requirement set from the project's current code, documentation and tests
     And a source the project does not have is skipped rather than failing the extraction
     And the requirements are written as .feature files that create the requirements directory
+
+  @extraction
+  Scenario: A bug-labelled run skips the extraction stage
+    Given the issue carries the trigger label and the bug label
+    When the run reaches the extraction stage
+    Then the extraction stage does not run its derivation — no pi call is made for it
+    And no requirement file is written
+    And the requirement check passes with no requirement file changed
+    And the run proceeds directly to the planning stage
+
+  @extraction
+  Scenario: A run for an issue without the bug label extracts as usual
+    Given the issue carries the trigger label but not the bug label
+    When the run reaches the extraction stage
+    Then the extraction stage runs unchanged
+    And the run's later stages are unaffected by the bug jump's presence
+
+  @extraction
+  Scenario: A bug-labelled issue with an empty body stops cleanly instead of being forwarded
+    Given the issue carries the trigger label and the bug label
+    And the issue body is empty or describes no change
+    When the run reaches the extraction stage
+    Then no requirement file is written
+    And the factory reports "no delta requirements" and stops cleanly

@@ -44,7 +44,12 @@
   with Cucumber's official Gherkin parser and carry at least one Scenario
   (a requirement-free feature is not executable); the trigger-contract
   tests pin the consumer workflow's `labeled`-only trigger and the
-  stage-1 gate verbatim; the stage-contract tests pin the fixed stage
+  stage-1 gate verbatim, and the trigger's recorded bug-issue flag
+  (the state file that rides the trigger's artifact to every later
+  stage job) alongside the extract stage's no-delta-stop flag (the same
+  state-dir channel — recorded where the extraction stops with no
+  delta; the plan stage checks it before its own pi call, stopping
+  cleanly on it); the stage-contract tests pin the fixed stage
   contracts (the two context slices, the extraction guard shape, the
   consumer's owner/ref surface, the pi-generated PR body, the report
   fallback, the validator skip, the loop-cap defaults, the implement

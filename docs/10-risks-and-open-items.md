@@ -78,15 +78,26 @@
   runs and records the issue number and the issue body) are unchanged —
   the outcome now rides the `labeled` event. In run #20 the factory did not
   make that edit: `requirements/` was read-only to every stage (the extract
-  guard then pinned exactly one new file; the implement guard still reverts
-  requirement edits and loops back to planning), so the contradiction was
-  reported, not edited. The placement change lifts the extraction stage's
-  read-only pin, so a follow-up run touching the trigger topic can now make
-  it; until then the oracle stands as #20 reported it. Meanwhile `PLAN.md`
-  §7 already cites the post-change
-  scenario name (the one-file-behind state the review stage is the
-  designated resolver of). The owner's follow-up is the rename + When
-  edit in `requirements/trigger.feature` (a follow-up issue).
+  guard then pinned exactly one new file), so the contradiction was
+  reported, not edited. The placement change since lifted the extraction
+  stage's read-only pin, and the issue-70 run was the first follow-up to
+  touch the trigger topic: its extraction added a scenario to
+  `trigger.feature`, but its delta (the bug-label feature) supersedes no
+  standing scenario, so the extraction's in-place update lane did not
+  engage and the stale scenario stands unchanged — and that run's review
+  stage, judging all nine scenarios of the changed file, marked it
+  UNFULFILLED, as the scenario reads. The implement-stage fixer the run
+  ran could not land the edit from its lane: the implement guard denies
+  the requirements dir (a violation reverted in place by the guard's pi
+  call; the stage is not re-run, no loop back to planning). The
+  contradiction therefore stays reported, not rewritten — the specified
+  rewording now also rides `plans/70.md` as carrying text (it feeds the
+  PR body and the final status report). The oracle edit lands when a
+  run's extraction delta supersedes the scenario (the extraction stage
+  updates a superseded standing scenario in place and reports it; the
+  review stage judges it), or the owner makes the rename + When edit in
+  `requirements/trigger.feature` directly (a follow-up issue). Until
+  then the oracle stands as #20 reported it.
 - **Four standing scenarios superseded by #43 — landed by the issue-69
   run** — the issue-43 delta's header
   (`cost-and-token-usage.feature`) declares four standing

@@ -190,12 +190,19 @@ try:
     # plan is fully tracked). A stage that is done — its lines
     # carry one that says "stage complete" — is reported
     # "stage complete": its per-step lines stay out of the
-    # outcome. A stage that will re-run — per-step lines without
-    # a completion line — is reported per step, "step <k>/<n>
-    # done" for each of its finished steps. Both report surfaces
-    # the report completes (the PR body and the issue comment)
-    # render the same table.
+    # outcome. A stage whose work was intentionally skipped — the
+    # extract stage on a bug-labelled run, whose skip its
+    # bug-skip branch records on this channel (its line's outcome
+    # part begins with "skipped") — is listed as skipped, never as
+    # "stage complete": a stage that did no work is not a done
+    # stage, so a completion line it recorded alongside the skip
+    # stays out of the outcome. A stage that will re-run —
+    # per-step lines without a completion line — is reported per
+    # step, "step <k>/<n> done" for each of its finished steps.
+    # Both report surfaces the report completes (the PR body and
+    # the issue comment) render the same table.
     _per_step = re.compile(r"^step \d+/\d+ done$")
+    _skipped = re.compile(r"^skipped\b")
     _rendered = []
     _group = None
     _glines = []
@@ -203,6 +210,16 @@ try:
         if _group is None:
             # a line not in the "stage …:" form stays as recorded
             _rendered.extend(_glines)
+        elif any(_skipped.match(l.split(": ", 1)[1])
+                 for l in _glines):
+            # a stage whose work was intentionally skipped (the
+            # extract stage on a bug-labelled run): listed as
+            # skipped — the skip is listed, not silently omitted;
+            # a stage that did no work is not a done stage, so a
+            # completion line it recorded alongside the skip is
+            # never rendered "stage complete"
+            _rendered.extend(l for l in _glines
+                            if "stage complete" not in l)
         elif any("stage complete" in l for l in _glines):
             # a stage that is done: reported "stage complete" —
             # the per-step lines it recorded along the way stay

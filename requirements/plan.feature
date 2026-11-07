@@ -79,3 +79,12 @@ Feature: Planning
     Then the plan names the extracted scenarios it must cover
     And the plan's steps are scoped to adjusting the tests to reference those scenarios
     And no plan step implements code
+
+  @plan
+  Scenario: A bug issue is planned from the issue itself without an extracted delta
+    Given the run skipped the extraction stage for a bug-labelled issue
+    And no requirement file changed since the run's baseline
+    When the plan stage builds pi's context
+    Then the instructions name no requirement file as changed
+    And the instructions carry the issue — its number, title and body — as what the plan must cover
+    And the plan is written to plans/N.md like every other issue's plan

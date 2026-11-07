@@ -19,7 +19,33 @@ The pins (one per scenario the fix loop had to fulfil):
   .feature files it writes create the requirements directory; the
   template's first-run clause governs the shape) (requirement-extraction
   "A first-time run without a requirements dir extracts the full
-  requirements" — new);
+  requirements" — new); the entry logic's first branch is the bug-skip
+  branch (checked before the directory branch, read from the trigger's
+  recorded bug-issue flag): a run for an issue that carries the trigger
+  label and the bug label skips the derivation — no pi call, no
+  requirement file written, the requirement check passes with no
+  requirement file changed, the stage records its skip on the
+  stage-summary channel (never as "stage complete"), and the run proceeds
+  directly to the planning stage (the skip records no run-level stop flag
+  — its absence is what lets the plan stage proceed to a plan built from
+  the issue itself) (requirement-extraction "A bug-labelled
+  run skips the extraction stage" — new); a run for an issue without the
+  bug label takes the standing entry logic unchanged (requirement-
+  extraction "A run for an issue without the bug label extracts as usual"
+  — new), and a bug-labelled issue with an empty body reaches the
+  no-delta stop's clean end — no requirement file written, "no delta
+  requirements" reported, the run stops cleanly — instead of being
+  forwarded: the stop records its run-level half, the no-delta-stop flag
+  in the run's state dir (beside the trigger's recorded state — it rides
+  the cumulative artefact chain to every later stage job, and the
+  per-job env relay, like the other trigger-state keys), and the plan
+  stage checks that flag before its own pi call — set, the plan stage
+  stops cleanly without a pi call (no plan file, no prompt assembly — the
+  bug branch's empty-body form, which would plan from the issue title
+  alone, is never reached) and records its own outcome line, which the
+  report renders as skipped, never as "stage complete" (requirement-
+  extraction "A bug-labelled issue with an empty body stops cleanly
+  instead of being forwarded" — new);
 - the extract stage is the `@`-file slice of the context contract —
   setup-pi "pi reads the project files as context"; requirement-extraction
   "requirements are derived from the project itself" — while the other
@@ -116,6 +142,14 @@ The pins (one per scenario the fix loop had to fulfil):
   runs without the dependency-upgrade stage, the run's stages, pull
   request and final status report unchanged by the upgrade's absence
   (configuration "the dependency-upgrade setting is configurable");
+- the factory's bug label rides the same documented settings channel on
+  its declaration side: the reusable workflow declares bug-label on its
+  input surface (a string input, optional — an older consumer's with:
+  block stays schema-valid — default "bug"), the trigger job's env relays
+  the declared value into the stage environment, the trigger's
+  resolved-configuration record lists the resolved value, and a consumer
+  that leaves the input undeclared runs unchanged on the default
+  (configuration "the bug label is configurable");
 - a file list appears in a stage instruction only where the set is the
   instruction's scope (the plan's changed-requirements list, the guard's
   off-limits list in the repair instructions, the implement target's single
@@ -142,6 +176,21 @@ The pins (one per scenario the fix loop had to fulfil):
   clearing fails the stage with the failure report listing the violations,
   and the implement stage's old plan loop-back hook is gone (guard-rail
   "guard repairs are capped", "all three checks share one implementation");
+- the plan stage checks the run's no-delta-stop flag before its prompt
+  assembly — where the run's extraction stopped with no delta, the stage
+  stops cleanly without a pi call (no plan file, its outcome line the
+  report renders as skipped, never as "stage complete"), and the
+  empty-delta branch the skip creates is never assembled; otherwise the
+  plan stage's prompt assembly takes the empty-delta branch the bug
+  skip creates: where the run is a bug issue (the trigger's recorded
+  bug-issue flag) and no requirement file changed since the baseline,
+  the instructions name no requirement file as changed and carry the
+  issue itself — its number, title and body, from the trigger's state
+  files — as what the plan must cover; the plan still lands at one file
+  per issue, the brownfield clause is not attached to this shape (a bug
+  run's delta is empty — no files at all), and a run that is not a bug
+  issue keeps the standing empty form (plan "A bug issue is planned from
+  the issue itself without an extracted delta" — new);
 - the plan-check keeps the plan stage inside its one allowed plan file:
   any other change is reverted by the guard's pi call (the shared remedy)
   and the plan stage re-runs its generation on the guard's cleared-repair
@@ -863,9 +912,13 @@ def test_extract_empty_issue_body_stops_where_requirements_dir_exists():
     applies only where the target has a requirements directory, and
     the scenario's Then outcomes are unchanged: no requirement file is
     written, and the factory reports "no delta requirements" and stops
-    cleanly. No test in the suite cited the scenario before this delta,
-    so the adjusted requirement is pinned by this new test, not by an
-    edit to an older one."""
+    cleanly. The stop also records its run-level half — the no-delta-stop
+    flag in the run's state dir (the plan stage checks it before its own
+    pi call: a run that stopped with no delta is not forwarded to the plan
+    stage, on the standing stop as on the bug-labelled edge). No test in
+    the suite cited the scenario before this delta, so the adjusted
+    requirement is pinned by this new test, not by an edit to an older
+    one."""
     import shutil
     spec = importlib.util.spec_from_file_location(
         "cw_extract_empty_body",
@@ -926,6 +979,485 @@ def test_extract_empty_issue_body_stops_where_requirements_dir_exists():
         summary = os.path.join(rt, "cw", "stage-summary.txt")
         assert "no delta requirements" in open(summary,
                                                encoding="utf-8").read()
+        # the run-level half of the standing stop: it records the same
+        # no-delta-stop flag in the run's state dir as the bug-labelled
+        # edge — a run that stops with no delta is not forwarded to the
+        # plan stage on either side of the bug branch
+        flag = os.path.join(rt, "cw", "state", "trigger",
+                            "no-delta-stop.txt")
+        assert os.path.exists(flag) and \
+            open(flag, encoding="utf-8").read().strip() == "true", \
+            ("the no-delta stop records its run-level flag in the run's "
+             "state dir — the plan stage checks it before its own pi "
+             "call and stops cleanly on it")
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        mod.stages.run_generation_stage = orig
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+
+
+def test_extract_skips_the_stage_for_a_bug_labelled_run():
+    """(requirement-extraction "A bug-labelled run skips the extraction
+    stage"; reference
+    `requirements/requirement-extraction.feature::A bug-labelled run
+    skips the extraction stage`) a run for an issue that carries the
+    trigger label and the bug label does not run the extraction's
+    derivation: the stage's entry logic takes the bug-skip branch
+    (checked before the directory branch) on the trigger's recorded
+    bug-issue flag — no pi call is made for the stage (the usage ledger
+    gains no line from it), no requirement file is written, and the
+    requirement check passes with no requirement file changed: the tree
+    the skip leaves behind is judged against the run's baseline by the
+    shared guard (the machinery the skip does not touch) — the skip
+    touched no file, so the guard's whitelist over the requirements dir
+    is trivially satisfied, it passes with no violation and no repair
+    call; the stage records its skip on the documented stage-summary
+    channel — never as "stage complete", and not as the no-delta stop's
+    report (the stop is the run's clean end, the skip its way through) —
+    and the run proceeds directly to the planning stage: the stage's
+    completion marker rides with the skip line, and the pipeline count is
+    unchanged (the skip is a recorded outcome inside the existing job).
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_extract_bug_skip",
+        os.path.join(ROOT, ".github", "actions", "extract-stage",
+                     "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-extract-bug-skip-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-extract-bug-skip-rt-")
+    # the target project has a requirements directory (the standing delta
+    # shape) — the skip branch precedes the directory branch, so the
+    # skip holds for either side of it
+    os.makedirs(os.path.join(ws, "requirements"))
+    feat = ("Feature: Guard rail\n"
+            "  Scenario: A standing scenario\n"
+            "    Given a\n    When b\n    Then c\n")
+    with open(os.path.join(ws, "requirements", "guard-rail.feature"),
+              "w") as f:
+        f.write(feat)
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n")
+    # the trigger's recorded run state: the issue carries the bug label
+    # (the flag the trigger records for every accepted run) and the issue
+    # body is non-empty — the branch's skip side, not its empty-body edge
+    os.makedirs(os.path.join(rt, "cw", "state", "trigger"))
+    with open(os.path.join(rt, "cw", "state", "trigger",
+                           "bug-issue.txt"), "w") as f:
+        f.write("true")
+    with open(os.path.join(rt, "cw", "issue-body.md"), "w") as f:
+        f.write("the parser crashes on input that ends with a newline\n")
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
+             "DOC_DIR", "MAX_LOOPS")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "REQUIREMENTS_DIR": "requirements",
+        "DOC_DIR": "docs",
+    })
+    # the generation loop the standing entry would run, faked: it must
+    # not be reached — the skip branch returns before it
+    calls = []
+
+    def fake_run_generation_stage(**kw):
+        calls.append(kw)
+    orig = mod.stages.run_generation_stage
+    mod.stages.run_generation_stage = fake_run_generation_stage
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ws)
+    try:
+        mod.main()
+        # the derivation did not run — no pi call is made for the stage:
+        # the usage ledger gains no line from it
+        assert not calls, \
+            ("a bug-labelled run skips the extraction stage — the "
+             "derivation's generation loop does not run")
+        assert not os.path.exists(os.path.join(rt, "cw", "tokens.txt")), \
+            ("no pi call is made for the stage — the usage ledger gains "
+             "no line from it")
+        # no requirement file is written: the oracle is untouched
+        assert open(os.path.join(ws, "requirements",
+                                 "guard-rail.feature")).read() == feat
+        assert [f for f in os.listdir(os.path.join(ws, "requirements"))
+                if f != "guard-rail.feature"] == [], \
+            "no requirement file is written"
+        # the requirement check passes with no requirement file changed:
+        # the tree the skip leaves behind is judged against the run's
+        # baseline by the shared guard (the machinery the skip does not
+        # touch) — the skip touched no file, so the guard's whitelist over
+        # the requirements dir is trivially satisfied: it passes with no
+        # violation and no repair call
+        ws_fake = _FakeRepo(ws)
+        _FAKE_REPOS[os.path.realpath(ws)] = ws_fake
+        ws_fake.exec(["init", "-q"])
+        ws_fake.exec(["add", "-A"])
+        ws_fake.exec(["commit", "-q", "-m", "baseline"])
+        baseline = ws_fake.exec(["rev-parse", "HEAD"]).stdout.strip()
+        assert baseline, "the sandbox's fake baseline commit failed"
+        with open(os.path.join(rt, "cw", "baseline.sha"), "w") as f:
+            f.write(baseline)
+        restore_git = _patch_git_exec()
+        try:
+            r = mod.common.guard(
+                baseline, [mod.common.env_dir("REQUIREMENTS_DIR")])
+        finally:
+            restore_git()
+        assert r.ok and not r.violations, \
+            ("the requirement check passes with no requirement file "
+             f"changed (the guard is trivially satisfied): {r!r}")
+        # the stage records its skip on the documented stage-summary
+        # channel — never as "stage complete", and not as the no-delta
+        # stop's report
+        summary = os.path.join(rt, "cw", "stage-summary.txt")
+        text = open(summary, encoding="utf-8").read()
+        assert "stage 4-5 requirement extraction: skipped" in text, text
+        assert "stage complete" not in text, \
+            ("a skipped extraction stage is recorded as skipped — "
+             f"never as 'stage complete': {text!r}")
+        assert "no delta requirements" not in text, \
+            f"the skip is not the no-delta stop's clean end: {text!r}"
+        # the run proceeds directly to the planning stage: the skip
+        # completes the stage's work — its completion marker rides with
+        # the skip line, and the pipeline proceeds on it
+        assert os.path.exists(
+            os.path.join(rt, "cw", "artifacts", "cw-extract.txt")), \
+            ("the stage's completion marker rides with the skip line — "
+             "the run proceeds directly to the planning stage")
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        mod.stages.run_generation_stage = orig
+        _FAKE_REPOS.pop(os.path.realpath(ws), None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+
+
+def test_extract_runs_unchanged_for_an_issue_without_the_bug_label():
+    """(requirement-extraction "A run for an issue without the bug label
+    extracts as usual"; reference
+    `requirements/requirement-extraction.feature::A run for an issue
+    without the bug label extracts as usual`) a run for an issue that
+    carries the trigger label but not the bug label takes the standing
+    entry logic, not the bug-skip branch: the extraction runs unchanged —
+    its generation loop with the standing delta behaviour (the @-file
+    context slice, the oracle reached as its directory on demand, the
+    requirement check the loop's guard performs, the completion line and
+    marker the loop records) — and the run's later stages are unaffected
+    by the bug jump's presence: the trigger state the later stage jobs
+    read is untouched by the stage (the flag is recorded, not consumed),
+    and the stage's summary records neither a skip nor a no-delta stop
+    for a run that proceeds on the standing path.
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_extract_non_bug",
+        os.path.join(ROOT, ".github", "actions", "extract-stage",
+                     "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-extract-non-bug-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-extract-non-bug-rt-")
+    os.makedirs(os.path.join(ws, "requirements"))
+    feat = ("Feature: Guard rail\n"
+            "  Scenario: A standing scenario\n"
+            "    Given a\n    When b\n    Then c\n")
+    with open(os.path.join(ws, "requirements", "guard-rail.feature"),
+              "w") as f:
+        f.write(feat)
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n")
+    # the trigger's recorded run state: the issue does NOT carry the bug
+    # label (the flag the trigger records for every accepted run) and the
+    # issue body is non-empty — the standing delta case
+    os.makedirs(os.path.join(rt, "cw", "state", "trigger"))
+    with open(os.path.join(rt, "cw", "state", "trigger",
+                           "bug-issue.txt"), "w") as f:
+        f.write("false")
+    with open(os.path.join(rt, "cw", "issue-body.md"), "w") as f:
+        f.write("the parser crashes on input that ends with a newline\n")
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
+             "DOC_DIR", "MAX_LOOPS")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "REQUIREMENTS_DIR": "requirements",
+        "DOC_DIR": "docs",
+    })
+    # the generation loop the standing entry runs, faked: it records the
+    # call (and materialises the prompt file the loop builds)
+    calls = []
+
+    def fake_run_generation_stage(**kw):
+        calls.append(kw)
+        if callable(kw.get("prompt_file")):
+            kw["prompt_file"]()
+    orig = mod.stages.run_generation_stage
+    mod.stages.run_generation_stage = fake_run_generation_stage
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ws)
+    try:
+        mod.main()
+        # the extraction stage runs unchanged — the bug-skip branch does
+        # not fire for a run whose flag is false: the standing entry logic
+        # reaches its generation loop
+        assert calls, \
+            ("a run for an issue without the bug label extracts as usual "
+             "— the standing entry logic reaches its generation loop")
+        kw = calls[0]
+        assert kw["template"] == "requirements"
+        assert kw["allow"] == ["requirements"], \
+            ("the extract guard's allow set is unchanged (the "
+             "requirements dir)")
+        assert kw["context_as_args"] is True, \
+            ("the extract call keeps the @-file slice of the context "
+             "contract")
+        assert kw["post_ok"] is not None, \
+            ("the loop's requirement check (the stage-5 half) is "
+             "unchanged")
+        assert kw["artifact"] == "cw-extract"
+        # the prompt is built the standing way: the issue's header and
+        # body, no first-run marker
+        prompt = open(os.path.join(rt, "cw", "issue-prompt.md"),
+                      encoding="utf-8").read()
+        assert "GitHub issue" in prompt, prompt
+        assert ("the parser crashes on input that ends with a newline"
+                in prompt), prompt
+        assert ("first run on a target without a requirements "
+                "directory" not in prompt), prompt
+        # the oracle is not expanded into the @-file slice — pi reads the
+        # files it judges relevant from the directory on demand
+        for c in kw["context"]:
+            assert os.path.isfile(os.path.join(ws, c)), \
+                (f"every @-file argument of the extract call is a file "
+                 f"that exists — a directory is never an @-argument: {c!r}")
+            assert not c.startswith("requirements"), \
+                f"the oracle is not expanded into the @-file slice: {c!r}"
+        assert "README.md" in kw["context"], \
+            f"the standing context is assembled unchanged: {kw['context']!r}"
+        # the trigger state the later stage jobs ride is untouched by the
+        # stage — the flag is recorded, not consumed: the later stages are
+        # unaffected by the bug jump's presence
+        assert open(os.path.join(rt, "cw", "state", "trigger",
+                                 "bug-issue.txt")).read().strip() == "false"
+        # the stage's summary records neither a skip nor a no-delta stop
+        # for a run that proceeds on the standing path
+        summary = os.path.join(rt, "cw", "stage-summary.txt")
+        text = open(summary, encoding="utf-8").read() \
+            if os.path.exists(summary) else ""
+        assert ("skipped" not in text
+                and "no delta requirements" not in text), \
+            (f"the bug jump's branches do not fire for a non-bug run: "
+             f"{text!r}")
+        # the faked loop writes no work: the oracle is untouched
+        assert open(os.path.join(ws, "requirements",
+                                 "guard-rail.feature")).read() == feat
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        mod.stages.run_generation_stage = orig
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+
+
+def test_extract_bug_labelled_empty_body_stops_cleanly():
+    """(requirement-extraction "A bug-labelled issue with an empty body
+    stops cleanly instead of being forwarded"; reference
+    `requirements/requirement-extraction.feature::A bug-labelled issue
+    with an empty body stops cleanly instead of being forwarded`) the
+    bug-skip branch's empty-body edge: a bug-labelled issue whose body is
+    empty or describes no change reaches the standing empty-body stop's
+    identical observable outcome — no requirement file is written, the
+    factory reports "no delta requirements", the run stops cleanly — by
+    the skip instead of by the extraction running and writing nothing
+    (both reach the same Then; the standing run reaches it by the
+    extraction running and writing nothing, the bug-labelled run by the
+    skip); the stage stops before its generation loop — the run is not
+    forwarded to the plan stage — its summary line carries the no-delta
+    report (the stop's shape, distinct from the skip's "skipped" line,
+    which is the run's way through), and its completion marker rides with
+    the line as on the standing stop. The "instead of being forwarded"
+    half is a run-level signal, not a stage-local one: the stop records
+    the no-delta-stop flag in the run's state dir (beside the trigger's
+    recorded state — it rides the cumulative artefact chain to every
+    later stage job, and the per-job env relay, like the other
+    trigger-state keys), and the plan stage checks that flag before its
+    own pi call: set, the plan stage stops cleanly without a pi call —
+    no plan file is written, and no prompt is assembled (the bug
+    branch's empty-body form, which would plan from the issue title
+    alone, is never reached) — and records its own outcome line on the
+    stage-summary channel, which the report renders as skipped, never as
+    "stage complete". The sandbox drives both halves: the extract
+    stage's entry on the bug-labelled empty-body run, then the plan
+    stage's entry on the state the extract stage left behind.
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_extract_bug_empty_body",
+        os.path.join(ROOT, ".github", "actions", "extract-stage",
+                     "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-extract-bug-empty-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-extract-bug-empty-rt-")
+    # the target project HAS a requirements directory — the stop applies
+    # on either side of the directory branch, which the skip branch
+    # precedes
+    os.makedirs(os.path.join(ws, "requirements"))
+    feat = ("Feature: Guard rail\n"
+            "  Scenario: A standing scenario\n"
+            "    Given a\n    When b\n    Then c\n")
+    with open(os.path.join(ws, "requirements", "guard-rail.feature"),
+              "w") as f:
+        f.write(feat)
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# the project\n")
+    # the trigger's recorded run state: the issue carries the bug label
+    # and the issue body is empty
+    os.makedirs(os.path.join(rt, "cw", "state", "trigger"))
+    for k, v in (("started", "true"), ("issue-number", "70"),
+                ("issue-title", "the parser crashes on newline input"),
+                ("bug-issue", "true")):
+        with open(os.path.join(rt, "cw", "state", "trigger",
+                               f"{k}.txt"), "w") as f:
+            f.write(v)
+    with open(os.path.join(rt, "cw", "issue-body.md"), "w") as f:
+        f.write("")
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
+             "DOC_DIR", "MAX_LOOPS")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "REQUIREMENTS_DIR": "requirements",
+        "DOC_DIR": "docs",
+    })
+    calls = []
+
+    def fake_run_generation_stage(**kw):
+        calls.append(kw)
+    orig = mod.stages.run_generation_stage
+    mod.stages.run_generation_stage = fake_run_generation_stage
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ws)
+    try:
+        mod.main()
+        # the stage stops before its generation loop — the run is not
+        # forwarded to the plan stage
+        assert not calls, \
+            ("a bug-labelled issue with an empty body stops cleanly "
+             "instead of being forwarded — the stage stops before its "
+             "generation loop")
+        # no requirement file is written: the oracle is untouched
+        assert open(os.path.join(ws, "requirements",
+                                 "guard-rail.feature")).read() == feat
+        assert [f for f in os.listdir(os.path.join(ws, "requirements"))
+                if f != "guard-rail.feature"] == [], \
+            "no requirement file is written"
+        # the factory reports "no delta requirements" and stops cleanly —
+        # the stop's shape, distinct from the skip's "skipped" line (the
+        # skip is the run's way through, the stop its clean end)
+        summary = os.path.join(rt, "cw", "stage-summary.txt")
+        text = open(summary, encoding="utf-8").read()
+        assert "no delta requirements" in text, text
+        assert "skipped" not in text, \
+            f"the empty-body stop is not the skip's way-through: {text!r}"
+        # the clean stop completes the stage's work: its completion marker
+        # rides with the line (the report cross-checks both to tell "the
+        # stage ran" from "the stage never ran")
+        assert os.path.exists(
+            os.path.join(rt, "cw", "artifacts", "cw-extract.txt")), \
+            ("the stop's completion marker rides with the line, as on "
+             "the standing empty-body stop")
+        # the run-level half of the stop: the flag the stage records in
+        # the run's state dir, beside the trigger's recorded state — it
+        # rides the cumulative artefact chain to every later stage job
+        # (every upload covers the whole state dir), and the per-job env
+        # relay, like the other trigger-state keys
+        flag = os.path.join(rt, "cw", "state", "trigger",
+                            "no-delta-stop.txt")
+        assert os.path.exists(flag) and \
+            open(flag, encoding="utf-8").read().strip() == "true", \
+            ("the no-delta stop records its run-level flag in the run's "
+             "state dir — the signal the later stage jobs' env relay and "
+             "the plan stage's stop check read")
+        # and the plan stage checks that flag before its own pi call:
+        # driven on the state the extract stage left behind, it stops
+        # cleanly — no pi call, no plan file, its own outcome line (the
+        # report renders it as skipped, never as "stage complete"): the
+        # run is not forwarded to the plan stage
+        spec2 = importlib.util.spec_from_file_location(
+            "cw_plan_bug_empty_body",
+            os.path.join(ROOT, ".github", "actions", "plan-stage",
+                         "stage.py"))
+        mod_plan = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(mod_plan)
+        plan_calls = []
+
+        def fake_plan_run_generation_stage(**kw):
+            plan_calls.append(kw)
+        orig_plan = mod_plan.stages.run_generation_stage
+        mod_plan.stages.run_generation_stage = fake_plan_run_generation_stage
+        try:
+            mod_plan.main()
+        finally:
+            mod_plan.stages.run_generation_stage = orig_plan
+        assert not plan_calls, \
+            ("the plan stage stops on the run's no-delta stop flag "
+             "before its generation loop — the run is not forwarded to "
+             "the plan stage: no pi call is made for it")
+        # no plan file is written (and no prompt assembled — the bug
+        # branch's empty-body form, which would plan from the issue
+        # title alone, is never reached)
+        assert not os.path.exists(
+            os.path.join(ws, "plans", "70.md")), \
+            "no plan file is written — the plan stage stopped before it"
+        # the plan stage's own outcome line on the stage-summary channel
+        # — rendered by the report as skipped, never as "stage complete"
+        text = open(os.path.join(rt, "cw", "stage-summary.txt"),
+                    encoding="utf-8").read()
+        plan_lines = [l for l in text.splitlines()
+                      if l.startswith("stage 6 planning:")]
+        assert plan_lines, \
+            f"the plan stage records its own outcome line: {text!r}"
+        assert all("stage complete" not in l for l in plan_lines), \
+            ("the plan stage that stopped on the no-delta signal is never "
+             f"reported 'stage complete': {plan_lines!r}")
+        assert any(l.split(": ", 1)[1].startswith("skipped")
+                   for l in plan_lines), \
+            ("the plan stage's stop line is the report's skipped "
+             f"rendering case: {plan_lines!r}")
+        # the stop completes the stage's work: its completion marker rides
+        # with the line, as on the extract stage's clean stops
+        assert os.path.exists(
+            os.path.join(rt, "cw", "artifacts", "cw-plan.txt")), \
+            ("the plan stage's completion marker rides with its stop "
+             "line, as on the extract stage's clean stops")
     finally:
         os.chdir(cwd)
         sys.excepthook = hook
@@ -1251,6 +1783,159 @@ def test_plan_target_attaches_brownfield_scope_to_an_all_new_delta():
         prompt2 = open(pf2, encoding="utf-8").read()
         assert "## The requirement delta (your task's input)" in prompt2
         assert "requirements/overview.feature" in prompt2, prompt2
+        assert "## The run's delta is the brownfield shape" not in prompt2
+    finally:
+        os.chdir(cwd)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+        restore_git()
+        _FAKE_REPOS.pop(ws_key, None)
+
+
+def test_planner_builds_a_bug_issue_from_the_issue_itself():
+    """(plan "A bug issue is planned from the issue itself without an
+    extracted delta"; reference
+    `requirements/plan.feature::A bug issue is planned from the issue
+    itself without an extracted delta`) where a run skipped the
+    extraction stage for a bug-labelled issue and no requirement file
+    changed since the run's baseline, the plan stage's prompt assembly
+    takes the empty-delta branch the skip creates: the instructions
+    name no requirement file as changed and carry the issue itself —
+    its number, title and body — as what the plan must cover. The
+    issue data rides the trigger's state files (the issue's number and
+    title from the trigger's state dir, the body from the state file the
+    extract stage reads) — the documented authoritative channel, relayed
+    to every stage job through the trigger's artifact. The plan is
+    written to plans/N.md like every other issue's plan, and the
+    brownfield clause is not attached to this shape — a bug run's delta
+    is empty (no files at all), unlike the brownfield shape where every
+    changed file is *new*; a run that is not a bug issue keeps the
+    standing empty form (asserted in the same sandbox below). The
+    standing delta-carrying form stays unchanged for a run whose delta
+    is not empty — its test pins it.
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_plan_bug_issue",
+        os.path.join(ROOT, ".github", "actions", "plan-stage", "stage.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-plan-bug-issue-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-plan-bug-issue-rt-")
+    # the target project: a requirements directory the baseline knows
+    # (the standing delta shape) — the run's extraction was skipped for
+    # it (a bug-labelled issue), so the tree never moved from the
+    # baseline: no requirement file is part of the run's delta
+    os.makedirs(os.path.join(ws, "requirements"))
+    with open(os.path.join(ws, "requirements", "guard-rail.feature"),
+              "w") as f:
+        f.write("Feature: Guard rail\n"
+                "  Scenario: A standing scenario\n"
+                "    Given a\n    When b\n    Then c\n")
+    with open(os.path.join(ws, "requirements", "plan.feature"), "w") as f:
+        f.write("Feature: Planning\n"
+                "  Scenario: A standing planning scenario\n"
+                "    Given a\n    When b\n    Then c\n")
+    os.makedirs(os.path.join(ws, "docs"))
+    with open(os.path.join(ws, "docs", "01-introduction.md"), "w") as f:
+        f.write("# 1. Introduction\n\nThe project.\n")
+    with open(os.path.join(ws, "README.md"), "w") as f:
+        f.write("# code-weaver\n\nThe factory.\n")
+    # the sandbox's fake model stands in for the git binary: the factory's
+    # single git entry point is mocked, so no git process is spawned
+    fake = _FakeRepo(ws)
+    ws_key = os.path.realpath(ws)
+    _FAKE_REPOS[ws_key] = fake
+    restore_git = _patch_git_exec()
+    fake.exec(["init", "-q"])
+    fake.exec(["add", "-A"])
+    fake.exec(["commit", "-qm", "baseline"])
+    # the baseline stage's state: the baseline ref recorded for the run
+    os.makedirs(os.path.join(rt, "cw"), exist_ok=True)
+    with open(os.path.join(rt, "cw", "baseline.sha"), "w") as f:
+        f.write(fake.exec(["rev-parse", "HEAD"]).stdout.strip() + "\n")
+    # the trigger's recorded run state (the artifact channel the plan
+    # stage job reads): the issue carries the bug label — the flag the
+    # trigger records — alongside the issue's number, title and body
+    os.makedirs(os.path.join(rt, "cw", "state", "trigger"))
+    for k, v in (("started", "true"), ("issue-number", "70"),
+                 ("issue-title",
+                  "the parser crashes on newline-terminated input"),
+                 ("bug-issue", "true")):
+        with open(os.path.join(rt, "cw", "state", "trigger",
+                               f"{k}.txt"), "w") as f:
+            f.write(v)
+    with open(os.path.join(rt, "cw", "issue-body.md"), "w") as f:
+        f.write("The parser segfaults when the input ends with a trailing "
+                "newline — reproduces on every run.\n")
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "REQUIREMENTS_DIR",
+             "DOC_DIR", "PLAN_DIR", "CW_BUG_ISSUE", "CW_ISSUE_TITLE",
+             "CW_ISSUE_NUMBER", "BASELINE_REF")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "REQUIREMENTS_DIR": "requirements",
+        "DOC_DIR": "docs",
+        "PLAN_DIR": "plans",
+    })
+    cwd = os.getcwd()
+    os.chdir(ws)
+    try:
+        pf = mod.build_target("70", "plans")
+        prompt = open(pf, encoding="utf-8").read()
+        # the plan lands at plans/N.md like every other issue's plan
+        assert "plans/70.md" in prompt, prompt
+        # the delta section names no requirement file as changed — the
+        # extraction was skipped, so no requirement file changed since
+        # the baseline
+        assert "## The requirement delta (your task's input)" in prompt
+        assert ("No requirement files changed since the run's "
+                "baseline" in prompt), prompt
+        assert "skipped the requirements extraction" in prompt, prompt
+        assert "The following requirement files changed" not in prompt, \
+            prompt
+        assert "requirements/guard-rail.feature" not in prompt, prompt
+        assert "requirements/plan.feature" not in prompt, prompt
+        # the instructions carry the issue itself — its number, title
+        # and body — as what the plan must cover
+        assert "## The plan must cover the issue itself" in prompt, prompt
+        assert "#70" in prompt, prompt
+        assert "the parser crashes on newline-terminated input" in prompt, \
+            prompt
+        assert ("The parser segfaults when the input ends with a "
+                "trailing newline" in prompt), prompt
+        # the issue data rides the trigger's state files — the
+        # documented authoritative channel for the issue's number and
+        # title (the body rides the state file the extract stage reads)
+        source = _read(".github/actions/plan-stage/stage.py")
+        assert 'cw_state("bug-issue")' in source, source
+        assert 'cw_state("issue-title")' in source, source
+        assert 'state_file("issue-body.md")' in source, source
+        # the brownfield clause is not attached to this shape — a bug
+        # run's delta is empty (no files at all), unlike the brownfield
+        # shape where every changed file is *new*
+        assert "## The run's delta is the brownfield shape" not in prompt, \
+            prompt
+        # a run that is not a bug issue keeps the standing empty form —
+        # the branch keys on the trigger's recorded flag, and the
+        # standing instructions are unchanged for a non-bug run
+        with open(os.path.join(rt, "cw", "state", "trigger",
+                               "bug-issue.txt"), "w") as f:
+            f.write("false")
+        pf2 = mod.build_target("71", "plans")
+        prompt2 = open(pf2, encoding="utf-8").read()
+        assert "## The plan must cover the issue itself" not in prompt2, \
+            prompt2
+        assert ("No requirement files changed since the run's baseline "
+                "— there is no delta to plan." in prompt2), prompt2
         assert "## The run's delta is the brownfield shape" not in prompt2
     finally:
         os.chdir(cwd)
@@ -2526,6 +3211,97 @@ def test_report_renders_stage_outcomes_per_step_and_stage_complete():
         assert "stage 4 extract: clean — stage complete" in surface, surface
 
 
+def test_report_lists_a_skipped_extraction_stage_as_skipped():
+    """(reporting "A skipped extraction stage is reported as skipped,
+    not as complete"; reference
+    `requirements/reporting.feature::A skipped extraction stage is
+    reported as skipped, not as complete`) a run for a bug-labelled
+    issue skipped the extraction stage — the extract stage recorded
+    its skip on the stage-summary channel (the bug-skip branch: no pi
+    call, no requirement file written). The report stage's
+    stage-outcome assembly lists a stage whose work was intentionally
+    skipped as skipped — the skip is listed, not silently omitted —
+    and a stage that did no work is not a done stage: the summary
+    never reports the skipped stage as "stage complete" (the third
+    rendering case alongside the two standing ones — a stage that is
+    done is reported "stage complete", a stage that will re-run is
+    reported per step). The skipped stage made no pi call and
+    contributes nothing to the usage ledger, so the run's usage/cost
+    totals are assembled as on a run where the stage made no call:
+    the ledger's lines are the calls of the stages that ran, and both
+    report surfaces carry the same numbers."""
+    # the run's merged stage summary: the extract stage's recorded
+    # line is the skip (the bug-skip branch's line), the other stages
+    # the run reached record their standing outcomes
+    stage_summary = (
+        "stage 2 setup-pi: verified — backend test, model "
+        "Ornith-1.5-35B-A3B\n"
+        "stage 3 baseline: branch ai/code-weaver/42 at "
+        "0123456789abcdef0123456789abcdef01234567\n"
+        "stage 4-5 requirement extraction: skipped "
+        "(bug-labelled issue — no pi call, no requirement file "
+        "written)\n"
+        "stage 6 planning: clean — stage complete\n"
+        "stage 12 pr: PR #7 open — https://gh.example/pr/7\n")
+    # the run made pi calls in the stages that ran — the extract
+    # stage made none (it skipped), so the ledger carries no line
+    # from it; the totals are assembled as on a run where the stage
+    # made no call
+    r_in, r_out = 0.10, 0.20
+    pr_body, comment, _closed = _run_report_action(
+        ledger=["10000 2000", "5000 1500"],
+        models_config=_models_config(r_in, r_out),
+        stage_summary=stage_summary)
+    for surface in (pr_body, comment):
+        assert "### Stage outcomes" in surface, surface
+        # the stage summary lists the extraction stage as skipped
+        assert ("stage 4-5 requirement extraction: skipped "
+                "(bug-labelled issue — no pi call, no requirement "
+                "file written)") in surface, \
+            (f"a skipped extraction stage is listed as skipped: "
+             f"{surface!r}")
+        # the summary does not report the stage as "stage complete"
+        # — a stage that did no work is not a done stage: the one
+        # extraction line the table lists is the skip line
+        assert surface.count("stage 4-5 requirement extraction") == 1, \
+            ("the stage summary lists the extraction stage once — as "
+             f"skipped, never as 'stage complete': {surface!r}")
+        # the standing rendering cases hold beside the skip: the plan
+        # stage that is done is reported with its completion line
+        assert "stage 6 planning: clean — stage complete" in surface, \
+            f"a done stage is still reported 'stage complete': {surface!r}"
+        # the usage/cost totals assemble as on a run where the
+        # skipped stage made no call — the ledger holds the calls of
+        # the stages that ran
+        for line in ("- **Total input tokens:** 15000",
+                     "- **Total output tokens:** 3500",
+                     f"- **Total cost:** "
+                     f"${(15000 * r_in + 3500 * r_out) / 1e6:.4f} "
+                     f"(model `Ornith-1.5-35B-A3B` @ "
+                     f"${r_in:.2f}/M input, ${r_out:.2f}/M output — "
+                     f"rates from the repo file .pi/agent/models.json)"):
+            assert line in surface, \
+                ("the usage/cost totals assemble as on a run where the "
+                 f"skipped stage made no call: {surface!r}")
+    # the precedence the case pins: a completion line recorded for
+    # the same skipped stage stays out of the outcome — the summary
+    # lists the stage as skipped and never as "stage complete"
+    pr_body, comment, _closed = _run_report_action(
+        stage_summary=("stage 4-5 requirement extraction: skipped "
+                       "(bug-labelled issue — no pi call, no "
+                       "requirement file written)\n"
+                       "stage 4-5 requirement extraction: clean — "
+                       "stage complete\n"))
+    for surface in (pr_body, comment):
+        assert ("stage 4-5 requirement extraction: skipped "
+                "(bug-labelled issue — no pi call, no requirement "
+                "file written)") in surface, \
+            f"the skip is listed, not silently omitted: {surface!r}"
+        assert "stage complete" not in surface, \
+            ("a skipped stage is never reported 'stage complete' — "
+             f"even where a completion line rides alongside: {surface!r}")
+
+
 def test_validator_skips_when_parser_port_absent():
     """(test-and-review "the suite runs on an interpreter without
     pytest"; reference
@@ -3251,6 +4027,72 @@ def test_dependency_upgrade_setting_is_configurable():
                 "for the on default")
     assert any("on by default" in ln for ln in on), \
         "the on-value line does not state the setting's on default"
+
+
+def test_bug_label_is_configurable():
+    """(configuration "The bug label is configurable"; reference
+    `requirements/configuration.feature::The bug label is configurable`)
+    the bug label's configuration half rides the documented settings
+    channel on the workflow-file side: the reusable workflow declares
+    bug-label on its input surface — a string input, optional (an older
+    consumer's with: block stays schema-valid), default "bug" — a target
+    that sets the bug label to another value in its consumer with: block
+    has the value resolve through the same channel every setting rides:
+    the job-env relay into the stage environment (the trigger job's env
+    carries it — stage 1 is the job that reads the resolved value to
+    record the run's state) and the resolved-configuration record that
+    stays in the workflow log, never committed to the repo; a consumer
+    that leaves the input undeclared runs unchanged on the default — this
+    repo's own consumer workflow (the dogfood) declares no bug-label of
+    its own. The scenario's end-to-end Then — a run for an issue that
+    carries the trigger label and the value skips the requirements
+    extraction — closes through the steps where the trigger and the
+    extract stage read the resolved value."""
+    factory = _read(".github/workflows/factory.yml")
+    # the input surface declares the setting with its "bug" default — a
+    # string input, optional (an older consumer's with: block stays
+    # schema-valid)
+    assert _workflow_input_default(factory, "bug-label") == "bug", \
+        'the default bug label is not "bug"'
+    entry = _workflow_input_entry(factory, "bug-label")
+    assert "type: string" in entry, \
+        "the bug-label input is not a string input"
+    assert "required: false" in entry, \
+        "the bug-label input must be optional — an older " \
+        "consumer's with: block stays schema-valid"
+    # the job-env relay: the target-declared value resolves into the
+    # trigger job's env — the stage-1 job that reads the resolved value
+    # to record the run's state
+    trig = factory[factory.index("  trigger:"):factory.index("  setup-pi:")]
+    assert "BUG_LABEL: ${{ inputs.bug-label }}" in trig, \
+        ("the trigger job's env does not relay the bug label from the "
+         "reusable workflow's bug-label input")
+    # the resolved-configuration record lists the setting — the block is
+    # the trigger's `{ … } | tee` group that writes the audit file
+    heading = trig.index('echo "### Code Weaver — resolved configuration')
+    assert heading != -1, "the trigger lost its resolved-config heading"
+    start = trig.rfind("{", 0, heading)
+    assert start != -1, \
+        "the resolved-config group lost its opening brace"
+    end = trig.find('} | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"',
+                    heading)
+    assert end != -1, "the resolved-config group lost its `} | tee` close"
+    block = trig[start:end]
+    # a target-declared value (the "bug" default where the consumer
+    # leaves the input undeclared) is listed with the rest of the
+    # resolved configuration
+    assert any("bug label" in ln and "BUG_LABEL" in ln
+               for ln in block.splitlines()), \
+        ("the resolved-configuration record does not list the bug "
+         "label's resolved value")
+    # a consumer that leaves the input undeclared runs unchanged on the
+    # default: the consumer workflow gains no line (this repo's own
+    # consumer workflow — the dogfood — declares no bug-label of its
+    # own)
+    consumer = _read(".github/workflows/code-weaver.yml")
+    assert "bug-label" not in consumer, \
+        "the consumer workflow gains no bug-label line — a consumer " \
+        "that leaves the input undeclared runs unchanged on the default"
 
 
 def test_implement_guard_protects_requirements_and_other_plans():
