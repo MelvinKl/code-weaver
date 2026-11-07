@@ -65,7 +65,12 @@ push whose changed files are confined to the consumer workflow publishes
 no release (no tag, no release, no number spent — the version it would
 have carried is unchanged: a version is the factory workflow and its
 runtime tree as one published version, never the consumer's own
-workflow file). The published file is plain text within the max
+workflow file). The check runs twice with the same predicate: once from
+the push event's metadata as the pre-publish step, and once —
+payload-independent, because a run's event metadata is not a contract —
+inside the Publish step over the committed tree's range-base → HEAD
+diff, so a number is spent only where a published version's content
+actually changed. The published file is plain text within the max
 allowed size for it — at most 500kb; a version whose file exceeds the
 cap is not consistent. The workflow at a ref is self-contained — its
 stage steps are inlined in the file, which stores no binary content —

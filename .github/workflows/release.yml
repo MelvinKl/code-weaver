@@ -33,7 +33,12 @@
 # skip cannot be the exit itself; the output is what keeps the Publish
 # step from running — no number materialised, no tag created, no
 # release published, no number spent on a version whose content did
-# not change. The trigger still fires on every main
+# not change. The Publish step itself carries the same predicate as a
+# payload-independent backstop — a run's event metadata is not a
+# contract, so the publish re-asks the helper over the committed
+# tree's range-base → HEAD diff and a version whose diff from its
+# predecessor is confined to that file publishes nothing there either.
+# The trigger still fires on every main
 # advance — the skip is the no-op discipline above applied to a push
 # that changes nothing a version carries.
 #
@@ -228,6 +233,22 @@ jobs:
           # checkout above makes it the real first commit (a shallow
           # fetch would report HEAD itself).
           RANGEFROM=${PREV:-$(git rev-list --max-parents=0 HEAD)}
+          # The #79 contract, payload-independent: the pre-publish
+          # skip reads the push event's metadata, which a run is not
+          # bound to hand over as the helper expects — a payload that
+          # skip did not read as consumer-only must not spend a number
+          # where a published version's content did not change. The
+          # same changed-files predicate, asked over the committed
+          # tree (this advance's range base → HEAD): confined to the
+          # consumer's own workflow file, the version is unchanged
+          # and the step exits before the tag — no number materialised,
+          # no tag created, no release published, no number spent
+          CONSUMER_ONLY=$(git diff --name-only "$RANGEFROM" HEAD \
+            | python3 .github/scripts/release-number.py --changed-files)
+          if [ -n "$CONSUMER_ONLY" ]; then
+            echo "the range ${RANGEFROM}..HEAD changes only $CONSUMER_ONLY — a published version is the factory workflow and its runtime tree as one published version, never the consumer's own workflow file: no release is published and no number is spent"
+            exit 0
+          fi
           # The notes' changelog is a table with one row per commit in
           # the branch since the range base — the whole range, no
           # pathspec subset of it: a push that changes files elsewhere

@@ -20,8 +20,11 @@ release takes the next increasing number" — the next-number
 computation itself, unit-tested against the helper; "The release flow
 no longer carries the semver scheme"; "A push that changes only the
 consumer workflow publishes no release" — the issue-#79 delta: the
-helper's changed-files skip shape unit-tested, and the workflow's
-dedicated pre-publish step pinned line-based; "The release notes name
+helper's changed-files skip shape unit-tested, the workflow's
+dedicated pre-publish step pinned line-based, and the Publish step's
+payload-independent backstop pinned (the same predicate asked over the
+committed tree — a run's event metadata is not a contract); "The
+release notes name
 the changes since the previous release" — the notes' range base is the
 predecessor release's tag restricted to the numbered series, the notes
 reference it (the first-commit fallback only where no predecessor
@@ -593,6 +596,35 @@ def test_workflow_runs_the_changed_files_check_as_a_pre_publish_step():
     assert skip_exit < tag, (
         "the step's skip exit comes after the tag — a skipped push must "
         "exit before any tag is created")
+
+
+def test_publish_step_carries_the_payload_independent_backstop():
+    """(scenario "A push that changes only the consumer workflow
+    publishes no release" — the backstop half; reference
+    `requirements/auto-release-on-main.feature::A push that changes
+    only the consumer workflow publishes no release`)
+    the pre-publish step's input is the push event's metadata, and a
+    run is not bound to hand it over as the helper expects — the event
+    metadata is not a contract. The Publish step therefore re-asks the
+    same changed-files predicate over the committed tree (the
+    advance's range base → HEAD diff, the input the notes' range
+    already computes): a range confined to the consumer's own workflow
+    file exits the step before the tag — the skip fires from the
+    payload where it can and from the tree where it cannot, and a
+    number is spent only where a published version's content actually
+    changed."""
+    lines = _read(RELEASE_WORKFLOW).splitlines()
+    tag = _first_line_index(lines, r'git tag "$NEXT" HEAD')
+    assert tag != -1, "the workflow is not the pinned release shape"
+    backstop = _first_line_index(lines, "CONSUMER_ONLY=$(git diff")
+    assert backstop != -1, (
+        "the Publish step does not re-ask the changed-files predicate "
+        "over the committed tree — a payload the pre-publish helper did "
+        "not read as consumer-only would spend a number on a version "
+        "whose content did not change")
+    assert backstop < tag, (
+        "the backstop is not before the tag — a consumer-only advance "
+        "must exit before any tag is created")
 
 
 def test_structure_gate_sits_between_the_consistency_gate_and_the_changed_files_check():
