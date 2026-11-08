@@ -19,6 +19,7 @@ Feature: The setup-pi stage installs and configures pi for the run
     When the setup stage runs for a run
     Then the stage installs pi for this workflow run
     And every later pi invocation in the run uses that installed copy
+    And a runner whose PATH does not carry the agent directory gets it extended for the run, so the installed copy resolves on any runner
 
   @setup
   Scenario: The LLM backend configuration is provided for the run, not a pre-requisite of the environment

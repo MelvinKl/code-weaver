@@ -317,3 +317,110 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
             os.path.join(sb.home, ".pi", "agent", "models.json")), \
             "the harness lands in the agent directory the invocations resolve — " \
             "the runner user's own one is not written when PI_CODING_AGENT_DIR is set"
+
+
+def test_install_on_a_pristine_runner_extends_the_path_instead_of_failing():
+    """(setup-pi "The setup stage installs pi for the run" — the
+    pristine-runner half: "a runner whose PATH does not carry the agent
+    directory gets it extended for the run, so the installed copy
+    resolves on any runner"; reference
+    `requirements/setup-pi.feature::The setup stage installs pi for the
+    run`) a runner whose user PATH does not resolve `pi` (a hosted label:
+    the agent directory's bin/ is not on the PATH) — the stage extends
+    the PATH (this stage's process and the run's later steps, through
+    GITHUB_ENV) and returns the installed copy: a pi that is merely not
+    on the PATH is not a failed installation, and the run's contract
+    (every later pi invocation uses the installed copy) is what the
+    extension plus the state relay establish."""
+    from unittest import mock as um
+    import subprocess as sp
+    mod = _load_stage()
+    with _sandbox() as sb:
+        agent = os.path.join(sb.home, ".pi", "agent")
+        installed = os.path.join(agent, "bin", "pi")
+        os.makedirs(os.path.dirname(installed), exist_ok=True)
+        with open(installed, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(installed, 0o755)
+        base_path = os.environ.get("PATH", "")
+        github_env = os.path.join(sb.rt, "github-env.txt")
+        saved_env = os.environ.get("GITHUB_ENV")
+        os.environ["GITHUB_ENV"] = github_env
+        try:
+            fake_npm = sp.CompletedProcess(
+                args=["npm", "install", "-g", "--prefix", agent, "spec"],
+                returncode=0, stdout="", stderr="")
+            with um.patch.object(mod.shutil, "which", return_value=None), \
+                 um.patch.object(mod.subprocess, "run", return_value=fake_npm):
+                got = mod.install_pi(agent)
+            extended = os.environ["PATH"]
+        finally:
+            os.environ["PATH"] = base_path
+            if saved_env is None:
+                os.environ.pop("GITHUB_ENV", None)
+            else:
+                os.environ["GITHUB_ENV"] = saved_env
+        assert got == installed, f"{got!r}"
+        assert extended.startswith(
+            os.path.join(agent, "bin") + os.pathsep), \
+            "the stage's process PATH is not extended with the agent directory's bin/"
+        env_text = open(github_env, encoding="utf-8").read()
+        assert f"PATH={os.path.join(agent, 'bin')}:$PATH" in env_text, \
+            f"the run's later steps get no PATH extension (GITHUB_ENV relay): {env_text!r}"
+
+
+def test_pi_calls_extend_their_path_from_the_state_relay_on_a_pristine_runner():
+    """(the same scenario — the later-jobs half: the install location
+    rides the run's state relay, and every pi call re-applies the
+    extension before it invokes, so the installed copy resolves in every
+    job on a pristine runner; reference
+    `requirements/setup-pi.feature::The setup stage installs pi for the
+    run`)"""
+    from unittest import mock as um
+    mod = _load_stage()
+    with _sandbox() as sb:
+        agent = os.path.join(sb.home, ".pi", "agent")
+        os.makedirs(os.path.join(agent, "bin"), exist_ok=True)
+        os.makedirs(os.path.join(sb.rt, "cw"), exist_ok=True)
+        saved_relay = {k: os.environ.get(k)
+                       for k in ("PI_PATH", "PI_INSTALL_DIR")}
+        os.environ.pop("PI_PATH", None)
+        os.environ.pop("PI_INSTALL_DIR", None)
+        with open(os.path.join(sb.rt, "cw", "setup-pi-install.txt"),
+                  "w", encoding="utf-8") as f:
+            f.write(f"PI_INSTALL_DIR={agent}\n"
+                    f"PI_PATH={os.path.join(agent, 'bin', 'pi')}\n")
+        base_path = os.environ.get("PATH", "")
+        try:
+            with um.patch.object(mod.shutil, "which", return_value=None):
+                mod.common.ensure_pi_on_path()
+            extended = os.environ["PATH"]
+        finally:
+            os.environ["PATH"] = base_path
+            for k, v in saved_relay.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        assert extended.startswith(
+            os.path.join(agent, "bin") + os.pathsep), \
+            "the pi call's PATH is not extended from the state relay"
+
+
+def test_pi_calls_need_no_path_help_where_pi_is_already_resolved():
+    """(the same scenario — the no-op half: a runner whose PATH already
+    resolves `pi` is left untouched; reference
+    `requirements/setup-pi.feature::The setup stage installs pi for the
+    run`)"""
+    from unittest import mock as um
+    mod = _load_stage()
+    with _sandbox() as sb:
+        base_path = os.environ.get("PATH", "")
+        try:
+            with um.patch.object(mod.shutil, "which",
+                                 return_value="/usr/bin/pi"):
+                mod.common.ensure_pi_on_path()
+        finally:
+            os.environ["PATH"] = base_path
+        assert os.environ["PATH"] == base_path, \
+            "a runner whose PATH already resolves pi is modified"

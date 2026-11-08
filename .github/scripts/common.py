@@ -337,6 +337,56 @@ def resolve_pi_timeout() -> int:
     return PI_TIMEOUT_DEFAULT
 
 
+def ensure_pi_on_path() -> None:
+    """Make the runner's PATH resolve `pi` to the copy the setup-pi stage
+    installed for the run — the contract every later pi invocation in the
+    run relies on (setup-pi: "every later pi invocation in the run uses
+    that installed copy").
+
+    A runner whose user PATH already carries the agent directory's bin/
+    (a machine where pi is normally used) needs nothing. A pristine
+    runner (a hosted label) does not: the setup-pi stage extends the PATH
+    and writes the install location to the state file `setup-pi-install.txt`
+    that the run's state artefact carries to every later job — this call
+    re-extends the process's PATH from that location (the env relay
+    `PI_PATH`/`PI_INSTALL_DIR` first) before the call, so the installed
+    copy resolves on any runner. It never raises: a location it cannot
+    find only means the setup stage's state did not reach this job (or
+    the process runs off-runner), and the pi invocation's own failure
+    carries the broken-environment diagnostic downstream."""
+    import shutil as _shutil
+    if _shutil.which("pi") is not None:
+        return
+    candidate = None
+    v = os.environ.get("PI_PATH", "").strip()
+    if v:
+        candidate = v
+    else:
+        v = os.environ.get("PI_INSTALL_DIR", "").strip()
+        if v:
+            candidate = os.path.join(v, "bin")
+    if candidate is None:
+        try:
+            with open(state_file("setup-pi-install.txt"), encoding="utf-8") as f:
+                for line in f:
+                    k, _, val = line.strip().partition("=")
+                    if k == "PI_PATH" and val:
+                        candidate = val
+                    elif k == "PI_INSTALL_DIR" and val:
+                        candidate = os.path.join(val, "bin")
+        except OSError:
+            pass
+    if candidate is None or not os.path.isdir(os.path.dirname(candidate)):
+        log("::warning::pi is not on the runner's PATH and the run's state "
+            "carries no install location the setup-pi stage recorded — the "
+            "setup-pi stage's state did not reach this job (or the process "
+            "runs off-runner); the pi call's own failure carries the "
+            "diagnostic")
+        return
+    os.environ["PATH"] = os.path.dirname(candidate) + os.pathsep \
+        + os.environ.get("PATH", "")
+
+
 def pi_invoke(
     model: str,
     system_prompt_file: str,
@@ -423,6 +473,7 @@ def pi_invoke(
     artifacts like every other stage value."""
     if timeout is None:
         timeout = resolve_pi_timeout()
+    ensure_pi_on_path()
     with open(system_prompt_file, encoding="utf-8") as f:
         instructions = f.read()
     # --print keeps the one-shot contract the oracle pins ("a stage

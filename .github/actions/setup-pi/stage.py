@@ -7,10 +7,13 @@ environment: it provides the harness for the run.
 
   (a) install — install pi for this workflow run into the agent directory
       (npm's global prefix = the agent directory, so the installed binary
-      lands in the agent directory's bin/ — the directory that sits first on
-      the runner user's PATH, so every later pi invocation in the run
-      resolves that installed copy). Its location rides the run's state/env
-      relay like every other stage value.
+      lands in the agent directory's bin/). A runner whose user PATH
+      already carries that directory needs nothing more; a pristine
+      runner (a hosted label) does not, so the stage extends the PATH —
+      this stage's process and the run's later steps — and the install
+      location rides the run's state relay like every other stage value,
+      so every later pi invocation in the run resolves that installed
+      copy on any runner.
 
   (b) materialise the harness — for each element resolve its provider (a
       non-empty GitHub secret wins over the named repo file) and write it
@@ -315,8 +318,15 @@ def install_pi(agent_dir: str) -> str:
     installed copy.
 
     The stage fails explicitly rather than continuing where the runner's
-    PATH would resolve `pi` to a different copy: the run's contract is that
-    every later pi invocation uses the copy this run installed."""
+    PATH would resolve `pi` to a different copy: the run's contract is
+    that every later pi invocation uses the copy this run installed. On a
+    pristine runner (a hosted label) the agent directory's bin/ is not on
+    the runner user's PATH — there the stage extends the PATH (this
+    stage's process, so the smoke check below resolves the installed
+    copy, and the run's later steps, through GITHUB_ENV) and records the
+    extension in the state relay the later jobs re-apply before their pi
+    calls (common.ensure_pi_on_path); on a machine where the directory
+    already sits on the PATH this branch never fires."""
     spec = os.environ.get("PI_PACKAGE") or "@earendil-works/pi-coding-agent"
     os.makedirs(agent_dir, exist_ok=True)
     r = subprocess.run(
@@ -332,12 +342,24 @@ def install_pi(agent_dir: str) -> str:
     on_path = shutil.which("pi")
     same = (on_path is not None
             and os.path.realpath(on_path) == os.path.realpath(installed))
-    if not same:
-        raise InstallError(
-            "the runner's PATH does not resolve `pi` to the installed copy — "
-            f"installed {installed}, the PATH resolves {on_path or 'no pi'}; "
-            "put the agent directory's bin/ on the runner user's PATH so every "
-            "later pi invocation in the run uses the installed copy")
+    if same:
+        return installed
+    # the runner user's PATH does not resolve `pi` to this installed copy
+    # (a pristine runner: the agent directory's bin/ is not on the PATH at
+    # all, or a different pi shadows it) — extend the PATH rather than
+    # fail: the run's contract is that every later pi invocation uses this
+    # copy, and the extension is what makes that hold on a pristine runner
+    bin_dir = os.path.dirname(installed)
+    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    out = os.environ.get("GITHUB_ENV")
+    if out:
+        with open(out, "a") as f:
+            f.write(f"PATH={bin_dir}{os.pathsep}$PATH\n")
+    common.log(f"setup-pi: the runner's PATH did not resolve `pi` to the "
+               f"installed copy (it resolved {on_path or 'no pi'}) — the "
+               f"PATH is extended with {bin_dir} for this stage's process "
+               f"and the run's later steps, and the install location rides "
+               f"the state relay the later jobs re-apply")
     return installed
 
 
@@ -415,9 +437,11 @@ def main() -> None:
         fail(f"pi installation or configuration failed — {e}")
     with open(common.state_file("setup-pi-install.txt"), "w") as f:
         f.write(f"PI_INSTALL_DIR={agent}\nPI_PATH={installed}\n")
-    common.log(f"setup-pi: pi installed for the run — {installed} (the agent "
-               f"directory's bin/ is on the runner user's PATH, so every later "
-               f"pi invocation in the run resolves it)")
+    common.log(f"setup-pi: pi installed for the run — {installed} (every "
+               f"later pi invocation in the run resolves this copy: the "
+               f"location rides the run's state relay, and the PATH is "
+               f"extended where the runner's did not already carry the "
+               f"agent directory)")
 
     # (b) materialise the run's provided harness into the agent directory
     # the run's pi invocations resolve
