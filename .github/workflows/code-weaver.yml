@@ -41,7 +41,7 @@ jobs:
     # committed tree, because a run's push metadata is not a contract
     # — skips it: no number is spent on a version this file does not
     # belong to.
-    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@30
+    uses: MelvinKl/code-weaver/.github/workflows/factory.yml@31
     with:
       max-loops: 25
       issue-number: ${{ github.event.issue.number || inputs.issue_number }}
