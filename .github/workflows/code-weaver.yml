@@ -48,7 +48,7 @@ jobs:
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Qwen3.8  # which configured model — the one adjustable LLM setting
-      runner: self-hosted   # runner label the stage jobs run on (pi is installed &
+      runner: code-weaver   # runner label the stage jobs run on (pi is installed &
       # configured for the run by stage 2). The runner must sit on the
       # dogfood's network: stage 2's smoke check probes the run's LLM
       # backend, and the dogfood's harness points at a backend on the
