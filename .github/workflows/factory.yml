@@ -849,7 +849,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${ github.workspace }
+        working-directory: ${{ github.workspace }}
         run: |-
           S="$RUNNER_TEMP/cw/stash/.github/actions/baseline/stage.py"
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
@@ -1793,7 +1793,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${ github.workspace }
+        working-directory: ${{ github.workspace }}
         run: |-
           S="$RUNNER_TEMP/cw/stash/.github/actions/pi-run/stage.py"
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
@@ -2361,7 +2361,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${ github.workspace }
+        working-directory: ${{ github.workspace }}
         run: |-
           S="$RUNNER_TEMP/cw/stash/.github/actions/report/stage.py"
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }

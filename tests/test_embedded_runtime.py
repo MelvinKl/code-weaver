@@ -739,3 +739,87 @@ def test_a_heredoc_opened_but_never_terminated_in_its_block_is_a_structure_viola
     violations = embed.heredoc_terminator_violations(fixture)
     assert len(violations) == 1, f"{violations!r}"
     assert "never terminated" in violations[0], violations[0]
+
+
+def _single_brace_fixture(value="${ github.workspace }"):
+    """A minimal workflow the structure scan reads: one job, one step
+    whose `working-directory` field holds `value` (the
+    console-mirror corruption — a single-brace `${` with a space
+    after the opening brace), its run block the step's last key."""
+    return "\n".join([
+        "name: t",
+        "on: push",
+        "jobs:",
+        "  trigger:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - name: cut",
+        f"        working-directory: {value}",
+        "        run: |",
+        "          echo done",
+    ])
+
+
+def test_committed_factory_file_holds_no_single_brace_context_expression():
+    """(scenario "A workflow file whose step field carries a
+    single-brace context expression publishes no version" — the file
+    the gate guards; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    step field carries a single-brace context expression publishes no
+    version`) the committed factory.yml's step fields and run bodies:
+    no `${` with whitespace after the opening brace (the runner's
+    expression syntax is `${{ }}` — both braces, no space: the
+    single-brace-with-space form is not an expression, the runner
+    passes the literal through, a `working-directory` names a
+    directory that does not exist and the step's process dies at
+    start — run #154's baseline step, the console-mirror re-indent's
+    second corruption of the three steps whose heredoc terminators
+    the sibling check covers)."""
+    text = _read(FACTORY)
+    violations = embed.single_brace_context_violations(text)
+    assert not violations, (
+        "the committed factory.yml carries a step field or run body "
+        "line with a `${` whose opening brace is followed by "
+        "whitespace — not a context expression: "
+        + "; ".join(violations))
+
+
+def test_a_single_brace_context_expression_in_a_step_field_is_a_structure_violation():
+    """(the same scenario — the gate's check itself; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    step field carries a single-brace context expression publishes no
+    version`) a step whose `working-directory` holds
+    `${ github.workspace }` (a single brace, a space after it): not
+    an expression — the runner passes the literal text through, the
+    working directory does not exist, and the structure gate fails
+    the file with the exact cause (the step, the line, the value, why
+    the space defeats the expression syntax)."""
+    fixture = _single_brace_fixture()
+    violations = embed.single_brace_context_violations(fixture)
+    assert len(violations) == 1, f"{violations!r}"
+    v = violations[0]
+    assert "name: cut" in v and "line 8" in v, v
+    assert "${ github.workspace }" in v, v
+    # the full structure gate carries the same verdict (the publish's
+    # pre-tag gate reads it)
+    ok, message = embed.verify_structure(
+        fixture, expected_jobs=("trigger",),
+        expected_step_counts={"trigger": 1})
+    assert not ok
+    assert "whitespace after the" in message, message
+
+
+def test_a_double_brace_context_expression_in_a_step_field_is_not_a_structure_violation():
+    """(the same scenario — the fixed shape; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    step field carries a single-brace context expression publishes no
+    version`) the runner's real syntax — `${{ github.workspace }}`,
+    both braces, no space — is an expression the runner evaluates,
+    and the gate's check passes it (the check bites only on the
+    space after a single opening brace)."""
+    fixture = _single_brace_fixture("${{ github.workspace }}")
+    assert embed.single_brace_context_violations(fixture) == []
+    ok, message = embed.verify_structure(
+        fixture, expected_jobs=("trigger",),
+        expected_step_counts={"trigger": 1})
+    assert ok, message

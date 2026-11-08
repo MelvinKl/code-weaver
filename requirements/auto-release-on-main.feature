@@ -104,3 +104,12 @@ Feature: Automatic release on main branch changes
     Then the run fails at the structure gate with the exact cause, before the tag
     And no new version tag is created and no new GitHub release is published
     And a target pin never lands on a file whose step script bash reads to end of file
+
+  @issue-114 @auto-release
+  Scenario: A workflow file whose step field carries a single-brace context expression publishes no version
+    Given a push to the code-weaver repo's main branch
+    And the push's factory workflow file carries a step whose field value holds an opening `${` with whitespace after the brace — the runner's expression syntax is `${{ }}`, the space defeats it, and the runner passes the literal text through as the field's value
+    When the release machinery gates publication on the committed version
+    Then the run fails at the structure gate with the exact cause, before the tag
+    And no new version tag is created and no new GitHub release is published
+    And a target pin never lands on a file whose step the runner cannot start in its working directory

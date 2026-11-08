@@ -464,6 +464,59 @@ def heredoc_terminator_violations(text: str) -> list[str]:
     return violations
 
 
+def single_brace_context_violations(text: str) -> list[str]:
+    """A `${` with whitespace after the opening brace, in a step
+    field value or a run body — the single-brace corruption the
+    console-mirror re-indent left in the baseline/pr/report stage
+    steps (run #154's baseline step died at process start on
+    `working-directory: ${ github.workspace }` — the second
+    corruption of the same three steps whose heredoc terminators
+    `heredoc_terminator_violations` covers).
+
+    The runner's expression syntax is `${{ }}` — both braces, no
+    space: a `${` whose next character is whitespace is not an
+    expression, and the runner passes the literal text through as
+    the field's value. A `working-directory` then names a path that
+    does not exist — the runner cannot start the step's process
+    there (the job dies before the step's first line runs) — and
+    inside a run body the same text is a bash syntax error (a
+    `${` whose first character is whitespace opens no parameter).
+    Plain-stdlib by design, on each step's own line range (the
+    `_step_key_scan` shape); comments are skipped, so a line
+    documenting the corruption can still quote it."""
+    violations = []
+    pattern = re.compile(r"\$\{\s")
+    lines = text.splitlines()
+    for step_name, keys, run_state in _step_key_scan(text):
+        if not keys:
+            continue
+        start = min(l for l, _ in keys)
+        block_ends = ([run_state[3][-1][0]]
+                      if run_state is not None and run_state[3]
+                      else [])
+        end = max([l for l, _ in keys] + block_ends)
+        for lineno in range(start, min(end + 1, len(lines))):
+            ln = lines[lineno]
+            body = ln.strip()
+            if not body or body.startswith("#"):
+                continue
+            if not pattern.search(ln):
+                continue
+            snippet = body if len(body) <= 72 else body[:69] + "…"
+            violations.append(
+                f"step {step_name!r} line {lineno + 1} holds "
+                f"`{snippet}` — a `${{` with whitespace after the "
+                "opening brace is not a context expression (the "
+                "runner's expression syntax is `${{ }}` — both "
+                "braces, no space): the runner passes the literal "
+                "text through as the field's value, a "
+                "working-directory names a directory that does not "
+                "exist and the step's process cannot start there "
+                "(inside a run body the same text is a bash syntax "
+                "error)")
+    return violations
+
+
 def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
                      expected_step_counts=EXPECTED_STEP_COUNTS,
                      max_run_block_lines=MAX_RUN_BLOCK_LINES):
@@ -491,7 +544,16 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
         the step dies at run time on a file the engines parse
         cleanly), or a run block opens a heredoc it never terminates
         (the executed script ends mid-heredoc: bash's "here-document
-        delimited by end-of-file")."""
+        delimited by end-of-file");
+    (f) a step field value or run-body line carries a single-brace
+        `${` with whitespace after the opening brace — not a
+        context expression (the runner's syntax is `${{ }}`, both
+        braces, no space): the runner passes the literal text
+        through, a `working-directory` names a directory that does
+        not exist and the step's process dies at start — the
+        console-mirror re-indent's second corruption of the three
+        steps whose heredoc terminators check (e) covers (run
+        #154's baseline step)."""
     violations = []
     # (1) the engine half — every standard engine available must parse
     # the file to the pinned job/step structure
@@ -597,6 +659,16 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
     # cannot see (the failure that killed the published version's
     # trigger step — issue #112)
     violations.extend(heredoc_terminator_violations(text))
+    # (4) the single-brace-context half — a step field value or run
+    # body line carrying a `${` with whitespace after the opening
+    # brace (not the runner's `${{ }}` expression syntax: the
+    # literal text is passed through as the field's value, a
+    # working-directory names a directory that does not exist and
+    # the step's process cannot start — the console-mirror
+    # re-indent's second corruption of the three steps check (3)
+    # covers, run #154's baseline step; valid YAML, the pinned
+    # job/step graph, every other gate shape holding)
+    violations.extend(single_brace_context_violations(text))
     if violations:
         return False, ("the committed workflow file is not parser-safe — "
                        + "; ".join(violations))
@@ -608,7 +680,9 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
         + "; no step declares keys after its run block; no run block "
         f"exceeds the {max_run_block_lines}-line giant-body budget; no "
         "run block's heredoc terminator is indented past the block's "
-        "base, and no block opens a heredoc it never terminates")
+        "base, no block opens a heredoc it never terminates, and no "
+        "step field or run body carries a `${` with whitespace after "
+        "the opening brace")
 
 
 def check(root: str, path: str):
