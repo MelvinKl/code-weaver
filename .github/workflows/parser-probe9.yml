@@ -105,7 +105,7 @@
 # nested shell with only `GH_TOKEN` set inherits dangling
 # `GIT_CONFIG_KEY_i` entries and dies with
 # `unknown value GIT_CONFIG_COUNT`.
-name: "parser-probe8 (verbatim factory; trigger outputs block removed)"
+name: "parser-probe9 (verbatim factory; all twelve stage working-directories are plain .)"
 
 on:
   push:
@@ -220,6 +220,12 @@ jobs:
   trigger:
     name: "1 trigger"
     runs-on: ${{ inputs.runner }}
+    outputs:
+      started: ${{ steps.resolve.outputs.started }}
+      issue-number: ${{ steps.resolve.outputs.issue-number }}
+      issue-title: ${{ steps.resolve.outputs.issue-title }}
+      base-ref: ${{ steps.resolve.outputs.base-ref }}
+      base-sha: ${{ steps.resolve.outputs.base-sha }}
     steps:
       - id: preflight
         name: Preflight — verify the GH_TOKEN secret can serve this repo
@@ -701,7 +707,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         # The stage script runs from the stash — the runtime tree this
         # job's first step copied from the called repo at the called ref,
         # before the stage's checkout replaced the workspace with the target.
@@ -844,7 +850,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         run: |-
           S="$RUNNER_TEMP/cw/stash/.github/actions/baseline/stage.py"
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
@@ -1017,7 +1023,7 @@ jobs:
       - name: Requirement-extraction loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         # The stage script runs from the stash — the runtime tree this
         # job's first step copied from the called repo at the called ref,
         # before the stage's checkout replaced the workspace with the target.
@@ -1151,7 +1157,7 @@ jobs:
       - name: Plan loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         # The stage script runs from the stash — the runtime tree this
         # job's first step copied from the called repo at the called ref,
         # before the stage's checkout replaced the workspace with the target.
@@ -1414,7 +1420,7 @@ jobs:
       - name: Implementation loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         # The stage script runs from the stash — the runtime tree this
         # job's first step copied from the called repo at the called ref,
         # before the stage's checkout replaced the workspace with the target.
@@ -1586,7 +1592,7 @@ jobs:
       - name: Test & review loop (bounded by MAX_LOOPS; 0 = no cap)
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         # The stage script runs from the stash — the runtime tree this
         # job's first step copied from the called repo at the called ref,
         # before the stage's checkout replaced the workspace with the target.
@@ -1788,7 +1794,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         run: |-
           S="$RUNNER_TEMP/cw/stash/.github/actions/pi-run/stage.py"
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
@@ -1977,7 +1983,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         run: |-
           S="$RUNNER_TEMP/cw/stash/.github/actions/pr-open/stage.py"
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
@@ -2152,7 +2158,7 @@ jobs:
           CW_HEAD_SHA: ${{ steps.head.outputs.head-sha }}
         if: ${{ env.CW_STARTED == 'true' }}
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         # The stage script runs from the stash — the runtime tree this
         # job's first step copied from the called repo at the called ref,
         # before the stage's checkout replaced the workspace with the target.
@@ -2356,7 +2362,7 @@ jobs:
         # manifest loader rejects a composite step that has run: but no
         # shell: (v2.338: "Required property is missing: shell").
         shell: bash
-        working-directory: ${{ github.workspace }}
+        working-directory: .
         run: |-
           S="$RUNNER_TEMP/cw/stash/.github/actions/report/stage.py"
           [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
