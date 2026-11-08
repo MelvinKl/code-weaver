@@ -48,7 +48,15 @@ jobs:
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Qwen3.8  # which configured model — the one adjustable LLM setting
-      runner: self-hosted      # runner label the stage jobs run on (pi is installed & configured for the run by stage 2)
+      runner: ubuntu-latest   # runner label the stage jobs run on (pi is installed &
+      # configured for the run by stage 2). TEMPORARY: the self-hosted runner
+      # (build 2.338.0) has a workflow-parser that drops one of the factory's
+      # ten jobs on the current file — its stage jobs then skip and every run
+      # collapses (runs #155/#156); the latest runner build parses all ten
+      # (verified on a hosted runner against the identical file). Revert to
+      # `self-hosted` once that runner is upgraded (its 6h hosted ceiling is
+      # the reason the dogfood ran self-hosted; a run the ceiling kills
+      # resumes cleanly on re-trigger — the branch persists).
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
