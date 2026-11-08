@@ -287,6 +287,9 @@ jobs:
         with:
           node-version: 24
           
+      - name: Clone repository to work on
+        uses: actions/checkout@v7
+        
       - id: called-version
         name: Resolve the called version (from the consumer workflow at the run's base ref)
         # The called ref is not visible to the run's jobs — GitHub
