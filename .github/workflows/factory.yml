@@ -712,7 +712,7 @@ jobs:
         # inherits (the stage's npm install, its installed-pi smoke
         # check). On a runner whose user already carries node it pins the
         # version the install and the smoke check agree on.
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 26
       - id: verify
