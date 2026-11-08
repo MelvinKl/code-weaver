@@ -250,7 +250,12 @@ EXPECTED_STEP_COUNTS = {
     "setup-pi": 6,  # re-pinned: +1 — the job's Setup Node step (a pristine
     # runner has no npm for stage 2's pi install: node is provisioned by
     # the job, never presumed)
-    "baseline": 8,
+    "baseline": 9,  # re-pinned: +1 — the job's second restore step (the
+    # setup-pi stage's artefact, downloaded alongside the trigger's, so
+    # the cumulative chain carries the setup state past the
+    # setup→baseline hop — every later artefact needs it, and the first
+    # pi-calling stage after baseline dies at the pi call it cannot
+    # resolve without it; run 42480359617)
     "extract": 8,
     "plan": 8,
     "implement": 10,

@@ -110,6 +110,22 @@
 # drops the job, the trigger's validation block fails the run and skips
 # every stage, the report posts it) — never the file-level way.
 #
+# The cumulative artefact chain must hold at every hop: each stage job
+# uploads the whole state dir it works in, so a later job restores every
+# earlier stage's state from its predecessor's artefact — and the
+# setup-pi stage's state in particular (the install-location record
+# `setup-pi-install.txt`, the PI_INSTALL_DIR/PI_PATH every later pi call
+# resolves through, the materialised harness configuration) must ride
+# cw-setup into the baseline job and on to every artefact after it. The
+# baseline job's restore is therefore the two downloads the pr/report
+# jobs use as their idiom (cw-trigger, then cw-setup, into the same dir,
+# ahead of the checkout): a baseline that downloaded only the trigger's
+# artefact uploads a cw-baseline with no setup state, and the first
+# pi-calling stage after baseline dies at the pi call it cannot resolve
+# (run 42480359617 — extract's loop step failed in ~15 s on tag 30, the
+# first run whose extract job entered the job graph, while the setup
+# stage had verified pi and the backend moments before).
+#
 # On this runner build the job logs are ghosts — every job's log is
 # unreachable from the API, successful or failed — so every bash
 # step mirrors its full output into the run's artefact state dir
@@ -833,6 +849,32 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: cw-trigger
+          path: ${{ runner.temp }}/cw
+
+      - name: Restore the cumulative state (the setup-pi stage's artefact, alongside the trigger's)
+        # The chain's no-hop-loses-it property at the setup→baseline hop —
+        # this job's first step restores the trigger's artefact (the
+        # stashed runtime tree, the trigger's state); the cumulative half —
+        # the setup-pi stage's state, among it the install-location record
+        # `setup-pi-install.txt` (the PI_INSTALL_DIR/PI_PATH every later pi
+        # call resolves through) and the materialised harness
+        # configuration — rides the cw-setup artefact, and a baseline job
+        # that downloaded only the trigger's artefact uploads a
+        # cw-baseline carrying no setup state: every later artefact in the
+        # chain inherits the gap, and the first pi-calling stage after
+        # baseline (extract) cannot resolve the pi the setup stage
+        # installed for the run — ensure_pi_on_path finds no recorded
+        # location, the pi call's subprocess dies at spawn (run
+        # 42480359617's extract job failed its loop step in ~15 s, the
+        # first run whose extract job entered the job graph — while the
+        # setup stage had verified pi and the backend moments before).
+        # The download lands in the same cw dir as the first step's (the
+        # pr/report jobs' multi-restore idiom), ahead of the checkout that
+        # replaces the workspace, and this job's upload carries the whole
+        # cumulative tree forward — no later hop re-loses the setup state.
+        uses: actions/download-artifact@v8
+        with:
+          name: cw-setup
           path: ${{ runner.temp }}/cw
 
       - id: state
