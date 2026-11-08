@@ -48,15 +48,23 @@ jobs:
       ai-requirements-label: ai-requirements
       target-branch: main
       llm-model: Qwen3.8  # which configured model — the one adjustable LLM setting
-      runner: ubuntu-latest   # runner label the stage jobs run on (pi is installed &
-      # configured for the run by stage 2). TEMPORARY: the self-hosted runner
-      # (build 2.338.0) has a workflow-parser that drops one of the factory's
-      # ten jobs on the current file — its stage jobs then skip and every run
-      # collapses (runs #155/#156); the latest runner build parses all ten
-      # (verified on a hosted runner against the identical file). Revert to
-      # `self-hosted` once that runner is upgraded (its 6h hosted ceiling is
-      # the reason the dogfood ran self-hosted; a run the ceiling kills
-      # resumes cleanly on re-trigger — the branch persists).
+      runner: self-hosted   # runner label the stage jobs run on (pi is installed &
+      # configured for the run by stage 2). The runner must sit on the
+      # dogfood's network: stage 2's smoke check probes the run's LLM
+      # backend, and the dogfood's harness points at a backend on the
+      # private LAN — a hosted cloud runner cannot address it (run #158:
+      # the stage installed and resolved its pi on a pristine hosted
+      # runner, then failed on "backend unreachable: http://192.168.5.202
+      # :8080/v1" — the stage machinery is runner-agnostic, the backend
+      # is not). The self-hosted runner (build 2.338.0) in turn has a
+      # workflow-parser that drops one of the factory's ten jobs on the
+      # current file (runs #155/#156 — the verbatim file parses to ten
+      # jobs under standard YAML engines and on a latest hosted runner,
+      # and every file-side cut bisected clean: the defect is the
+      # runner build's parser — issue #117). The
+      # dogfood re-runs on this label once that runner is upgraded; a
+      # run its ceiling kills resumes cleanly on re-trigger — the branch
+      # persists.
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
