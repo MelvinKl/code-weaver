@@ -247,7 +247,9 @@ EXPECTED_JOBS = ("trigger", "setup-pi", "baseline", "extract", "plan",
 # the gate's failure message.
 EXPECTED_STEP_COUNTS = {
     "trigger": 7,
-    "setup-pi": 5,
+    "setup-pi": 6,  # re-pinned: +1 — the job's Setup Node step (a pristine
+    # runner has no npm for stage 2's pi install: node is provisioned by
+    # the job, never presumed)
     "baseline": 8,
     "extract": 8,
     "plan": 8,
