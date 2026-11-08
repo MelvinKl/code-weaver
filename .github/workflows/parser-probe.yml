@@ -1,0 +1,90 @@
+# parser-probe — a throwaway matrix for the self-hosted runner's
+# workflow parser (run #155: the `extract` job vanished from the run's
+# job graph after the baseline job's `working-directory:
+# ${{ github.workspace }}` line; the standard engines parse the same
+# file to all ten jobs). Each pair isolates one variable of that
+# shape; the pair's second job is the canary — a job the parser drops
+# from the run's graph is missing from the run's jobs list (its
+# dependents cascade-skip).
+#
+#   p1 (self-hosted): expression value + `run: |-`, step mid-job
+#        p2 = canary for p1
+#   p3 (self-hosted): expression value + `run: |` (plain block)
+#        p4 = canary for p3
+#   p5 (self-hosted): plain-string value + `run: |-`
+#        p6 = canary for p5
+#   p7 (hosted): the p1 shape on a hosted runner (a different parser
+#        build — the control)
+#        p8 = canary for p7
+#
+# Delete this file (and the release number its push spends) after the
+# one probe run is read.
+name: parser-probe
+on: push
+jobs:
+  p1:
+    runs-on: self-hosted
+    steps:
+      - name: s1
+        run: echo p1s1
+      - name: s2
+        run: echo p1s2
+      - name: s3
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |-
+          echo p1s3
+      - name: s4
+        run: echo p1s4
+      - name: s5
+        run: echo p1s5
+  p2:
+    runs-on: self-hosted
+    steps:
+      - name: only
+        run: echo p2
+  p3:
+    runs-on: self-hosted
+    steps:
+      - name: s3
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo p3s3
+      - name: s4
+        run: echo p3s4
+  p4:
+    runs-on: self-hosted
+    steps:
+      - name: only
+        run: echo p4
+  p5:
+    runs-on: self-hosted
+    steps:
+      - name: s3
+        shell: bash
+        working-directory: .
+        run: |-
+          echo p5s3
+      - name: s4
+        run: echo p5s4
+  p6:
+    runs-on: self-hosted
+    steps:
+      - name: only
+        run: echo p6
+  p7:
+    runs-on: ubuntu-latest
+    steps:
+      - name: s3
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |-
+          echo p7s3
+      - name: s4
+        run: echo p7s4
+  p8:
+    runs-on: ubuntu-latest
+    steps:
+      - name: only
+        run: echo p8
