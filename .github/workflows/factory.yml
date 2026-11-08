@@ -86,24 +86,29 @@
 # pre-tag structure gate (embed-runtime.py --verify-structure)
 # enforce the shape on every published version.
 #
-# The runner build's validator is strict about evaluated job properties:
-# a job's `timeout-minutes` is number-typed, while the `job-timeout`
-# input that drives the five stage jobs' declaration is a string (the
-# documented contract — the trigger validates it at trigger time, the
-# stage jobs relay it through env, the stage code resolves
-# INPUT_* → CW_* → the state file). An evaluation that answers a string
-# is rejected — `Error when evaluating 'timeout-minutes' for job
-# 'extract' … Unexpected value '480'` (run 42471836440, tag 28's file)
+# The runner build's validator is strict about evaluated job properties,
+# and its parser takes only a narrow expression dialect there: a job's
+# `timeout-minutes` is number-typed, while the `job-timeout` input that
+# drives the five stage jobs' declaration is a string (the documented
+# contract — the trigger validates it at trigger time, the stage jobs
+# relay it through env, the stage code resolves INPUT_* → CW_* → the
+# state file). A plain `${{ inputs.job-timeout }}` answers a string —
+# rejected (`… Unexpected value '480'`, run 42471836440, tag 28's file)
 # — and the build drops that job from the run's job graph (its
-# parser-drop class, issue #117): the stages after the dropped job
-# skip, the report job runs, and the run's conclusion is failure. Each
-# of the five stage jobs' `timeout-minutes` therefore evaluates the
-# input with `+ 0`: the coercion returns the number of minutes the
-# property is typed for — the job runs under the target's declared
-# value, or the 480 default, unchanged — and a non-numeric value still
-# fails loudly (at graph construction for the job, a precise annotation
-# naming the property and the value, and at trigger time, where the
-# validation block fails the run and skips every stage).
+# parser-drop class, issue #117: the stages after the dropped job skip,
+# the report job runs, the run's conclusion is failure); an ARITHMETIC
+# expression in a job property is worse — the build rejects the whole
+# file (tag 29's `${{ inputs.job-timeout + 0 }}`: run 42475024592 loaded
+# zero jobs, 'likely failed because of a workflow file issue'), while
+# function calls and logical operators in job-level expressions parse
+# and evaluate (the report job's `if:` ran on tag 28). Each of the five
+# stage jobs' `timeout-minutes` therefore evaluates the input with
+# `fromJSON` — the minutes as a JSON number (`fromJSON("480")` is the
+# number 480): the property takes a number, the job runs under the
+# target's declared value or the 480 default unchanged, and a
+# non-numeric value fails loudly the tag-28 way (an evaluation error
+# drops the job, the trigger's validation block fails the run and skips
+# every stage, the report posts it) — never the file-level way.
 #
 # On this runner build the job logs are ghosts — every job's log is
 # unreachable from the API, successful or failed — so every bash
@@ -956,12 +961,13 @@ jobs:
     needs: baseline
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    # `+ 0`: the job-timeout input is a string, this property a number
-    # — the runner build's validator rejects an evaluated string for the
-    # property (the header's job-property paragraph) and drops the job
-    # from the run's job graph; the coercion keeps the job running under
-    # the target's declared value, or the 480 default, unchanged
-    timeout-minutes: ${{ inputs.job-timeout + 0 }}
+    # `fromJSON`: the job-timeout input is a string, this property a
+    # number — the header's job-property paragraph: a plain expression
+    # answers a string (the build drops the job), arithmetic in a job
+    # property is file-fatal (the build rejects the file); fromJSON
+    # returns the number — the job runs under the target's declared
+    # value, or the 480 default, unchanged
+    timeout-minutes: ${{ fromJSON(inputs.job-timeout) }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -1095,12 +1101,13 @@ jobs:
     needs: extract
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    # `+ 0`: the job-timeout input is a string, this property a number
-    # — the runner build's validator rejects an evaluated string for the
-    # property (the header's job-property paragraph) and drops the job
-    # from the run's job graph; the coercion keeps the job running under
-    # the target's declared value, or the 480 default, unchanged
-    timeout-minutes: ${{ inputs.job-timeout + 0 }}
+    # `fromJSON`: the job-timeout input is a string, this property a
+    # number — the header's job-property paragraph: a plain expression
+    # answers a string (the build drops the job), arithmetic in a job
+    # property is file-fatal (the build rejects the file); fromJSON
+    # returns the number — the job runs under the target's declared
+    # value, or the 480 default, unchanged
+    timeout-minutes: ${{ fromJSON(inputs.job-timeout) }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -1234,12 +1241,13 @@ jobs:
     needs: plan
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    # `+ 0`: the job-timeout input is a string, this property a number
-    # — the runner build's validator rejects an evaluated string for the
-    # property (the header's job-property paragraph) and drops the job
-    # from the run's job graph; the coercion keeps the job running under
-    # the target's declared value, or the 480 default, unchanged
-    timeout-minutes: ${{ inputs.job-timeout + 0 }}
+    # `fromJSON`: the job-timeout input is a string, this property a
+    # number — the header's job-property paragraph: a plain expression
+    # answers a string (the build drops the job), arithmetic in a job
+    # property is file-fatal (the build rejects the file); fromJSON
+    # returns the number — the job runs under the target's declared
+    # value, or the 480 default, unchanged
+    timeout-minutes: ${{ fromJSON(inputs.job-timeout) }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -1502,12 +1510,13 @@ jobs:
     needs: implement
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    # `+ 0`: the job-timeout input is a string, this property a number
-    # — the runner build's validator rejects an evaluated string for the
-    # property (the header's job-property paragraph) and drops the job
-    # from the run's job graph; the coercion keeps the job running under
-    # the target's declared value, or the 480 default, unchanged
-    timeout-minutes: ${{ inputs.job-timeout + 0 }}
+    # `fromJSON`: the job-timeout input is a string, this property a
+    # number — the header's job-property paragraph: a plain expression
+    # answers a string (the build drops the job), arithmetic in a job
+    # property is file-fatal (the build rejects the file); fromJSON
+    # returns the number — the job runs under the target's declared
+    # value, or the 480 default, unchanged
+    timeout-minutes: ${{ fromJSON(inputs.job-timeout) }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       TARGET_BRANCH: ${{ inputs.target-branch }}
@@ -1679,12 +1688,13 @@ jobs:
     needs: [trigger, baseline, review]
     if: ${{ needs.trigger.outputs.started == 'true' }}
     runs-on: ${{ inputs.runner }}
-    # `+ 0`: the job-timeout input is a string, this property a number
-    # — the runner build's validator rejects an evaluated string for the
-    # property (the header's job-property paragraph) and drops the job
-    # from the run's job graph; the coercion keeps the job running under
-    # the target's declared value, or the 480 default, unchanged
-    timeout-minutes: ${{ inputs.job-timeout + 0 }}
+    # `fromJSON`: the job-timeout input is a string, this property a
+    # number — the header's job-property paragraph: a plain expression
+    # answers a string (the build drops the job), arithmetic in a job
+    # property is file-fatal (the build rejects the file); fromJSON
+    # returns the number — the job runs under the target's declared
+    # value, or the 480 default, unchanged
+    timeout-minutes: ${{ fromJSON(inputs.job-timeout) }}
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
       CW_BASE: ${{ inputs.target-branch }}
