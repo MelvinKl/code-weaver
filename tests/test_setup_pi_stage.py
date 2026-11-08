@@ -365,8 +365,18 @@ def test_install_on_a_pristine_runner_extends_the_path_instead_of_failing():
             os.path.join(agent, "bin") + os.pathsep), \
             "the stage's process PATH is not extended with the agent directory's bin/"
         env_text = open(github_env, encoding="utf-8").read()
-        assert f"PATH={os.path.join(agent, 'bin')}:$PATH" in env_text, \
-            f"the run's later steps get no PATH extension (GITHUB_ENV relay): {env_text!r}"
+        # the relay value is the fully extended absolute PATH — the same
+        # value the stage's process keeps, verbatim: the runner applies a
+        # GITHUB_ENV entry to the later steps' environment verbatim, never
+        # expanding a shell reference, so a `.../bin:$PATH` value would
+        # arrive on every later step as the literal string `.../bin:$PATH`
+        # — a PATH that resolves nothing, and each later step would die on
+        # its first external command (run 42469989855's stage 2: the
+        # terminal summary step exited 127 on `tee: command not found`).
+        assert env_text.strip() == f"PATH={extended}", \
+            (f"the GITHUB_ENV PATH relay must carry the fully extended "
+             f"absolute PATH verbatim (an unexpanded `:$PATH` tail would "
+             f"break every later step's PATH) — got {env_text!r}")
 
 
 def test_pi_calls_extend_their_path_from_the_state_relay_on_a_pristine_runner():

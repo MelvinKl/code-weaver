@@ -350,11 +350,21 @@ def install_pi(agent_dir: str) -> str:
     # fail: the run's contract is that every later pi invocation uses this
     # copy, and the extension is what makes that hold on a pristine runner
     bin_dir = os.path.dirname(installed)
-    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    extended = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    os.environ["PATH"] = extended
     out = os.environ.get("GITHUB_ENV")
     if out:
+        # The relay value is the fully extended absolute PATH — never a
+        # `:$PATH` tail: the runner applies a GITHUB_ENV entry to the
+        # later steps' environment verbatim, without expanding shell
+        # references, so a tail of the form `bin:$PATH` would land on the
+        # later steps as the literal string `.../bin:$PATH` — a PATH that
+        # resolves nothing, and each later step's shell would die on its
+        # first external command (run 42469989855's stage 2 died exactly
+        # this way: the terminal summary step exited 127 on
+        # `tee: command not found`).
         with open(out, "a") as f:
-            f.write(f"PATH={bin_dir}{os.pathsep}$PATH\n")
+            f.write(f"PATH={extended}\n")
     common.log(f"setup-pi: the runner's PATH did not resolve `pi` to the "
                f"installed copy (it resolved {on_path or 'no pi'}) — the "
                f"PATH is extended with {bin_dir} for this stage's process "
