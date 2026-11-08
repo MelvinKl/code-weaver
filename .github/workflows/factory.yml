@@ -714,7 +714,7 @@ jobs:
         # version the install and the smoke check agree on.
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: 26
       - id: verify
         name: Stage 2 — install pi for the run, configure it from the provided harness
         # shell: is declared on every script step — this runner build's
