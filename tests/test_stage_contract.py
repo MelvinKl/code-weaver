@@ -3816,7 +3816,13 @@ def test_job_timeout_backstop_is_a_target_side_input():
     that make pi calls (extract, plan, implement, review, pr — the jobs
     whose steps carry the stages' generation calls, the guard's repair
     call and the PR-body call) carry the target's value as their
-    job-level timeout-minutes, while the jobs that stay factory-side —
+    job-level timeout-minutes — the entry evaluates the input with
+    `+ 0`, so the value the string input resolves to arrives at the
+    number-typed property as a number: the runner build's validator
+    rejects an evaluated string for that property and drops the job from
+    the run's job graph (issue #117's class; run 42471836440's dropped
+    extract), and the coercion is the file's accommodation — while the
+    jobs that stay factory-side —
     the trigger (which declares no job-level timeout at all) and
     setup-pi, baseline, gates and report, which the delta leaves
     unchanged — keep their fixed declarations: the trigger and setup-pi
@@ -3850,9 +3856,13 @@ def test_job_timeout_backstop_is_a_target_side_input():
         f"{len(starts)}"
     # the five stage jobs that make pi calls carry the target's value as
     # their job-level timeout-minutes — the entry is input-driven, not a
-    # plain literal — while the jobs that stay factory-side (setup-pi,
-    # and the jobs the delta leaves unchanged: baseline, gates, report)
-    # keep plain literals; the trigger declares no job-level timeout
+    # plain literal, and evaluates the string input with `+ 0` so the
+    # value arrives at the number-typed property as a number (the runner
+    # build's validator rejects an evaluated string for that property and
+    # drops the job from the run's job graph) — while the jobs that stay
+    # factory-side (setup-pi, and the jobs the delta leaves unchanged:
+    # baseline, gates, report) keep plain literals; the trigger declares
+    # no job-level timeout
     for a, b in zip(starts, starts[1:] + [len(lines)]):
         name = lines[a].strip()[:-1]
         if name == "trigger":
@@ -3866,10 +3876,13 @@ def test_job_timeout_backstop_is_a_target_side_input():
              f"timeout-minutes")
         value = m.group(1)
         if name in ("extract", "plan", "implement", "review", "pr"):
-            assert value == "${{ inputs.job-timeout }}", \
+            assert value == "${{ inputs.job-timeout + 0 }}", \
                 (f"the {name} job — a stage job that makes pi calls — "
                  f"carries {value!r} as its job-level timeout-minutes "
-                 f"instead of the target's job-timeout input value")
+                 f"instead of the target's job-timeout input value "
+                 f"evaluated with the `+ 0` coercion — the input stays "
+                 f"a string (the documented contract) while the "
+                 f"number-typed property takes the value as a number")
         else:
             assert value.isdigit(), \
                 (f"the {name} job's timeout-minutes value {value!r} is "
