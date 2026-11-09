@@ -136,8 +136,13 @@ jobs:
         # the executed script (bash reads the rest of the step's script
         # as the heredoc's body — the step dies at run time while the
         # run's job graph stands: runs #151/#152's trigger failure,
-        # issue #112), or a run block that opens a heredoc it never
-        # terminates — would publish a version whose jobs the runner
+        # issue #112), a run block whose `python3` code-heredoc body
+        # the block's dedent leaves indented (a program's first line at
+        # a nonzero column is an IndentationError the interpreter dies
+        # on: run #165's stage 12 failure — the #112 terminator fix
+        # left the body four deeper inside the console-mirror subshell),
+        # or a run block that opens a heredoc it never terminates —
+        # would publish a version whose jobs the runner
         # mis-parses or whose steps die at run time: the run's job
         # graph collapses (issue #106 — a stage job missing from the
         # graph, phantom steps in every other job, the stage outcomes
@@ -145,7 +150,7 @@ jobs:
         # on the committed file.
         run: |
           python3 .github/scripts/embed-runtime.py --verify-structure || {
-            echo "::error::the published version's workflow file is not parser-safe — a standard engine rejects it, a step declares keys after its run block, a run block exceeds the giant-body budget, a run block's heredoc terminator is indented past the block's base, or a block opens a heredoc it never terminates: a version whose jobs the runner mis-parses or whose steps die at run time must not be published"
+            echo "::error::the published version's workflow file is not parser-safe — a standard engine rejects it, a step declares keys after its run block, a run block exceeds the giant-body budget, a run block's heredoc terminator is indented past the block's base, a `python3` code-heredoc body is indented past the block's base, or a block opens a heredoc it never terminates: a version whose jobs the runner mis-parses or whose steps die at run time must not be published"
             exit 1
           }
       - id: consumer-only

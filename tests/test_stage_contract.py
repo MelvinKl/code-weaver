@@ -2329,14 +2329,16 @@ def _pr_fallback_source() -> str:
             break
     assert start is not None, "the pr job's fallback step is gone"
     # the heredoc is located by its markers, not its indent: the step's
-    # body now runs inside the run's console-mirror subshell (issue #106
+    # body runs inside the run's console-mirror subshell (issue #106
     # made the step mirror its full output into the run's artefact state
-    # dir), so the heredoc's body sits 4 deeper than the run block's
-    # dedent base — its terminator line is the exception: it sits at the
-    # base itself, because the dedent strips the base and a bash heredoc
-    # terminator must then sit at column 0 (indented past the base it
-    # would not be a terminator — the runs #151/#152 trigger failure,
-    # issue #112)
+    # dir) — and the heredoc's body and its terminator both sit at the
+    # run block's dedent base, because the dedent strips the base: a
+    # bash heredoc terminator must then sit at column 0 (indented past
+    # the base it would not be a terminator — the runs #151/#152
+    # trigger failure, issue #112), and the body is code this python3
+    # call parses — a body line indented past the base would survive
+    # the dedent and python would die on its first line with an
+    # IndentationError (run #165's stage 12 failure)
     her_start = None
     for j in range(start + 1, len(lines)):
         l = lines[j]

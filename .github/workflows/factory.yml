@@ -1850,49 +1850,55 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
           set -o pipefail
           (
-              # the heredoc's terminator line sits at the run block's
-              # base indent (the dedent leaves it at column 0 in the
-              # executed script — indented, it would not be a
-              # terminator; issue #112)
-              python3 - "$RUNNER_TEMP/cw" <<'EOF'
-              import glob, os, sys
-              cw = sys.argv[1]
-              issue = os.environ.get("CW_ISSUE", "?")
-              title = os.environ.get("CW_TITLE", "")
-              target = os.environ.get("CW_TARGET", "main")
-              repo = os.environ.get("GITHUB_WORKSPACE", ".")
-              ctx = []
-              req = os.path.join(repo, os.environ.get("REQUIREMENTS_DIR", "requirements"))
-              if os.path.isdir(req):
-                  for f in sorted(glob.glob(os.path.join(req, "**", "*.feature"), recursive=True)):
-                      ctx.append(("the Gherkin oracle (requirements/)", f))
-              plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
-                                  f"{issue}.md")
-              if os.path.isfile(plan):
-                  ctx.append(("the plan for this issue", plan))
-              for f in (os.path.join(cw, "pi-review.md.out"),):
-                  if os.path.isfile(f):
-                      ctx.append(("the review (per-scenario verdicts)", f))
-              for pat in ("review-iteration-*.md", "test-run-*.txt"):
-                  for f in sorted(glob.glob(os.path.join(cw, pat))):
-                      ctx.append(("the review (iteration log / test output)", f))
-              prompt = ["# PR body target",
-                        f"- Issue: #{issue} — {title}",
-                        f"- Target branch the PR opens against: {target}",
-                        "- Write the COMPLETE pull request body (markdown) to:",
-                        f"    {os.path.join(cw, 'pr-body.md')}",
-                        "",
-                        "The context files the pi call carries — the body is generated from all of them, each role naming the part of the body its source supplies:"]
-              for role, p in ctx:
-                  prompt.append(f"- {role}: {p}")
-              open(os.path.join(cw, "pr-prompt.md"), "w").write("\n".join(prompt) + "\n")
-              # the space-separated context list — this runner build relays a
-              # value to the next step via the step's own outputs (a GITHUB_ENV
-              # write is not that build's reliable channel; see the baseline job)
-              if ctx:
-                  with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as f:
-                      f.write("context=" + " ".join(p for _, p in ctx) + "\n")
-              print(f"pr-body prompt ready: {len(ctx)} context file(s)")
+          # the heredoc's terminator and its body both sit at the run
+          # block's base indent: the runner's dedent strips the block's
+          # base only, so both land at column 0 in the executed script
+          # — an indented terminator is not a terminator (bash reads the
+          # rest of the step's script as the body: the runs #151/#152
+          # trigger failure, issue #112), and the body is code this
+          # python3 call parses, not data — a body line indented past
+          # the base survives the dedent and python dies on its first
+          # line with an IndentationError (run #165's stage 12 failure
+          # — this fix)
+          python3 - "$RUNNER_TEMP/cw" <<'EOF'
+          import glob, os, sys
+          cw = sys.argv[1]
+          issue = os.environ.get("CW_ISSUE", "?")
+          title = os.environ.get("CW_TITLE", "")
+          target = os.environ.get("CW_TARGET", "main")
+          repo = os.environ.get("GITHUB_WORKSPACE", ".")
+          ctx = []
+          req = os.path.join(repo, os.environ.get("REQUIREMENTS_DIR", "requirements"))
+          if os.path.isdir(req):
+              for f in sorted(glob.glob(os.path.join(req, "**", "*.feature"), recursive=True)):
+                  ctx.append(("the Gherkin oracle (requirements/)", f))
+          plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
+                              f"{issue}.md")
+          if os.path.isfile(plan):
+              ctx.append(("the plan for this issue", plan))
+          for f in (os.path.join(cw, "pi-review.md.out"),):
+              if os.path.isfile(f):
+                  ctx.append(("the review (per-scenario verdicts)", f))
+          for pat in ("review-iteration-*.md", "test-run-*.txt"):
+              for f in sorted(glob.glob(os.path.join(cw, pat))):
+                  ctx.append(("the review (iteration log / test output)", f))
+          prompt = ["# PR body target",
+                    f"- Issue: #{issue} — {title}",
+                    f"- Target branch the PR opens against: {target}",
+                    "- Write the COMPLETE pull request body (markdown) to:",
+                    f"    {os.path.join(cw, 'pr-body.md')}",
+                    "",
+                    "The context files the pi call carries — the body is generated from all of them, each role naming the part of the body its source supplies:"]
+          for role, p in ctx:
+              prompt.append(f"- {role}: {p}")
+          open(os.path.join(cw, "pr-prompt.md"), "w").write("\n".join(prompt) + "\n")
+          # the space-separated context list — this runner build relays a
+          # value to the next step via the step's own outputs (a GITHUB_ENV
+          # write is not that build's reliable channel; see the baseline job)
+          if ctx:
+              with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as f:
+                  f.write("context=" + " ".join(p for _, p in ctx) + "\n")
+          print(f"pr-body prompt ready: {len(ctx)} context file(s)")
           EOF
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Generate the PR body with pi (from the requirements, the plan and the review)
@@ -1933,129 +1939,135 @@ jobs:
                 exit 0
               fi
               echo "pi produced no body — assembling the template fallback"
-              # the heredoc's terminator line sits at the run block's
-              # base indent (the dedent leaves it at column 0 in the
-              # executed script — indented, it would not be a
-              # terminator; issue #112)
-              python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
-              import glob, os, subprocess, sys
-              out = sys.argv[1]
-              cw = os.path.join(os.environ["RUNNER_TEMP"], "cw")
-              repo = os.environ.get("GITHUB_WORKSPACE", ".")
+          # the heredoc's terminator and its body both sit at the run
+          # block's base indent: the runner's dedent strips the block's
+          # base only, so both land at column 0 in the executed script
+          # — an indented terminator is not a terminator (bash reads the
+          # rest of the step's script as the body: the runs #151/#152
+          # trigger failure, issue #112), and the body is code this
+          # python3 call parses, not data — a body line indented past
+          # the base survives the dedent and python dies on its first
+          # line with an IndentationError (run #165's stage 12 failure
+          # — this fix)
+          python3 - "$RUNNER_TEMP/cw/pr-body.md" <<'EOF'
+          import glob, os, subprocess, sys
+          out = sys.argv[1]
+          cw = os.path.join(os.environ["RUNNER_TEMP"], "cw")
+          repo = os.environ.get("GITHUB_WORKSPACE", ".")
 
-              # The factory's single git entry point (one function every git
-              # call routes through — the test suite mocks that one function,
-              # so no test spawns the real git binary). This step runs in a
-              # fresh interpreter with no common module, so it carries its own
-              # copy; a test-injected entry point in this script's globals is
-              # honoured over it.
-              if "git_exec" not in globals():
-                  def git_exec(argv, **kw):
-                      return subprocess.run(["git"] + list(argv), **kw)
+          # The factory's single git entry point (one function every git
+          # call routes through — the test suite mocks that one function,
+          # so no test spawns the real git binary). This step runs in a
+          # fresh interpreter with no common module, so it carries its own
+          # copy; a test-injected entry point in this script's globals is
+          # honoured over it.
+          if "git_exec" not in globals():
+              def git_exec(argv, **kw):
+                  return subprocess.run(["git"] + list(argv), **kw)
 
-              def trigger_state(name):
-                  # the trigger's state files are the authoritative channel: this
-                  # runner build's job-env relay has been observed dropping the
-                  # CW_* trigger values (a body once opened for 'issue: # —'); the
-                  # env is the fallback for healthy runners, not the source
-                  try:
-                      v = open(os.path.join(cw, "state", "trigger",
-                                            name + ".txt")).read().strip()
-                  except OSError:
-                      v = ""
-                  return v or os.environ.get("CW_" + name.upper().replace("-", "_"), "")
+          def trigger_state(name):
+              # the trigger's state files are the authoritative channel: this
+              # runner build's job-env relay has been observed dropping the
+              # CW_* trigger values (a body once opened for 'issue: # —'); the
+              # env is the fallback for healthy runners, not the source
+              try:
+                  v = open(os.path.join(cw, "state", "trigger",
+                                        name + ".txt")).read().strip()
+              except OSError:
+                  v = ""
+              return v or os.environ.get("CW_" + name.upper().replace("-", "_"), "")
 
-              issue = trigger_state("issue-number") or "?"
-              title = trigger_state("issue-title")
-              target = os.environ.get("CW_TARGET", "main")
+          issue = trigger_state("issue-number") or "?"
+          title = trigger_state("issue-title")
+          target = os.environ.get("CW_TARGET", "main")
 
-              # the body describes the issue the run implements — not the
-              # configuration the run used (that lives in the workflow log, which
-              # the resolved-config file itself marks 'never committed')
-              lines = ["# %s" % (title or "AI work for issue #%s" % issue),
-                       "",
-                       "Opened by the Code Weaver factory — branch "
-                       "`ai/code-weaver/%s` → target `%s`. This pull request is "
-                       "the run's status report — stage 15 completes it." % (issue, target),
-                       "",
-                       "## The issue this run implements",
-                       "- **Issue:** #%s%s" % (issue, (" — " + title) if title else ""),
-                       "- **Target branch:** `%s`" % target,
-                       ""]
+          # the body describes the issue the run implements — not the
+          # configuration the run used (that lives in the workflow log, which
+          # the resolved-config file itself marks 'never committed')
+          lines = ["# %s" % (title or "AI work for issue #%s" % issue),
+                   "",
+                   "Opened by the Code Weaver factory — branch "
+                   "`ai/code-weaver/%s` → target `%s`. This pull request is "
+                   "the run's status report — stage 15 completes it." % (issue, target),
+                   "",
+                   "## The issue this run implements",
+                   "- **Issue:** #%s%s" % (issue, (" — " + title) if title else ""),
+                   "- **Target branch:** `%s`" % target,
+                   ""]
 
-              # the plan — what the run set out to build, task by task — embedded
-              # so the body stands on its own (the plan file is the issue's plan,
-              # in the repo)
-              plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
-                                  issue + ".md")
-              if os.path.isfile(plan):
-                  lines += ["## The plan for this issue", "```markdown"]
-                  lines += open(plan, encoding="utf-8",
-                                errors="replace").read().splitlines()
-                  lines += ["```", ""]
+          # the plan — what the run set out to build, task by task — embedded
+          # so the body stands on its own (the plan file is the issue's plan,
+          # in the repo)
+          plan = os.path.join(repo, os.environ.get("PLAN_DIR", "plans"),
+                              issue + ".md")
+          if os.path.isfile(plan):
+              lines += ["## The plan for this issue", "```markdown"]
+              lines += open(plan, encoding="utf-8",
+                            errors="replace").read().splitlines()
+              lines += ["```", ""]
 
-              # the requirement scenarios the run changed — parsed from the
-              # diff's ADDED scenario lines (the delta's shape), not from all
-              # the scenarios of a merely touched file
-              req_rel = os.environ.get("REQUIREMENTS_DIR", "requirements")
-              base = trigger_state("base-sha")
-              changed = None
-              if base and os.path.isdir(os.path.join(repo, ".git")):
-                  r = git_exec(["diff", "--name-only", base, "--", req_rel],
+          # the requirement scenarios the run changed — parsed from the
+          # diff's ADDED scenario lines (the delta's shape), not from all
+          # the scenarios of a merely touched file
+          req_rel = os.environ.get("REQUIREMENTS_DIR", "requirements")
+          base = trigger_state("base-sha")
+          changed = None
+          if base and os.path.isdir(os.path.join(repo, ".git")):
+              r = git_exec(["diff", "--name-only", base, "--", req_rel],
+                           cwd=repo, capture_output=True, text=True)
+              if r.returncode == 0:
+                  changed = [l for l in r.stdout.splitlines()
+                             if l.endswith(".feature")
+                             and os.path.isfile(os.path.join(repo, l))]
+          listed = []
+          any_diff = False
+          if changed is not None:
+              for rel in sorted(changed):
+                  r = git_exec(["diff", base, "--", rel],
                                cwd=repo, capture_output=True, text=True)
-                  if r.returncode == 0:
-                      changed = [l for l in r.stdout.splitlines()
-                                 if l.endswith(".feature")
-                                 and os.path.isfile(os.path.join(repo, l))]
-              listed = []
-              any_diff = False
-              if changed is not None:
-                  for rel in sorted(changed):
-                      r = git_exec(["diff", base, "--", rel],
-                                   cwd=repo, capture_output=True, text=True)
-                      if r.returncode != 0 or not r.stdout.strip():
-                          continue
-                      any_diff = True
-                      for ln in r.stdout.splitlines():
-                          if ln.startswith("+") and not ln.startswith("+++"):
-                              s = ln[1:].strip()
-                              for kw in ("Scenario Outline: ", "Scenario: "):
-                                  if s.startswith(kw):
-                                      listed.append("- %s — %s" %
-                                                    (s[len(kw):].strip(),
-                                                     os.path.basename(rel)))
-                                      break
-                  if listed:
-                      lines += (["## The requirement scenarios this run changed"]
-                                 + listed + [""])
-                  elif any_diff:
-                      lines += ["## The requirement scenarios this run changed",
-                                "- no scenario title was added — the run's delta "
-                                "to the oracle is recorded in the run's artifacts "
-                                "(the workflow log)",
-                                ""]
-                  else:
-                      lines += ["## The requirement scenarios this run changed",
-                                "- the run changed no requirement scenario "
-                                "(a vacuous delta)",
-                                ""]
+                  if r.returncode != 0 or not r.stdout.strip():
+                      continue
+                  any_diff = True
+                  for ln in r.stdout.splitlines():
+                      if ln.startswith("+") and not ln.startswith("+++"):
+                          s = ln[1:].strip()
+                          for kw in ("Scenario Outline: ", "Scenario: "):
+                              if s.startswith(kw):
+                                  listed.append("- %s — %s" %
+                                                (s[len(kw):].strip(),
+                                                 os.path.basename(rel)))
+                                  break
+              if listed:
+                  lines += (["## The requirement scenarios this run changed"]
+                             + listed + [""])
+              elif any_diff:
+                  lines += ["## The requirement scenarios this run changed",
+                            "- no scenario title was added — the run's delta "
+                            "to the oracle is recorded in the run's artifacts "
+                            "(the workflow log)",
+                            ""]
               else:
                   lines += ["## The requirement scenarios this run changed",
-                            "- (the run's delta is recorded in the run's artifacts "
-                            "— the workflow log)",
+                            "- the run changed no requirement scenario "
+                            "(a vacuous delta)",
                             ""]
+          else:
+              lines += ["## The requirement scenarios this run changed",
+                        "- (the run's delta is recorded in the run's artifacts "
+                        "— the workflow log)",
+                        ""]
 
-              stages = []
-              for f in sorted(glob.glob(os.path.join(cw, "**", "stage-summary.txt"),
-                                        recursive=True)):
-                  stages += [l.strip() for l in open(f) if l.strip()]
-              lines.append("## Stage outcomes so far")
-              lines += ["- " + l for l in dict.fromkeys(stages)] or ["- (none captured yet)"]
-              lines += ["",
-                        "_Stage 15 (final status) completes this description with the run's "
-                        "outcome, its usage totals and cost — and closes the issue on a "
-                        "successful run._"]
-              open(out, "w").write("\n".join(lines) + "\n")
+          stages = []
+          for f in sorted(glob.glob(os.path.join(cw, "**", "stage-summary.txt"),
+                                    recursive=True)):
+              stages += [l.strip() for l in open(f) if l.strip()]
+          lines.append("## Stage outcomes so far")
+          lines += ["- " + l for l in dict.fromkeys(stages)] or ["- (none captured yet)"]
+          lines += ["",
+                    "_Stage 15 (final status) completes this description with the run's "
+                    "outcome, its usage totals and cost — and closes the issue on a "
+                    "successful run._"]
+          open(out, "w").write("\n".join(lines) + "\n")
           EOF
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - id: open-pr

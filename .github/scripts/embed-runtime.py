@@ -74,9 +74,18 @@ of that shape:
   file parses cleanly and keeps every other shape above: the trigger
   step of the published version's failed runs #151/#152 died exactly
   here, its issue-meta heredoc's terminator four deeper than the
-  block's base — issue #112); and no run block opens a heredoc it
-  never terminates (a script ending mid-heredoc is the same death —
-  bash's "here-document delimited by end-of-file").
+  block's base — issue #112); no run block's `python3` code heredoc
+  — a heredoc a `python3` call reads as its program from stdin
+  (`python3 -`, or a bare `python3`) — carries a body the dedent
+  leaves indented (a program's first line at a nonzero column is an
+  `IndentationError` the interpreter dies on at run time while the
+  file parses cleanly and keeps every other shape above — the
+  published file's `pr` job prepare-body step: the #112 fix set its
+  terminator at the block's base but left its body four deeper inside
+  the console-mirror subshell — run #165's stage 12 failure); and no
+  run block opens a heredoc it never terminates (a script ending
+  mid-heredoc is the same death — bash's "here-document delimited by
+  end-of-file").
 
 A maintainer who changes the runtime tree commits the tree; the tag
 the release flow cuts points at a commit whose tree is consistent
@@ -392,6 +401,14 @@ def heredoc_terminator_violations(text: str) -> list[str]:
       base — any extra indent breaks it; a `<<-DELIM` terminator whose
       extra indent carries a space — the dash strips leading tabs
       only);
+    - the first line of a `python3` code heredoc's body the dedent
+      leaves indented (a heredoc a `python3` call reads as its
+      program from stdin: a body line past the block's base keeps its
+      extra indent in the executed script, and a python program's
+      first line at a nonzero column is an `IndentationError` the
+      interpreter dies on — the published file's pr job steps carried
+      exactly this shape, run #165's stage 12 failure; a `cat`
+      heredoc's body is data, never checked);
     - heredoc the block opens but never terminates (the executed
       script ends mid-heredoc: the same death, the terminator line
       absent altogether).
@@ -407,6 +424,10 @@ def heredoc_terminator_violations(text: str) -> list[str]:
         if base is None:
             continue
         pending = {}  # delimiter -> (the opener's dash, opener line)
+        code_body = {}  # delimiter -> the first code-heredoc body
+        # line's lead column (None until a body line arrives) — a
+        # `python3` call that reads its program from stdin parses the
+        # body, and a program's first line may not be indented
         for lineno, ln in block_lines:
             if not ln.strip():
                 continue
@@ -414,7 +435,8 @@ def heredoc_terminator_violations(text: str) -> list[str]:
             if stripped.startswith("#"):
                 # a comment opens no heredoc (outside a pending one it
                 # is skipped; inside one it is body — the pending set
-                # it leaves unchanged)
+                # it leaves unchanged; a comment is no code, so it
+                # records no code-body start either)
                 continue
             # a pending heredoc's terminator: the line is the
             # delimiter word itself
@@ -451,6 +473,39 @@ def heredoc_terminator_violations(text: str) -> list[str]:
                             "syntax error) and the step dies at run "
                             "time on a file every standard engine "
                             "parses cleanly")
+                    # the code-body half: a `python3` heredoc whose
+                    # body the dedent leaves indented — the first line
+                    # of a program at a nonzero column is an
+                    # IndentationError the interpreter dies on
+                    if d in code_body:
+                        body_lead = code_body.pop(d)
+                        if body_lead is not None and body_lead > base:
+                            violations.append(
+                                f"step {step_name!r}'s run block "
+                                f"line {lineno + 1}: the "
+                                f"{d!r} heredoc's body is the script of "
+                                "a `python3` call that reads it from "
+                                f"stdin, but its first line is "
+                                f"indented {body_lead} — its block's "
+                                f"base is {base}; the runner's dedent "
+                                f"strips the base and leaves that line "
+                                f"{body_lead - base} past column 0 in "
+                                "the executed script, where a python "
+                                "program's first line may not be "
+                                "indented: the interpreter dies on "
+                                "line 1 with an IndentationError and "
+                                "the step dies at run time on a file "
+                                "every standard engine parses cleanly")
+                continue
+            # a pending heredoc's body line (bash reads it as that
+            # heredoc's content until the terminator) — for a code
+            # heredoc, record the first line's lead: the dedent leaves
+            # the body's indent past the base, and a program may not
+            # open indented
+            if pending:
+                for d in pending:
+                    if d in code_body and code_body[d] is None:
+                        code_body[d] = len(ln) - len(ln.lstrip())
                 continue
             # an opener line (a line inside a pending heredoc's body is
             # body — bash reads it as that heredoc's content until the
@@ -460,7 +515,20 @@ def heredoc_terminator_violations(text: str) -> list[str]:
                     d = om.group(2)
                     if d not in pending:
                         pending[d] = (om.group(0)[2] == "-", lineno)
+                        # a `python3` call reading its program from
+                        # stdin (`python3 -`, or a bare `python3`)
+                        # parses the heredoc body as code: register it
+                        # for the code-body half above (a `python3`
+                        # file argument reads the program from the
+                        # file, the heredoc is data — no check)
+                        cmd = ln.lstrip()
+                        if cmd == "python3" or \
+                                cmd.startswith("python3 "):
+                            args = cmd[len("python3"):].split()
+                            if not args or args[0] == "-":
+                                code_body[d] = None
         for d, (dash, opener_ln) in pending.items():
+            code_body.pop(d, None)
             violations.append(
                 f"step {step_name!r}'s run block line {opener_ln + 1}: "
                 f"the `{'<<-' if dash else '<<'}{d}` heredoc is opened "
@@ -549,9 +617,13 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
         in the executed script — not a terminator there: the shell
         reads the rest of the step's script as the heredoc's body and
         the step dies at run time on a file the engines parse
-        cleanly), or a run block opens a heredoc it never terminates
+        cleanly), a run block opens a heredoc it never terminates
         (the executed script ends mid-heredoc: bash's "here-document
-        delimited by end-of-file");
+        delimited by end-of-file"), or a `python3` code heredoc's
+        body the dedent leaves indented (a program's first line at a
+        nonzero column is an `IndentationError` the interpreter dies
+        on — the published file's pr job steps, run #165's stage 12
+        failure);
     (f) a step field value or run-body line carries a single-brace
         `${` with whitespace after the opening brace — not a
         context expression (the runner's syntax is `${{ }}`, both
@@ -687,9 +759,10 @@ def verify_structure(text: str, expected_jobs=EXPECTED_JOBS,
         + "; no step declares keys after its run block; no run block "
         f"exceeds the {max_run_block_lines}-line giant-body budget; no "
         "run block's heredoc terminator is indented past the block's "
-        "base, no block opens a heredoc it never terminates, and no "
-        "step field or run body carries a `${` with whitespace after "
-        "the opening brace")
+        "base, no block opens a heredoc it never terminates, no "
+        "`python3` code-heredoc body is indented past the block's "
+        "base, and no step field or run body carries a `${` with "
+        "whitespace after the opening brace")
 
 
 def check(root: str, path: str):

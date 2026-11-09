@@ -603,15 +603,16 @@ def test_factory_file_stores_no_binary_content():
                 f"the heredoc's wrapped lines): {body[:40]!r}…")
 
 def _run_block_fixture(terminator_indent=None, *, close=True,
-                       dashed=False, terminator_extra=""):
+                       dashed=False, terminator_extra="",
+                       body_indent=10):
     """A minimal workflow the structure scan reads: one job, one step,
     a run block (base indent 10) whose heredoc's one body line sits at
-    the block's base, its terminator at `terminator_indent` (ten — the
-    block's base — where unspecified) with `terminator_extra` between
-    the base and the word (a `<<-` dash strips leading tabs from the
-    terminator, so a tab there is still a terminator; a space is not),
-    or absent where `close` is false (the block opens the heredoc it
-    never terminates)."""
+    `body_indent` (the block's base where unspecified), its terminator
+    at `terminator_indent` (ten — the block's base — where unspecified)
+    with `terminator_extra` between the base and the word (a `<<-` dash
+    strips leading tabs from the terminator, so a tab there is still a
+    terminator; a space is not), or absent where `close` is false (the
+    block opens the heredoc it never terminates)."""
     opener = "cat > f <<-'EOF'" if dashed else "cat > f <<EOF"
     lines = [
         "name: t",
@@ -623,7 +624,7 @@ def _run_block_fixture(terminator_indent=None, *, close=True,
         "      - name: resolve",
         "        run: |",
         "          " + opener,
-        "          body line",
+        " " * body_indent + "body line",
     ]
     if close:
         lines.append(" " * (terminator_indent
@@ -631,6 +632,33 @@ def _run_block_fixture(terminator_indent=None, *, close=True,
                      + terminator_extra + "EOF")
     lines.append("          echo done")
     return "\n".join(lines)
+
+
+def _code_heredoc_fixture(body_indent, terminator_indent=10):
+    """A minimal workflow the structure scan reads: one job, one step,
+    a run block (base indent 10) whose `python3 -` code-heredoc — the
+    heredoc a `python3` call reads as its program from stdin — has its
+    one body line at `body_indent` (the published file's pr job steps
+    carried it four deeper than the block's base — run #165's stage 12
+    failure) and its terminator at `terminator_indent` (the block's
+    base — the #112-safe shape)."""
+    return "\n".join([
+        "name: t",
+        "on: push",
+        "jobs:",
+        "  trigger:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - name: prepare",
+        "        run: |",
+        "          mkdir -p out",
+        "          set -o pipefail",
+        "          (",
+        "          python3 - <<'EOF'",
+        " " * body_indent + "import os",
+        " " * terminator_indent + "EOF",
+        "          ) 2>&1 | tee -a log",
+    ])
 
 
 def test_committed_factory_file_holds_no_heredoc_terminator_past_its_block_base():
@@ -739,6 +767,101 @@ def test_a_heredoc_opened_but_never_terminated_in_its_block_is_a_structure_viola
     violations = embed.heredoc_terminator_violations(fixture)
     assert len(violations) == 1, f"{violations!r}"
     assert "never terminated" in violations[0], violations[0]
+
+
+def test_a_python_code_heredoc_body_indented_past_its_block_base_is_a_structure_violation():
+    """(the check's code-heredoc half — the shape the published file's
+    pr job steps carried; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    python code heredoc body indents past the run block's base publishes
+    no version`) a run block whose `python3 -` code-heredoc's terminator
+    sits at the block's base (the #112-safe shape — the terminator half
+    passes) but whose body's first line sits four deeper: the dedent
+    strips the base and leaves that line four into column 0 in the
+    executed script, where a python program's first line may not be
+    indented — the interpreter dies on it with an IndentationError
+    (run #165's stage 12 failure) — and the gate fails the file with
+    the exact cause (the step, the line, the body's indent, the base),
+    so the version the tag would point at is not published and a target
+    pin never lands on it."""
+    fixture = _code_heredoc_fixture(body_indent=14)
+    violations = embed.heredoc_terminator_violations(fixture)
+    assert len(violations) == 1, f"{violations!r}"
+    v = violations[0]
+    assert "prepare" in v and "'EOF'" in v and "python3" in v, v
+    assert "indented 14" in v and "base is 10" in v, v
+    assert "IndentationError" in v, v
+    # the full structure gate carries the same verdict (the publish's
+    # pre-tag gate reads it)
+    ok, message = embed.verify_structure(
+        fixture, expected_jobs=("trigger",),
+        expected_step_counts={"trigger": 1})
+    assert not ok
+    assert "python3" in message and "IndentationError" in message, message
+
+
+def test_a_python_code_heredoc_body_at_its_block_base_is_not_a_structure_violation():
+    """(the same scenario — the fixed shape; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    python code heredoc body indents past the run block's base publishes
+    no version`) a run block whose `python3 -` code-heredoc's terminator
+    and its body's first line both sit at the block's base: the dedent
+    strips the base and leaves both at column 0 in the executed script —
+    the terminator a terminator, the program's first line at column 0
+    where a program's first line must be — and the gate passes it."""
+    fixture = _code_heredoc_fixture(body_indent=10)
+    assert embed.heredoc_terminator_violations(fixture) == []
+    ok, message = embed.verify_structure(
+        fixture, expected_jobs=("trigger",),
+        expected_step_counts={"trigger": 1})
+    # the engine half's verdict is environment-dependent (a
+    # stdlib-only test driver's interpreter may import no YAML
+    # engine) — the shape this check pins is the heredoc half: no
+    # violation of it
+    assert "is not parser-safe" not in message, message
+    assert "heredoc's body is the script" not in message, message
+
+
+def test_a_data_heredoc_body_indented_past_its_block_base_is_not_a_structure_violation():
+    """(the same scenario — the check bites only on code heredocs;
+    reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    python code heredoc body indents past the run block's base publishes
+    no version`) a run block whose `cat > f` heredoc's body sits four
+    deeper than the block's base (its terminator at the base, the
+    #112-safe shape): the body is data, never parsed — the dedent leaves
+    its indent and the file keeps the bytes — so the gate passes it
+    (the check's `python3` command test is what keeps a `cat` heredoc
+    out of scope)."""
+    fixture = _run_block_fixture(body_indent=14)
+    assert embed.heredoc_terminator_violations(fixture) == []
+    ok, message = embed.verify_structure(
+        fixture, expected_jobs=("trigger",),
+        expected_step_counts={"trigger": 1})
+    assert "is not parser-safe" not in message, message
+
+
+def test_committed_factory_file_holds_no_code_heredoc_body_indented_past_its_block_base():
+    """(scenario "A workflow file whose python code heredoc body indents
+    past the run block's base publishes no version" — the file the gate
+    guards; reference
+    `requirements/auto-release-on-main.feature::A workflow file whose
+    python code heredoc body indents past the run block's base publishes
+    no version`) the committed factory.yml's run blocks: every
+    `python3` code-heredoc body's first line sits at its block's base
+    indent (the runner's dedent leaves it at column 0 in the executed
+    script, where a python program's first line must be) — the pr
+    job's two heredoc steps once carried the body four deeper inside the
+    console-mirror subshell while the #112 fix held the terminator at
+    the base: the version published and every run since died at stage 12
+    with an IndentationError (run #165)."""
+    text = _read(FACTORY)
+    violations = embed.heredoc_terminator_violations(text)
+    assert not violations, (
+        "the committed factory.yml leaves a run-block heredoc shape off "
+        "its safe form (terminator past the base, code-heredoc body "
+        "indented, or never terminated): "
+        + "; ".join(violations))
 
 
 def _single_brace_fixture(value="${ github.workspace }"):

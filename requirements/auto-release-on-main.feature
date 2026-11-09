@@ -105,6 +105,15 @@ Feature: Automatic release on main branch changes
     And no new version tag is created and no new GitHub release is published
     And a target pin never lands on a file whose step script bash reads to end of file
 
+  @issue-130 @auto-release
+  Scenario: A workflow file whose python code heredoc body indents past the run block's base publishes no version
+    Given a push to the code-weaver repo's main branch
+    And the push's factory workflow file carries a step whose run block's `python3` code-heredoc — the heredoc a `python3` call reads as its program from stdin — has its body's first line indented past the block's base indent (its terminator may sit at the base, the #112-safe shape: the dedent strips the base and leaves the terminator a terminator, but the body keeps its extra indent — a python program's first line may not be indented)
+    When the release machinery gates publication on the committed version
+    Then the run fails at the structure gate with the exact cause, before the tag
+    And no new version tag is created and no new GitHub release is published
+    And a target pin never lands on a file whose step python dies on with an IndentationError
+
   @issue-114 @auto-release
   Scenario: A workflow file whose step field carries a single-brace context expression publishes no version
     Given a push to the code-weaver repo's main branch
