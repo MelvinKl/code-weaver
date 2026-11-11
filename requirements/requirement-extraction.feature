@@ -138,10 +138,8 @@ Feature: Requirement extraction
     Then the extraction stage runs unchanged
     And the run's later stages are unaffected by the bug jump's presence
 
-  @extraction
-  Scenario: A bug-labelled issue with an empty body stops cleanly instead of being forwarded
-    Given the issue carries the trigger label and the bug label
-    And the issue body is empty or describes no change
-    When the run reaches the extraction stage
-    Then no requirement file is written
-    And the factory reports "no delta requirements" and stops cleanly
+  Scenario: The extraction prompt keeps the oracle delta-sized and deduplicated
+    Given the extraction stage assembles the pi call for the derivation
+    When the call's instructions are read
+    Then they direct the extractor to write no scenario for a requirement the oracle already covers — an issue that re-states what an existing scenario already says produces no new scenario for it, the delta being the gap only
+    And they direct the extractor to match each scenario's specificity to the issue description — a scenario carries no detail it cannot trace to the issue's text or to an existing scenario it supersedes

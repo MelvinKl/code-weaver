@@ -63,7 +63,7 @@ Feature: Reporting
   Scenario: A run that died before its AI branch exists still renders its final status report
     Given the run's baseline job failed before it pushed the AI branch
     When the report job decides which ref its checkout takes
-    Then a live probe the job's token makes against the target's API decides the ref — the AI branch where it exists, the PR's base ref where the branch is missing and the PR was opened, the trigger's base ref otherwise
+    Then a live probe the job's token makes against the target's API decides a ref that exists for the checkout
     And the report job's checkout succeeds on that ref
     And the report stage renders the run's no-PR verdict from the artifact channel and posts it on the source issue
 
@@ -75,20 +75,13 @@ Feature: Reporting
     And the run still concludes failure from the failed stage
 
   @report
-  Scenario: The report step's plumbing is bound on a runner where the shared module imports
+  Scenario: The report step's plumbing binds whether or not the shared module imports
     Given the report stage's step is inlined in the factory workflow
     And the step calls its plumbing (the state dir, the state file, the log, the gh api, the branch push) by bare name
-    When the shared module the step imports resolves from the runtime tree
-    Then the step's plumbing names are bound for the step's body
+    When the shared module the step imports does or does not resolve from the runtime tree
+    Then where it resolves, the step's plumbing names are bound for the step's body
+    And where it does not, the step's body runs on its local fallback definitions and completes its report as on the import path
     And the step does not fail with an undefined-name error before any of its report work has run
-
-  @report
-  Scenario: The report step's fallback plumbing stays effective where the shared module cannot import
-    Given the report stage's step is inlined in the factory workflow
-    And the shared module the step imports does not resolve from the runtime tree
-    When the step runs in that environment
-    Then the step's body runs on its local fallback definitions
-    And the step completes its report as on the import path
 
   @report
   Scenario: A skipped extraction stage is reported as skipped, not as complete

@@ -28,13 +28,7 @@ Feature: The setup-pi stage installs and configures pi for the run
     Then the pi LLM backend the run uses is the one in that provided model configuration
     And the stage writes that configuration into the pi agent directory the run's pi invocations resolve
     And a target repo steers the run's backend by providing that configuration, not by the runner's environment
-
-  @setup
-  Scenario: Which configured model is used is adjustable
-    Given the run's provided model configuration lists one or more models
-    When the factory runs with LLM_MODEL "Ornith-1.5-35B-A3B"
-    Then every pi invocation in the pipeline uses that configured model
-    And the backend configuration itself is untouched
+    And the runner's pre-existing user-level configuration is never used as the run's configuration
 
   @setup
   Scenario: The setup stage verifies the pi it installed actually works
@@ -61,6 +55,9 @@ Feature: The setup-pi stage installs and configures pi for the run
     When the setup stage configures pi for the run
     Then the provided harness (models, settings, mcp, the extension's environment file) is written into that agent directory for the run
     And the backend definition in the configuration the stage wrote is what the smoke check verifies
+    And the run's pi invocations inside the checked-out workspace resolve their model configuration from the agent directory the stage wrote
+    And the runner's pre-existing user-level configuration is replaced for the run, not what the invocation resolves
+    And the selected model must be listed in the run's configuration for the setup stage's smoke check to pass
 
   @setup @safety
   Scenario: A setup that cannot install or configure pi fails the stage clearly
@@ -90,34 +87,13 @@ Feature: The setup-pi stage installs and configures pi for the run
     Then the stage fails with an explicit "no backend in the provided configuration" error
     And the runner's pre-existing user-level configuration is never used as the run's configuration
 
-  Scenario: pi resolves its model configuration from the agent directory the setup stage wrote
-    Given pi resolves models.json from the user agent directory ("~/.pi/agent/", or PI_CODING_AGENT_DIR)
-    And the setup stage wrote the run's provided models configuration into that directory
-    When a factory stage invokes pi inside the checked-out workspace
-    Then the invocation resolves the run's provided model configuration from the agent directory
-    And the runner's pre-existing user-level configuration is replaced for the run, not what the invocation resolves
-    And the selected model must be listed in the run's configuration for the setup stage's smoke check to pass
-
-  @setup
-  Scenario: The model configuration is provided by a GitHub secret or a repo file
-    Given the model configuration for the run is provided
-    When the setup stage configures pi for the run
-    Then the provider is a GitHub secret or the repo file ".pi/agent/models.json"
-    And the run's pi invocations resolve their model set from the configuration the stage wrote
-
   @setup
   Scenario: The additional packages are provided by a GitHub secret or a repo file
     Given the additional-packages configuration (the settings content) for the run is provided
     When the setup stage configures pi for the run
     Then the provider is a GitHub secret or the repo file ".pi/settings.json"
     And the run's pi runs with the additional packages the provided settings name
-
-  @setup
-  Scenario: An empty or absent settings provider leaves pi without additional packages
-    Given the settings secret is empty or absent
-    And no ".pi/settings.json" file exists in the repo
-    When the setup stage configures pi for the run
-    Then the run's pi runs without any additional packages
+    And an empty or absent settings provider — with no ".pi/settings.json" in the repo — leaves pi without additional packages
 
   @setup
   Scenario: The MCP configuration is optional
@@ -125,12 +101,7 @@ Feature: The setup-pi stage installs and configures pi for the run
     When the setup stage configures pi for the run
     Then the run proceeds
     And the run's pi runs without MCP servers
-
-  @setup
-  Scenario: The MCP configuration is provided via a GitHub secret
-    Given the MCP configuration (the ".pi/mcp.json" content) is provided via a GitHub secret
-    When the setup stage configures pi for the run
-    Then the stage writes the provided MCP configuration into the pi agent directory for the run
+    And where the MCP configuration (the ".pi/mcp.json" content) is provided via a GitHub secret, the stage writes it into the pi agent directory for the run
 
   @setup
   Scenario: The additional environment variables are provided via a .env-style GitHub secret

@@ -70,8 +70,8 @@ def _readme_example_types():
 def test_readme_example_declares_labeled_only():
     """(scenario "The README example shows a labeled-only trigger";
     reference
-    `requirements/labeled-only-trigger.feature::The README example shows a
-    labeled-only trigger`) the
+    `requirements/labeled-only-trigger.feature::The README example and the repo's own deployed workflow declare
+    the same labeled-only trigger`) the
     README's consumption example declares `issues.types` as exactly
     `[labeled]` — no `opened`, no `edited`."""
     types = _readme_example_types()
@@ -82,8 +82,8 @@ def test_readme_example_declares_labeled_only():
 def test_deployed_consumer_workflow_declares_labeled_only():
     """(scenario "The repo's own deployed workflow uses a labeled-only
     trigger"; reference
-    `requirements/labeled-only-trigger.feature::The repo's own deployed
-    workflow uses a labeled-only trigger`) the consumer workflow this repo
+    `requirements/labeled-only-trigger.feature::The README example and the repo's own deployed workflow declare
+    the same labeled-only trigger`) the consumer workflow this repo
     deploys on itself declares
     `on.issues.types` as exactly `[labeled]` — no `opened`, no `edited`."""
     types = _types_list(_read(".github/workflows/code-weaver.yml"))
@@ -93,8 +93,8 @@ def test_deployed_consumer_workflow_declares_labeled_only():
 def test_readme_example_and_deployed_workflow_agree():
     """(scenario "The documented example and the deployed workflow agree on
     the trigger"; reference
-    `requirements/labeled-only-trigger.feature::The documented example and
-    the deployed workflow agree on the trigger`) both extractions
+    `requirements/labeled-only-trigger.feature::The README example and the repo's own deployed workflow declare
+    the same labeled-only trigger`) both extractions
     are non-empty, equal to each other, and
     each is exactly the single type `labeled` — the two declared triggers
     stay character-for-character the same."""
@@ -109,10 +109,10 @@ def test_consumer_workflow_never_fires_on_opened_or_edited():
     """(scenarios "Opening an issue does not start a factory run" and
     "Editing an issue without a label change does not start a factory
     run"; reference
-    `requirements/labeled-only-trigger.feature::Opening an issue does not
+    `requirements/labeled-only-trigger.feature::An issue opened or edited without a label addition does not
     start a factory run`,
-    `requirements/labeled-only-trigger.feature::Editing an issue without a
-    label change does not start a factory run`,
+    `requirements/labeled-only-trigger.feature::An issue opened or edited without a label addition does not
+    start a factory run`,
     `requirements/trigger.feature::A manual dispatch processes a named
     issue`) GitHub schedules a consumer workflow run only for declared
     event types,
@@ -132,8 +132,8 @@ def test_factory_trigger_gate_unchanged():
     """(scenarios "Adding the trigger label still starts the factory and
     records the issue" and "Adding a label that is not the trigger label
     leaves the factory idle"; reference
-    `requirements/labeled-only-trigger.feature::Adding the trigger label
-    still starts the factory and records the issue`,
+    `requirements/trigger.feature::Editing an issue to add the label starts
+    the factory`,
     `requirements/labeled-only-trigger.feature::Adding a label that is not
     the trigger label leaves the factory idle`)
     the reusable factory is event-agnostic by design — issue #20 changes
@@ -205,8 +205,8 @@ def _stage_jobs_gate_on_the_trigger():
 def test_non_numeric_job_timeout_fails_the_run_at_trigger():
     """(configuration "A non-numeric job timeout fails the run at
     trigger"; reference
-    `requirements/configuration.feature::A non-numeric job timeout
-    fails the run at trigger`) the trigger validates the run's
+    `requirements/configuration.feature::A declared timeout that fails the trigger's validation ends the
+    run before any stage runs`) the trigger validates the run's
     configuration before it records or accepts the run: a declared
     job-timeout value that is not a number of minutes fails the trigger
     with a precise error naming the offending value — the validation
@@ -246,8 +246,8 @@ def test_non_numeric_job_timeout_fails_the_run_at_trigger():
 def test_job_timeout_with_no_headroom_fails_the_run_at_trigger():
     """(configuration "A job timeout with no headroom over the resolved
     pi call cap fails the run at trigger"; reference
-    `requirements/configuration.feature::A job timeout with no headroom
-    over the resolved pi call cap fails the run at trigger`) the
+    `requirements/configuration.feature::A declared timeout that fails the trigger's validation ends the
+    run before any stage runs`) the
     trigger validates the run's configuration before it records or
     accepts the run: where the declared job timeout does not exceed the
     resolved pi call cap — the target's declared pi-timeout value, or
@@ -309,8 +309,8 @@ def test_job_timeout_with_no_headroom_fails_the_run_at_trigger():
 def test_declared_pi_call_cap_the_job_timeout_cannot_exceed_fails_the_run_at_trigger():
     """(configuration "A declared pi call cap the job timeout cannot
     exceed fails the run at trigger"; reference
-    `requirements/configuration.feature::A declared pi call cap the job
-    timeout cannot exceed fails the run at trigger`) the declared-cap
+    `requirements/configuration.feature::A declared timeout that fails the trigger's validation ends the
+    run before any stage runs`) the declared-cap
     view of the trigger's configuration validation, the same comparison
     its job-timeout half makes — the run's job timeout is the target's
     declared job-timeout value, or its "480" default where the consumer

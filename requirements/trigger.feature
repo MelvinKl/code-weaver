@@ -31,12 +31,6 @@ Feature: Factory trigger
     Then the factory workflow does not run
 
   @trigger
-  Scenario: The trigger label is configurable
-    Given the factory is configured with AI_REQUIREMENTS_LABEL "ai-changes"
-    When an issue is labelled "ai-changes"
-    Then the factory workflow runs for that issue
-
-  @trigger
   Scenario: A manual dispatch processes a named issue
     Given no issue label is present
     When the workflow is dispatched with issue_number "42"

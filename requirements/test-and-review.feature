@@ -64,7 +64,6 @@ Feature: Test and review loop
     Given the review stage builds pi's context
     When the requirements that changed in this run are included
     Then they are expanded to their feature files and only those are referenced
-    And no directory is ever passed as an @-argument
 
   Scenario: A review or fix call cut off at its cap is retried, not fatal
     Given a review or fix pi call outlives its time cap and is cut off

@@ -28,12 +28,6 @@ Feature: Pull request and gate loop
     And the body carries no resolved-configuration dump — that lives in the workflow log
     And where the job-env relay dropped the trigger's values, the body still names the issue from the trigger's state files
 
-  @pr
-  Scenario: The PR body links back to the work
-    When the pr-open stage runs
-    Then the PR body references the source issue
-    And the PR body serves as the final status report
-
   @gates
   Scenario: All PR-triggered workflows must be green
     Given the PR is open

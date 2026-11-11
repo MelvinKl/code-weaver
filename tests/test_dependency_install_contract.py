@@ -644,10 +644,8 @@ def test_resolved_pi_call_cap_rides_the_resolved_configuration_record():
     """(configuration "The resolved pi call cap rides the
     resolved-configuration record" and "The resolved job timeout rides
     the resolved-configuration record"; references
-    `requirements/configuration.feature::The resolved pi call cap rides
-    the resolved-configuration record`,
-    `requirements/configuration.feature::The resolved job timeout rides
-    the resolved-configuration record`) the trigger's
+    `requirements/configuration.feature::The resolved settings ride the resolved-configuration record`,
+    `requirements/configuration.feature::The resolved settings ride the resolved-configuration record`) the trigger's
     resolved-configuration record — the workflow-log block its resolve
     step tees into the resolved-config file that rides the trigger's
     artifact — lists the run's resolved pi call cap with the rest of the

@@ -630,8 +630,7 @@ def test_publish_step_carries_the_payload_independent_backstop():
 def test_structure_gate_sits_between_the_consistency_gate_and_the_changed_files_check():
     """(scenario "A workflow file the runner's parser mis-reads publishes
     no version"; reference
-    `requirements/auto-release-on-main.feature::A workflow file the
-    runner's parser mis-reads publishes no version`)
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`)
     release.yml runs the helper's structure gate — the one that fails a
     file a standard engine cannot parse, a step that declares keys after
     its run block (the shape the runner's workflow parser diverges on:
@@ -669,8 +668,8 @@ def test_structure_gate_sits_between_the_consistency_gate_and_the_changed_files_
 def test_release_notes_name_the_changes_since_the_previous_release():
     """(scenario "The release notes name the changes since the
     previous release"; reference
-    `requirements/auto-release-on-main.feature::The release notes name
-    the changes since the previous release`)
+    `requirements/auto-release-on-main.feature::The release notes carry a changelog table of the commits since
+    the previous release`)
     for a release with a predecessor release the notes' changed-since
     reference is the predecessor release and not the first commit:
     release.yml derives the range base from the predecessor release's
@@ -716,8 +715,8 @@ def test_release_notes_name_the_changes_since_the_previous_release():
 def test_release_notes_are_never_empty_for_a_release_that_publishes_changes():
     """(scenario "The release notes are never empty for a release
     that publishes changes"; reference
-    `requirements/auto-release-on-main.feature::The release notes are
-    never empty for a release that publishes changes`)
+    `requirements/auto-release-on-main.feature::The release notes carry a changelog table of the commits since
+    the previous release`)
     a release published for a push that changed at least one file
     carries a changelog table that is not empty: the checkout fetches
     full history (a shallow checkout's object database carries no
@@ -754,8 +753,8 @@ def test_release_notes_are_never_empty_for_a_release_that_publishes_changes():
 def test_release_changelog_is_a_table_of_the_commits_since_the_last_release():
     """(scenario "The release changelog is a table of the commits
     since the last release"; reference
-    `requirements/auto-release-on-main.feature::The release changelog
-    is a table of the commits since the last release`)
+    `requirements/auto-release-on-main.feature::The release notes carry a changelog table of the commits since
+    the previous release`)
     a release published whose branch carries commits since the previous
     release renders its changelog as a table: the changelog is a
     markdown table (its header line and the column-separator line that

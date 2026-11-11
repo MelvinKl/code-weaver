@@ -64,61 +64,27 @@ Feature: Automatic release on main branch changes
     And the skip is achieved by the release flow checking the push's changed files before publishing or by a trigger the consumer-workflow-only change does not fire
     And a later push whose change set reaches the published version publishes the next release
 
-  @issue-79 @auto-release
-  Scenario: The release notes name the changes since the previous release
-    Given a release is published that has a predecessor release
-    When the release's notes are read
-    Then the notes' changed-since reference is the predecessor release and not the first commit
-    And the notes' changelog is a table with one row per commit in the branch since the predecessor release
-
-  @issue-79 @auto-release
-  Scenario: The release notes are never empty for a release that publishes changes
-    Given a release is published for a push that changed at least one file
-    When the release's notes are read
-    Then the notes' changelog table is not empty
-    And the table carries one row per commit in the branch since the release's range base
-    And where the release has no predecessor its range base is the first commit and its table is still not empty
-
-  @issue-18 @auto-release
-  Scenario: The release changelog is a table of the commits since the last release
+  @issue-79 @issue-18 @auto-release
+  Scenario: The release notes carry a changelog table of the commits since the previous release
     Given a release is published whose branch carries commits since the previous release
-    When the release's changelog is read
-    Then the changelog is a table
-    And the table has a row for every commit in the branch since the previous release
-    And each row carries the commit's title, the commit's author, the commit's hash and the commit's datetime
+    And the release's changed-since range base is the predecessor release — or the first commit where the release has no predecessor
+    When the release's notes are read
+    Then the notes' changelog is a table with one row per commit in the branch since the range base
+    And each row carries the commit's title, its author, its hash and its datetime
+    And the table is never empty for a release that publishes changes
 
-  @issue-106 @auto-release
-  Scenario: A workflow file the runner's parser mis-reads publishes no version
+  @issue-106 @issue-112 @issue-114 @issue-130 @auto-release
+  Scenario Outline: A structurally broken factory workflow file publishes no version
     Given a push to the code-weaver repo's main branch
-    And the push's factory workflow file is not parser-safe under a standard YAML engine, declares a step key after its run block, or carries a run block past the giant-body budget
+    And the push's factory workflow file carries the structural defect <defect>
     When the release machinery gates publication on the committed version
     Then the run fails at the structure gate with the exact cause, before the tag
     And no new version tag is created and no new GitHub release is published
-    And a target pin never lands on a file whose jobs the runner's parser mis-reads
+    And a target pin never lands on a file whose steps the runner mis-reads
 
-  @issue-112 @auto-release
-  Scenario: A workflow file whose heredoc terminator indents past the run block's base publishes no version
-    Given a push to the code-weaver repo's main branch
-    And the push's factory workflow file carries a step whose run block's heredoc terminator sits indented past the block's base indent, or opens a heredoc the block never terminates
-    When the release machinery gates publication on the committed version
-    Then the run fails at the structure gate with the exact cause, before the tag
-    And no new version tag is created and no new GitHub release is published
-    And a target pin never lands on a file whose step script bash reads to end of file
-
-  @issue-130 @auto-release
-  Scenario: A workflow file whose python code heredoc body indents past the run block's base publishes no version
-    Given a push to the code-weaver repo's main branch
-    And the push's factory workflow file carries a step whose run block's `python3` code-heredoc — the heredoc a `python3` call reads as its program from stdin — has its body's first line indented past the block's base indent (its terminator may sit at the base, the #112-safe shape: the dedent strips the base and leaves the terminator a terminator, but the body keeps its extra indent — a python program's first line may not be indented)
-    When the release machinery gates publication on the committed version
-    Then the run fails at the structure gate with the exact cause, before the tag
-    And no new version tag is created and no new GitHub release is published
-    And a target pin never lands on a file whose step python dies on with an IndentationError
-
-  @issue-114 @auto-release
-  Scenario: A workflow file whose step field carries a single-brace context expression publishes no version
-    Given a push to the code-weaver repo's main branch
-    And the push's factory workflow file carries a step whose field value holds an opening `${` with whitespace after the brace — the runner's expression syntax is `${{ }}`, the space defeats it, and the runner passes the literal text through as the field's value
-    When the release machinery gates publication on the committed version
-    Then the run fails at the structure gate with the exact cause, before the tag
-    And no new version tag is created and no new GitHub release is published
-    And a target pin never lands on a file whose step the runner cannot start in its working directory
+    Examples:
+      | defect |
+      | a step the runner's YAML parser mis-reads — a step key declared after its run block, or a run block past the giant-body budget |
+      | a step whose run block's heredoc terminator sits indented past the block's base indent, or a heredoc the block never terminates — bash reads to end of file |
+      | a step whose `python3` code-heredoc has its body's first line indented past the block's base indent — the python program dies with an IndentationError |
+      | a step whose field value holds an opening `${` with whitespace after the brace — the runner passes the literal text through as the field's value |

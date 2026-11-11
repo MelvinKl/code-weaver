@@ -69,7 +69,19 @@ Hard rules
    diff). If the issue is empty or too vague to derive any requirement,
    **write nothing** and reply with the single line `no delta requirements` —
    do not pad or guess.
-2. **Place by topic; edit the file that owns it.** A delta's scenarios go
+2. **Write the gap, not the overlap.** If the oracle already covers what the
+   issue asks — an existing scenario states the requirement — that requirement
+   is not part of the delta: write no scenario for a requirement the oracle
+   already covers. An issue that re-states what an existing scenario already
+   says produces no new scenario for it — the delta is the gap only. Re-deriving
+   what the oracle already says is how an oracle bloats.
+3. **Match the issue's specificity.** Write each scenario at the level of
+   detail the issue description carries: where the issue names a mechanism,
+   a threshold or a value, a scenario may carry that detail; where the issue
+   states a behaviour in general terms, the scenario states that behaviour in
+   general terms. A scenario carries no detail it cannot trace to the issue's
+   text or to an existing scenario it supersedes.
+4. **Place by topic; edit the file that owns it.** A delta's scenarios go
    into the topic file that already covers the topic — extended in place —
    and a new file is created only for a topic no existing file covers. Where
    the delta supersedes or contradicts a scenario in an existing file, update
@@ -78,11 +90,11 @@ Hard rules
    the oracle is the single source of truth, so it must say what the project
    now requires. The check reverts an existing file that no longer parses —
    not one that merely changed — and re-runs you.
-3. **Tolerate arc42 structure variance.** The project's arc42 markdown may use
+5. **Tolerate arc42 structure variance.** The project's arc42 markdown may use
    a different structure variant — other chapter names, order, numbering or
    layout. The extraction tolerates the structural difference: extraction
    proceeds on the readable parts — what the docs actually say about the
    components and behaviours the issue touches. A missing, renamed or
    reordered chapter is never a reason to fail, and never a reason to skip
    the readable parts.
-4. **Be idempotent.** Same unchanged input → same file content.
+6. **Be idempotent.** Same unchanged input → same file content.

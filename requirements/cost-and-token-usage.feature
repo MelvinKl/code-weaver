@@ -20,17 +20,12 @@ Feature: Run cost and token usage in the report, token budget removed
   and the configuration stops carrying a budget the pipeline cannot enforce
 
   @issue-43 @report
-  Scenario: The final report lists the input and output tokens used during the run
+  Scenario: The final report lists the run's token usage and total cost
     Given a run whose stages made pi calls
     When the report stage runs
     Then the final status report lists the total input tokens used across the run
     And the final status report lists the total output tokens used across the run
-
-  @issue-43 @report
-  Scenario: The final report lists the total cost of the run
-    Given a run whose stages made pi calls
-    When the report stage runs
-    Then the final status report lists the total cost of the run's LLM usage
+    And the final status report lists the total cost of the run's LLM usage
     And the listed cost is consistent with the run's recorded token usage
 
   @issue-43 @report
@@ -56,12 +51,13 @@ Feature: Run cost and token usage in the report, token budget removed
     And the final status report still lists the tokens and the cost
 
   @issue-43 @config
-  Scenario: The configuration surface no longer carries a token budget
+  Scenario: The configuration surface and its documentation no longer carry a token budget
     Given the factory's configurable settings
-    When a target configures the factory
-    Then the settings contain no max-tokens input and no token budget
+    And the README's table of the factory's workflow inputs
+    When a target configures the factory and the table is read
+    Then the settings and the table contain no max-tokens input and no token budget
     And the resolved configuration recorded in the workflow log has no token budget
-    And the max-loops setting stays configurable at its default of 5
+    And the max-loops setting stays configurable at its default of 5, still listed by the table
 
   @issue-43 @safety
   Scenario: The bounded loops stop on success or their iteration cap, not on token spend
@@ -70,16 +66,3 @@ Feature: Run cost and token usage in the report, token budget removed
     When one of those loops runs
     Then the loop stops when its problems are resolved or when it reaches the MAX_LOOPS iteration cap
     And no token budget is one of the loop's stopping conditions
-
-  @issue-43 @safety
-  Scenario: Removing the token budget keeps the factory guaranteed to terminate
-    Given all remaining loop caps of the pipeline are non-zero
-    Then the factory is guaranteed to terminate
-    And every bounded loop is bounded by its iteration cap alone
-
-  @issue-43 @config
-  Scenario: The documented input surface no longer lists a token budget
-    Given the README's table of the factory's workflow inputs
-    When the table is read
-    Then it lists no max-tokens input and no token budget
-    And it still lists the max-loops input

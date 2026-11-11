@@ -87,8 +87,7 @@ def _secrets_entry(block: str, name: str) -> str:
 def test_factory_declares_the_providers_as_optional_secrets():
     """(configuration "The pi harness secrets ride the reusable workflow's
     secrets block"; reference
-    `requirements/configuration.feature::The pi harness secrets ride the
-    reusable workflow's secrets block`) the factory's workflow_call
+    `requirements/configuration.feature::Secrets are never plain inputs`) the factory's workflow_call
     secrets: block carries the four provider entries — each declared
     `required: false` (an unset provider arrives empty and the setup
     stage treats it as an absent provider, the repo file is the
@@ -117,8 +116,7 @@ def _setup_pi_job(factory: str) -> str:
 def test_setup_pi_job_carries_the_providers_to_the_stage():
     """(configuration "The pi harness secrets ride the reusable workflow's
     secrets block"; reference
-    `requirements/configuration.feature::The pi harness secrets ride the
-    reusable workflow's secrets block`) the setup-pi job delivers the
+    `requirements/configuration.feature::Secrets are never plain inputs`) the setup-pi job delivers the
     four providers to its inlined setup-pi stage through the job's
     `CW_<name>` env: after the consolidation the stage step is an
     ordinary job step (the composite boundary the `with:` relay used to
@@ -145,8 +143,7 @@ def test_no_provider_value_in_with_inputs_or_committed_files():
     secrets block" — "no harness secret value appears in with inputs or
     committed files"; configuration "Secrets are never plain inputs";
     reference
-    `requirements/configuration.feature::The pi harness secrets ride the
-    reusable workflow's secrets block`,
+    `requirements/configuration.feature::Secrets are never plain inputs`,
     `requirements/configuration.feature::Secrets are never plain inputs`) a
     provider
     secret name may be referenced — as a `secrets.` expression, a

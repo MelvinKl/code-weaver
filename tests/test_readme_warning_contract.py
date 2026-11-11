@@ -127,8 +127,7 @@ def test_readme_carries_a_prominent_warning_at_its_top():
 def test_readme_warning_advises_using_the_workflow_only_in_a_private_repo():
     """(scenario "The README warning advises using the workflow only in a
     private repo"; reference
-    `requirements/safety.feature::The README warning advises using the
-    workflow only in a private repo`) the top warning advises a target
+    `requirements/safety.feature::The README carries a prominent warning at its top`) the top warning advises a target
     repo's maintainers to use the code-weaver workflow only in a private
     repo — the statement is asserted inside the warning block itself, not
     merely somewhere in the README (the arc42's compatibility statement
@@ -143,8 +142,7 @@ def test_readme_warning_advises_using_the_workflow_only_in_a_private_repo():
 def test_readme_warning_names_who_can_start_a_factory_run():
     """(scenario "The README warning names who can start a factory run";
     reference
-    `requirements/safety.feature::The README warning names who can start a
-    factory run`) the top warning states that everyone who can create or
+    `requirements/safety.feature::The README carries a prominent warning at its top`) the top warning states that everyone who can create or
     tag issues can create a workflow run of the factory — the warning
     names the trigger surface (a `labeled` issue event, or a manual
     dispatch), not a specific person, because the trigger's only gate is
@@ -161,8 +159,7 @@ def test_readme_warning_names_who_can_start_a_factory_run():
 def test_readme_warning_states_what_a_run_consumes():
     """(scenario "The README warning states what such a run consumes";
     reference
-    `requirements/safety.feature::The README warning states what such a
-    run consumes`) the top warning states that such a run consumes tokens
+    `requirements/safety.feature::The README carries a prominent warning at its top`) the top warning states that such a run consumes tokens
     and creates cost for the repo — the run's usage/cost accounting:
     every pi call the run makes spends tokens billed against the run's
     model configuration, and the cost lands on the repo. The statement is

@@ -152,8 +152,7 @@ def _job_steps(job_lines):
 def test_factory_file_carries_its_runtime_tree_embedded():
     """(reuse-by-ref "a published version is self-contained" — the
     scenario adjusted in place by the issue-100 delta; reference
-    `requirements/reuse-by-ref.feature::A published version is
-    self-contained`) the embed is retired: the file stores no binary
+    `requirements/reuse-by-ref.feature::The whole version is one ref`) the embed is retired: the file stores no binary
     content, so the payload region (the heredoc body of stage 1's first
     step) is gone from the file, and the stage-1 steps that replace it
     resolve the called ref — recovered from the consumer workflow read
@@ -206,8 +205,7 @@ def test_factory_file_carries_its_runtime_tree_embedded():
 
 def test_embedded_tree_holds_the_canonical_runtime_files():
     """(the same scenario, made silent-safe; reference
-    `requirements/reuse-by-ref.feature::A published version is
-    self-contained`) the committed tree the gate verifies — the
+    `requirements/reuse-by-ref.feature::The whole version is one ref`) the committed tree the gate verifies — the
     curated file set the check covers (the prefixes the first job's
     fetch materialises) — carries the canonical runtime files the
     file's steps execute: a curation drift in the check's file set
@@ -241,8 +239,7 @@ def test_no_run_fetches_the_factory_repo():
     """(reuse-by-ref "a published version is self-contained" — the
     single-pin property, its expectation inverted by the issue-100
     delta; reference
-    `requirements/reuse-by-ref.feature::A published version is
-    self-contained`) the fetch returns: a run now DOES fetch the
+    `requirements/reuse-by-ref.feature::The whole version is one ref`) the fetch returns: a run now DOES fetch the
     factory repo, owner-qualified, as its fetch source — the called
     ref selects a published version, the tag's commit carries the file
     and the runtime tree together, and stage 1 fetches that tree. The
@@ -316,8 +313,8 @@ def test_runtime_tree_fetch_succeeds_on_a_different_target_repo():
     """(reuse-by-ref "the runtime tree fetch succeeds on a target repo
     different from the factory's own repo" — added by the issue-104
     delta; reference
-    `requirements/reuse-by-ref.feature::The runtime tree fetch succeeds
-    on a target repo different from the factory's own repo`) a factory
+    `requirements/reuse-by-ref.feature::The runtime tree reaches every stage job of a run on a different
+    repo`) a factory
     run on a target repo that is different from the factory's own repo:
     the first job fetches the called version's runtime tree from the
     factory repo at the called ref into the runner's temp dir, the
@@ -409,8 +406,8 @@ def test_runtime_tree_fetch_succeeds_on_a_different_target_repo():
 def test_trigger_artifact_carries_the_stashed_tree_to_every_stage_job():
     """(reuse-by-ref "the trigger's artifact carries the stashed runtime
     tree to every stage job" — added by the issue-104 delta; reference
-    `requirements/reuse-by-ref.feature::The trigger's artifact carries
-    the stashed runtime tree to every stage job`) a factory run on a
+    `requirements/reuse-by-ref.feature::The runtime tree reaches every stage job of a run on a different
+    repo`) a factory run on a
     target repo that is different from the factory's own repo, whose
     first job materialised the called version's runtime tree into the
     runner's temp dir: when the trigger job uploads its state artifact,
@@ -570,8 +567,7 @@ def test_factory_file_stays_within_the_max_allowed_size():
 def test_factory_file_stores_no_binary_content():
     """(reuse-by-ref "the factory workflow file stores no binary
     content" — the issue-100 delta's added scenario; reference
-    `requirements/reuse-by-ref.feature::The factory workflow file stores
-    no binary content`) the file is plain text — it decodes, and no NUL
+    `requirements/reuse-by-ref.feature::The factory workflow is self-contained`) the file is plain text — it decodes, and no NUL
     byte stands anywhere in it — and the runtime tree its steps execute
     is not embedded in the file as a base64 tarball: the retired payload
     was the tarball's base64 across a `CW_EMBEDDED_RUNTIME_TAR` heredoc
@@ -665,9 +661,7 @@ def test_committed_factory_file_holds_no_heredoc_terminator_past_its_block_base(
     """(scenario "A workflow file whose heredoc terminator indents past
     the run block's base publishes no version" — the file the gate
     guards; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    heredoc terminator indents past the run block's base publishes no
-    version`) the committed factory.yml's run blocks: every heredoc
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) the committed factory.yml's run blocks: every heredoc
     terminator sits at its block's base indent (the runner's dedent
     leaves it at column 0 in the executed script — indented past the
     base, the terminator would not be a terminator: bash would read
@@ -689,9 +683,7 @@ def test_committed_factory_file_holds_no_heredoc_terminator_past_its_block_base(
 
 def test_a_heredoc_terminator_indented_past_its_block_base_is_a_structure_violation():
     """(the same scenario — the gate's check itself; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    heredoc terminator indents past the run block's base publishes no
-    version`) a run block whose heredoc terminator sits four deeper
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a run block whose heredoc terminator sits four deeper
     than the block's base: the dedent strips the base, leaves the
     terminator four into column 0 — not a terminator there — and the
     structure gate fails the file with the exact cause (the step, the
@@ -715,9 +707,7 @@ def test_a_heredoc_terminator_indented_past_its_block_base_is_a_structure_violat
 
 def test_a_heredoc_terminator_at_its_block_base_is_not_a_structure_violation():
     """(the same scenario — the fixed shape; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    heredoc terminator indents past the run block's base publishes no
-    version`) a run block whose heredoc terminator sits at the block's
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a run block whose heredoc terminator sits at the block's
     base: the dedent strips the base, leaves it at column 0 in the
     executed script — a terminator there — and the gate's check
     passes it."""
@@ -738,9 +728,7 @@ def test_a_heredoc_terminator_at_its_block_base_is_not_a_structure_violation():
 def test_a_dashed_heredoc_terminator_indented_with_a_space_is_a_structure_violation():
     """(the same scenario — the `<<-` form's one legal exception;
     reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    heredoc terminator indents past the run block's base publishes no
-    version`) a `<<-DELIM` opener strips the terminator's leading tabs
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a `<<-DELIM` opener strips the terminator's leading tabs
     — a terminator whose extra indent past the base is a tab (only)
     still terminates; one that carries a space does not, and the gate
     fails it."""
@@ -757,9 +745,7 @@ def test_a_dashed_heredoc_terminator_indented_with_a_space_is_a_structure_violat
 
 def test_a_heredoc_opened_but_never_terminated_in_its_block_is_a_structure_violation():
     """(the same scenario — the check's other half; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    heredoc terminator indents past the run block's base publishes no
-    version`) a run block that opens a heredoc whose terminator line
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a run block that opens a heredoc whose terminator line
     never comes: the executed script ends mid-heredoc (bash's
     "here-document delimited by end-of-file") — the same run-time
     death, and the gate names the opener's line."""
@@ -772,9 +758,7 @@ def test_a_heredoc_opened_but_never_terminated_in_its_block_is_a_structure_viola
 def test_a_python_code_heredoc_body_indented_past_its_block_base_is_a_structure_violation():
     """(the check's code-heredoc half — the shape the published file's
     pr job steps carried; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    python code heredoc body indents past the run block's base publishes
-    no version`) a run block whose `python3 -` code-heredoc's terminator
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a run block whose `python3 -` code-heredoc's terminator
     sits at the block's base (the #112-safe shape — the terminator half
     passes) but whose body's first line sits four deeper: the dedent
     strips the base and leaves that line four into column 0 in the
@@ -802,9 +786,7 @@ def test_a_python_code_heredoc_body_indented_past_its_block_base_is_a_structure_
 
 def test_a_python_code_heredoc_body_at_its_block_base_is_not_a_structure_violation():
     """(the same scenario — the fixed shape; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    python code heredoc body indents past the run block's base publishes
-    no version`) a run block whose `python3 -` code-heredoc's terminator
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a run block whose `python3 -` code-heredoc's terminator
     and its body's first line both sit at the block's base: the dedent
     strips the base and leaves both at column 0 in the executed script —
     the terminator a terminator, the program's first line at column 0
@@ -825,9 +807,7 @@ def test_a_python_code_heredoc_body_at_its_block_base_is_not_a_structure_violati
 def test_a_data_heredoc_body_indented_past_its_block_base_is_not_a_structure_violation():
     """(the same scenario — the check bites only on code heredocs;
     reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    python code heredoc body indents past the run block's base publishes
-    no version`) a run block whose `cat > f` heredoc's body sits four
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a run block whose `cat > f` heredoc's body sits four
     deeper than the block's base (its terminator at the base, the
     #112-safe shape): the body is data, never parsed — the dedent leaves
     its indent and the file keeps the bytes — so the gate passes it
@@ -845,9 +825,7 @@ def test_committed_factory_file_holds_no_code_heredoc_body_indented_past_its_blo
     """(scenario "A workflow file whose python code heredoc body indents
     past the run block's base publishes no version" — the file the gate
     guards; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    python code heredoc body indents past the run block's base publishes
-    no version`) the committed factory.yml's run blocks: every
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) the committed factory.yml's run blocks: every
     `python3` code-heredoc body's first line sits at its block's base
     indent (the runner's dedent leaves it at column 0 in the executed
     script, where a python program's first line must be) — the pr
@@ -887,9 +865,7 @@ def test_committed_factory_file_holds_no_single_brace_context_expression():
     """(scenario "A workflow file whose step field carries a
     single-brace context expression publishes no version" — the file
     the gate guards; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    step field carries a single-brace context expression publishes no
-    version`) the committed factory.yml's step fields and run bodies:
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) the committed factory.yml's step fields and run bodies:
     no `${` with whitespace after the opening brace (the runner's
     expression syntax is `${{ }}` — both braces, no space: the
     single-brace-with-space form is not an expression, the runner
@@ -909,9 +885,7 @@ def test_committed_factory_file_holds_no_single_brace_context_expression():
 
 def test_a_single_brace_context_expression_in_a_step_field_is_a_structure_violation():
     """(the same scenario — the gate's check itself; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    step field carries a single-brace context expression publishes no
-    version`) a step whose `working-directory` holds
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) a step whose `working-directory` holds
     `${ github.workspace }` (a single brace, a space after it): not
     an expression — the runner passes the literal text through, the
     working directory does not exist, and the structure gate fails
@@ -934,9 +908,7 @@ def test_a_single_brace_context_expression_in_a_step_field_is_a_structure_violat
 
 def test_a_double_brace_context_expression_in_a_step_field_is_not_a_structure_violation():
     """(the same scenario — the fixed shape; reference
-    `requirements/auto-release-on-main.feature::A workflow file whose
-    step field carries a single-brace context expression publishes no
-    version`) the runner's real syntax — `${{ github.workspace }}`,
+    `requirements/auto-release-on-main.feature::A structurally broken factory workflow file publishes no version`) the runner's real syntax — `${{ github.workspace }}`,
     both braces, no space — is an expression the runner evaluates,
     and the gate's check passes it (the check bites only on the
     space after a single opening brace)."""

@@ -92,7 +92,7 @@ Feature: Reuse by ref, never copy-paste
     When its stage jobs are read
     Then every stage's steps live in the workflow file itself
     And no step references the factory's actions as separate files
-    And the file stores no binary content — the runtime tree its steps execute is not embedded in it
+    And the file is plain text that stores no binary content — the runtime tree its steps execute is not embedded in it as a base64 tarball
 
   @reuse
   Scenario: The stage jobs materialise the runtime tree before their first checkout
@@ -106,7 +106,8 @@ Feature: Reuse by ref, never copy-paste
   Scenario: The whole version is one ref
     Given the factory's reusable workflow at a published version ref
     When a target invokes it at that ref
-    Then the workflow file and the runtime tree its steps execute are the one version that ref selects — the ref's published version carries the file and the tree together, and the file stores no binary payload
+    Then the workflow file and the runtime tree its steps execute are the one version that ref selects — the file's inlined stage steps and its runtime tree, the trigger's artifact carrying the tree across jobs, the file storing no binary payload
+    And a target's ref bump upgrades the factory atomically, with no separate ref to keep in step
     And the consumer's uses: ref is the only pin the consumer's workflow makes — the tree the run executes is the one the ref's version carries
 
   @reuse
@@ -133,24 +134,7 @@ Feature: Reuse by ref, never copy-paste
     And workflows pinned to an older ref keep working
     And a re-run of the release at an unchanged HEAD publishes nothing — one tag per commit, so a number is never spent on a duplicate
 
-  @reuse @issue-60
-  Scenario: The README's consumption pattern works on a target repo
-    Given a target repo whose consumer workflow is written exactly as the README documents it
-    And the target repo's tree holds no copy of the factory's runtime tree
-    When a factory run starts on that target repo
-    Then every stage step runs the factory's own script from the materialised runtime tree
-    And the materialised runtime tree is the factory's at the called ref — the tree of the called version (the consumer relays nothing)
-    And no step fails looking for the factory's scripts under the target's own checkout
-    And the run does not crash at the first stage step
-
-  @reuse @issue-60
-  Scenario: A published version is self-contained
-    Given the factory's reusable workflow at a published version ref
-    And the workflow's stage steps inlined in the file, which stores no binary payload
-    When a target invokes the workflow at that version ref
-    Then the whole version — the workflow's stage steps and its runtime tree, the trigger's artifact carrying the tree across jobs — is selected by that one ref, the file storing no binary payload
-    And a target's ref bump upgrades the factory atomically, with no separate ref to keep in step
-
+  @reuse
   Scenario: Stage steps declare their shell explicitly
     Given a reusable-workflow factory consumed by this repo's ref
     And the factory's stage steps are inlined workflow steps whose run blocks run scripts
@@ -165,27 +149,13 @@ Feature: Reuse by ref, never copy-paste
     When its size is measured
     Then it is at most 500kb — the max allowed size for the file
 
-  @reuse @issue-100
-  Scenario: The factory workflow file stores no binary content
-    Given the factory's reusable workflow .github/workflows/factory.yml
-    When its contents are read
-    Then the file is plain text — no binary payload is stored in it
-    And the runtime tree its steps execute is not embedded in the file as a base64 tarball
-
   @reuse @issue-104
-  Scenario: The runtime tree fetch succeeds on a target repo different from the factory's own repo
+  Scenario: The runtime tree reaches every stage job of a run on a different repo
     Given a target repo that is different from the factory's own repo
     And the target repo's consumer workflow invokes the factory's workflow at a version tag
     When a factory run on that target repo reaches its first job
-    Then the first job fetches the called version's runtime tree from the factory repo at the called ref into the runner's temp dir
-    And the fetch completes without failing
+    Then the first job fetches the called version's runtime tree from the factory repo at the called ref into the runner's temp dir without the fetch failing
     And the materialised runtime tree is the called version's — the tree of the ref the consumer's uses: line selects
-
-  @reuse @issue-104
-  Scenario: The trigger's artifact carries the stashed runtime tree to every stage job
-    Given a factory run on a target repo that is different from the factory's own repo
-    And its first job materialised the called version's runtime tree into the runner's temp dir
-    When the trigger job uploads its state artifact
-    Then the artifact contains the stashed runtime tree — including the hidden directory the stage scripts live under
-    And every later stage job restores the tree from the trigger's artifact before its first checkout
+    And the trigger's artifact carries the stashed tree — including the hidden directory the stage scripts live under — to every later stage job
+    And every later stage job restores the tree from that artifact before its first checkout
     And no stage job of the run dies on a missing stashed runtime file

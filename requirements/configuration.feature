@@ -27,12 +27,6 @@ Feature: Configuration surface
     And the guard-rail allowed sets follow the overridden paths
 
   @config
-  Scenario: The LLM backend is provided for the run, not a pre-requisite of the environment
-    Given the run's model configuration is provided via a GitHub secret or the repo file ".pi/agent/models.json"
-    Then the backend the run uses is the one in that provided configuration
-    And the runner's pre-existing pi configuration is not the run's configuration
-
-  @config
   Scenario: Which configured model is used is adjustable
     Given the run's provided model configuration lists several models
     And the default LLM_MODEL is "Ornith-1.5-35B-A3B"
@@ -69,29 +63,6 @@ Feature: Configuration surface
     And a consumer that leaves the input undeclared keeps the current 360 minute cap
 
   @config
-  Scenario: The pi call cap rides the job-env relay like every other setting
-    Given the target repo passes its settings via with on the reusable workflow
-    When a stage job starts
-    Then its env carries CW_PI_TIMEOUT with the declared value
-    And the stage code resolves the cap as INPUT_PI_TIMEOUT, then CW_PI_TIMEOUT, then the 21600 default
-    And a value set at the CW_PI_TIMEOUT link caps the run's pi calls
-
-  @config
-  Scenario: The resolved pi call cap rides the resolved-configuration record
-    Given the trigger stage records the run's resolved configuration in the workflow log
-    When a run starts with a declared or default pi call cap
-    Then the resolved cap value is listed with the rest of the resolved configuration
-    And the record stays in the workflow log, never committed to the repo
-
-  @config @safety
-  Scenario: A declared pi call cap the job timeout cannot exceed fails the run at trigger
-    Given the run's job timeout is the target's declared job-timeout value, or its "480" default
-    And the target declares a PI_TIMEOUT longer than the job timeout minus the headroom the stage's non-call work needs
-    When the trigger stage validates the run's configuration
-    Then the run fails at trigger time with a precise error
-    And no stage runs after the trigger
-
-  @config
   Scenario: The job's timeout backstop is a target-side input
     Given the factory's reusable workflow declares the job-timeout input as a string
     And its default is "480" minutes
@@ -101,32 +72,23 @@ Feature: Configuration surface
     And a consumer that leaves the input undeclared keeps the 480-minute backstop
 
   @config @safety
-  Scenario: A non-numeric job timeout fails the run at trigger
-    Given a target declares the job-timeout input
-    When the declared value is not a number of minutes
+  Scenario Outline: A declared timeout that fails the trigger's validation ends the run before any stage runs
+    Given the target declares <violation>
+    When the trigger stage validates the run's configuration
     Then the run fails at trigger time with a precise error
     And no stage runs after the trigger
 
-  @config @safety
-  Scenario: A job timeout with no headroom over the resolved pi call cap fails the run at trigger
-    Given the run's resolved pi call cap — the target's declared pi-timeout value, or the 21600 default where undeclared
-    And the headroom the stage's own non-call work needs around each call
-    When the declared job timeout does not exceed the resolved pi call cap by at least that headroom
-    Then the run fails at trigger time with a precise error
-    And no stage runs after the trigger
+    Examples:
+      | violation |
+      | a job timeout that is not a number of minutes |
+      | a PI_TIMEOUT and job-timeout pair with no headroom between them — the job timeout does not exceed the resolved pi call cap (the declared pi-timeout value, or the 21600 default where undeclared) by at least the headroom the stage's non-call work needs (the declared job-timeout value, or the "480" default where undeclared) |
 
   @config
-  Scenario: The resolved job timeout rides the resolved-configuration record
+  Scenario: The resolved settings ride the resolved-configuration record
     Given the trigger stage records the run's resolved configuration in the workflow log
-    When a run starts with a declared or default job timeout
-    Then the resolved value is listed with the rest of the resolved configuration
+    When a run starts with a declared or default pi call cap and job timeout
+    Then the resolved values are listed with the rest of the resolved configuration
     And the record stays in the workflow log, never committed to the repo
-
-  @config
-  Scenario: The job timeout documentation names the runner that enforces it
-    Given the job-timeout input is documented for the target
-    Then it says the job timeout is enforced by whichever runner runs the job
-    And the target names that runner through the runner input
 
   @config
   Scenario: The dependency-upgrade setting is configurable
@@ -144,25 +106,10 @@ Feature: Configuration surface
 
   @config @safety
   Scenario: Secrets are never plain inputs
-    Given the factory requires GH_TOKEN
-    When the target repo wires the token
-    Then it passes it via the reusable workflow's secrets block
-    And no secret value appears in with inputs or committed files
-
-  @config @safety
-  Scenario: The pi harness secrets ride the reusable workflow's secrets block
-    Given the factory accepts the run's pi harness (the models, settings, mcp and extension-env providers) as GitHub secrets
+    Given the factory requires GH_TOKEN and accepts the run's pi harness (the models, settings, mcp and extension-env providers) as GitHub secrets
     When the target repo wires them
-    Then they pass via the reusable workflow's secrets block
-    And no harness secret value appears in with inputs or committed files
-
-  Scenario: A stage's pi call lets pi-jev choose the thinking level
-    Given pi-jev is configured for the run (its environment variables provided via the .env-style secret, or the repo file ".pi/extensions/pi-jev-config.ts") to classify each prompt (PI_JEV_THINKING / --jev-thinking)
-    When a stage builds a headless pi invocation of a reasoning model
-    Then the command does NOT pass an explicit --thinking level
-    And pi-jev chooses the reasoning level for that prompt
-    And the stage's invocation never modifies the pi configuration — only the setup stage writes it for the run
-    And a single call stays within the pi call's own time cap
+    Then the token and the harness providers pass via the reusable workflow's secrets block
+    And no secret value appears in with inputs or committed files
 
   @config
   Scenario: The bug label is configurable
@@ -178,19 +125,8 @@ Feature: Configuration surface
     And their contents are NOT embedded in the prompt in full
     And pi reads the ones the task needs on demand with its read tool
     And the invocation's token overhead stays small
-
-  Scenario: A stage instruction avoids file lists that carry no meaning
-    Given a stage builds the pi prompt for one of its calls
-    When the prompt's instructions are read
-    Then no instruction lists project files as context to rummage through
     And a file list appears in an instruction only where the set is the instruction's scope — the changed requirements the plan must cover, the off-limits files the guard reverts, the plan file the implement stage works
-
-  @config
-  Scenario: The plan files are the only implementation files handed to pi in full
-    Given the implement stage builds a headless pi invocation
-    Then the system prompt is handed to pi in full
-    And the plan files the stage reads and updates are handed to pi in full
-    And every other project file is only referenced by path
+    And where a stage must hand a project file to pi in full, the plan files and the system prompt are the only files it does so with
 
   Scenario: A pi call that dies with no output is a dropped stream, not a broken environment
     Given the model backend process is recreated while a stage's pi call is in flight

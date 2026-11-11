@@ -1286,8 +1286,7 @@ def test_extract_runs_unchanged_for_an_issue_without_the_bug_label():
 def test_extract_bug_labelled_empty_body_stops_cleanly():
     """(requirement-extraction "A bug-labelled issue with an empty body
     stops cleanly instead of being forwarded"; reference
-    `requirements/requirement-extraction.feature::A bug-labelled issue
-    with an empty body stops cleanly instead of being forwarded`) the
+    `requirements/requirement-extraction.feature::A bug-labelled run skips the extraction stage`) the
     bug-skip branch's empty-body edge: a bug-labelled issue whose body is
     empty or describes no change reaches the standing empty-body stop's
     identical observable outcome — no requirement file is written, the
@@ -1987,8 +1986,7 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     reusable workflow`,
     `requirements/reuse-by-ref.feature::A run triggered in the factory's
     own repo works on that repo's code`,
-    `requirements/configuration.feature::The pi harness secrets ride the
-    reusable workflow's secrets block`,
+    `requirements/configuration.feature::Secrets are never plain inputs`,
     `requirements/reuse-by-ref.feature::Every published version is a
     stable ref`)."""
     text = _read(".github/workflows/code-weaver.yml")
@@ -2718,8 +2716,8 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
 def test_report_step_plumbing_is_bound_on_the_import_path():
     """(reporting "The report step's plumbing is bound on a runner where the
     shared module imports" — new scenario; reference
-    `requirements/reporting.feature::The report step's plumbing is bound
-    on a runner where the shared module imports`) on a runner where the
+    `requirements/reporting.feature::The report step's plumbing binds whether or not the shared
+    module imports`) on a runner where the
     shared module resolves from the runtime tree the report job stashed to
     $RUNNER_TEMP before its first checkout, the step's `import common`
     succeeds, and its five plumbing names — the state dir, the state file,
@@ -2877,8 +2875,8 @@ def test_report_fallback_plumbing_completes_the_report_as_the_import_path():
     effective" half is the standing stage-contract tests, which force the
     import failure and assert the report the forced-fallback run
     completes; reference
-    `requirements/reporting.feature::The report step's fallback plumbing
-    stays effective where the shared module cannot import`) where the
+    `requirements/reporting.feature::The report step's plumbing binds whether or not the shared
+    module imports`) where the
     shared module does not resolve from the runtime
     tree, the step's ImportError branch stays in force — the body runs on
     its local fallback definitions and completes its report AS ON THE
@@ -2952,8 +2950,7 @@ def test_report_lists_usage_totals_assembled_from_the_ledger():
     """(issue-43 "the final report lists the input and output tokens used
     during the run", "the usage totals cover every pi call the run
     made"; reference
-    `requirements/cost-and-token-usage.feature::The final report lists
-    the input and output tokens used during the run`,
+    `requirements/cost-and-token-usage.feature::The final report lists the run's token usage and total cost`,
     `requirements/cost-and-token-usage.feature::The usage totals cover
     every pi call the run made`)
     the report action assembles the run's usage totals from the per-call
@@ -2978,8 +2975,7 @@ def test_report_cost_derives_from_usage_and_resolved_model():
     """(issue-43 "the final report lists the total cost of the run" —
     "the listed cost is consistent with the run's recorded token usage";
     reference
-    `requirements/cost-and-token-usage.feature::The final report lists
-    the total cost of the run`)
+    `requirements/cost-and-token-usage.feature::The final report lists the run's token usage and total cost`)
     the listed cost is derived from the recorded usage, keyed on the run's
     resolved model (the llm-model setting from the trigger's
     resolved-config state), and priced at the rates the run's model
@@ -3023,8 +3019,7 @@ def test_report_cost_derives_from_usage_and_resolved_model():
 
 def test_report_cost_prices_at_the_secret_provider_over_the_repo_file():
     """(the same issue-43 cost pin — provider resolution; reference
-    `requirements/cost-and-token-usage.feature::The final report lists
-    the total cost of the run`) the rates the report prices with are the
+    `requirements/cost-and-token-usage.feature::The final report lists the run's token usage and total cost`) the rates the report prices with are the
     ones the run's model
     configuration declares, and the configuration is resolved the way the
     setup stage resolves it: a non-empty PI_MODELS secret wins over the
@@ -3381,8 +3376,8 @@ def _workflow_input_entry(factory: str, name: str) -> str:
 def test_stage_instructions_avoid_file_lists_without_meaning():
     """(configuration "A stage instruction avoids file lists that carry no
     meaning"; reference
-    `requirements/configuration.feature::A stage instruction avoids file
-    lists that carry no meaning`) a file list appears in a stage
+    `requirements/configuration.feature::Project files are referenced by path, not injected into the pi
+    call`) a file list appears in a stage
     instruction only where the set is the instruction's scope, and no
     instruction lists project files as context to rummage through: the
     rummage phrasing is gone from every stage's instruction surface (the
@@ -3724,8 +3719,7 @@ def test_pi_call_cap_rides_the_job_env_relay():
     """(configuration "The pi call cap rides the job-env relay like every
     other setting" — the runtime half of "The pi call time cap is a
     configurable workflow input"; reference
-    `requirements/configuration.feature::The pi call cap rides the job-env
-    relay like every other setting`,
+    `requirements/configuration.feature::The pi call time cap is a configurable workflow input`,
     `requirements/configuration.feature::The pi call time cap is a
     configurable workflow input`) every stage job relays the declared
     value as CW_PI_TIMEOUT in its job env — the documented CW_<name>
@@ -3917,8 +3911,7 @@ def test_job_timeout_backstop_is_a_target_side_input():
 def test_job_timeout_documentation_names_the_runner_that_enforces_it():
     """(configuration "The job timeout documentation names the runner
     that enforces it"; reference
-    `requirements/configuration.feature::The job timeout documentation
-    names the runner that enforces it`) the README's Inputs table — the
+    `requirements/configuration.feature::The job's timeout backstop is a target-side input`) the README's Inputs table — the
     target's documented surface — carries the job-timeout row with the
     480-minute default, and the row says the job timeout is enforced by
     whichever runner runs the job and that the target names that runner
@@ -4941,8 +4934,7 @@ def _implement_stage_sandbox(plan_text):
 def test_implement_logs_per_step_line_on_clean_call():
     """(implement "A clean call with steps still open logs the per-step
     line, not a stage completion" — new scenario; reference
-    `requirements/implement.feature::A clean call with steps still open
-    logs the per-step line, not a stage completion`) the plan file has
+    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`) the plan file has
     open (`- [ ]`) and done (`- [x]`) steps, and a clean generation call
     inside the implement stage has just marked a step done (one step per
     invocation — the sandbox's fake `pi` flips the plan's first open
@@ -4999,8 +4991,7 @@ def test_implement_logs_per_step_line_on_clean_call():
 def test_implement_fully_tracked_plan_logs_full_step_count():
     """(implement "A fully tracked plan logs the full step count before
     the stage completes" — new scenario; reference
-    `requirements/implement.feature::A fully tracked plan logs the full
-    step count before the stage completes`) a plan the implement stage
+    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`) a plan the implement stage
     finds with no open (`- [ ]`) steps left exits its per-step loop on
     the open-step check — without consuming a generation call (the
     sandbox's fake `pi` is never invoked) — and logs the full step count
@@ -5172,8 +5163,7 @@ def test_every_completed_implement_step_is_committed_and_pushed():
 def test_single_call_stages_keep_plain_completion_line():
     """(implement "The single-call stages keep the plain completion
     line" — new scenario; reference
-    `requirements/implement.feature::The single-call stages keep the plain
-    completion line`) the extract, plan or review stage completes in a
+    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`) the extract, plan or review stage completes in a
     single generation call, and when the shared generation loop comes
     back clean for it, it logs the plain "clean — stage complete" line
     for that stage: the loop's completion-line hook defaults to that
@@ -5447,8 +5437,7 @@ def test_completed_stage_work_is_committed_and_pushed():
 def test_templates_plans_and_logs_agree_on_step_wording():
     """(implement "The templates, the plan files and the stage log agree
     on one word for the plan's units" — new scenario; reference
-    `requirements/implement.feature::The templates, the plan files and
-    the stage log agree on one word for the plan's units`) one word for
+    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`) one word for
     the plan's checklist units — "step" — across every plan-facing
     surface: the planner template prescribes the plan's section heading
     "Steps" and its units as steps, the implementer template calls the

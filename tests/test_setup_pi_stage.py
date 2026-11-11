@@ -124,12 +124,11 @@ def test_secret_provider_wins_over_repo_file():
     a repo file", "The additional packages are provided by a GitHub secret
     or a repo file", "The MCP configuration is provided via a GitHub secret"
     — the GitHub-secret half of each provider pair; reference
-    `requirements/setup-pi.feature::The model configuration is provided
-    by a GitHub secret or a repo file`,
+    `requirements/setup-pi.feature::The LLM backend configuration is provided for the run, not a
+    pre-requisite of the environment`,
     `requirements/setup-pi.feature::The additional packages are provided
     by a GitHub secret or a repo file`,
-    `requirements/setup-pi.feature::The MCP configuration is provided via
-    a GitHub secret`) a non-empty GitHub
+    `requirements/setup-pi.feature::The MCP configuration is optional`) a non-empty GitHub
     secret provider wins over the named repo file: the resolved content is
     the secret's, for every harness element that carries both a secret and
     a repo-file provider. A secret value that arrives empty is an absent
@@ -170,8 +169,8 @@ def test_secret_provider_wins_over_repo_file():
 def test_empty_or_absent_settings_provider_leaves_no_additional_packages():
     """(setup-pi "An empty or absent settings provider leaves pi without
     additional packages"; reference
-    `requirements/setup-pi.feature::An empty or absent settings provider
-    leaves pi without additional packages`) the harness materialisation writes a
+    `requirements/setup-pi.feature::The additional packages are provided by a GitHub secret or a
+    repo file`) the harness materialisation writes a
     `settings.json` only for a present provider: with the provider empty or
     absent (both halves), it CLEARS the agent directory's `settings.json`
     instead — the runner's pre-existing user-level settings (which declare
@@ -258,8 +257,8 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
     variables are provided via a .env-style GitHub secret"; reference
     `requirements/setup-pi.feature::The run's harness is written into the
     agent subdirectory the invocation resolves`,
-    `requirements/setup-pi.feature::pi resolves its model configuration
-    from the agent directory the setup stage wrote`,
+    `requirements/setup-pi.feature::The run's harness is written into the agent subdirectory the
+    invocation resolves`,
     `requirements/setup-pi.feature::The additional environment variables
     are provided via a .env-style GitHub secret`) the harness
     materialisation targets the agent subdirectory the run's pi invocations

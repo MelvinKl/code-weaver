@@ -118,32 +118,10 @@ Feature: Implementation
     And each adjusted test that implements a scenario cites it in its docstring as <feature file>::<scenario name>
 
   @implement
-  Scenario: A clean call with steps still open logs the per-step line, not a stage completion
+  Scenario: The implement stage's completion log tracks the plan's steps
     Given the plan file has open (`- [ ]`) and done (`- [x]`) steps
     When a clean generation call inside the implement stage has just marked a step done
-    Then the implement stage logs "stage 8 implementation: clean — step <done>/<total> of the plan done; <remaining> step(s) remain"
-    And done, total and remaining are counted from the plan file's checkboxes
+    Then the implement stage logs the per-step progress — "step <done>/<total> of the plan done; <remaining> step(s) remain" — done, total and remaining counted from the plan file's checkboxes
     And no "stage complete" is printed by the implement stage while any step of its plan remains open
-
-  @implement
-  Scenario: A fully tracked plan logs the full step count before the stage completes
-    Given the plan file has no open (`- [ ]`) steps left
-    When the implement stage exits its per-step loop
-    Then it logs "stage 8 implementation: all <total> plan steps done — stage complete" with the plan's total step count
-    And that is the only line the implement stage prints that calls the stage complete
-
-  @implement
-  Scenario: The single-call stages keep the plain completion line
-    Given the extract, plan or review stage completes in a single generation call
-    When the shared generation loop comes back clean for it
-    Then it logs the plain "clean — stage complete" line for that stage
-    And the per-step completion label is the implement stage's own — the shared loop does not force one wording on every caller
-
-  @implement
-  Scenario: The templates, the plan files and the stage log agree on one word for the plan's units
-    Given the planner template and the implementer template
-    And a plan file the plan stage generated and the implement stage's log
-    When their wording for the plan's checklist units is read
-    Then the plan's section heading is "Steps"
-    And the templates' instructions and the implement stage's log call the units steps
-    And the checkbox form `- [ ]` for an open unit and `- [x]` for a done one is unchanged — the code that reads the plan keys on the checkbox, not the word
+    And only when the plan file has no open step left does the stage log the all-steps-done line with the plan's total step count — the only line the stage prints that calls the stage complete
+    And the single-call stages keep the plain "clean — stage complete" line — the per-step completion label is the implement stage's own, the shared loop not forcing one wording on every caller
