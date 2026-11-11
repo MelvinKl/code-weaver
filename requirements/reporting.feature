@@ -59,6 +59,14 @@ Feature: Reporting
     And the source issue is commented with the failure summary
     And no report file is written into the repo
 
+  @report
+  Scenario: A run that died before its AI branch exists still renders its final status report
+    Given the run's baseline job failed before it pushed the AI branch
+    When the report job decides which ref its checkout takes
+    Then a live probe the job's token makes against the target's API decides the ref — the AI branch where it exists, the PR's base ref where the branch is missing and the PR was opened, the trigger's base ref otherwise
+    And the report job's checkout succeeds on that ref
+    And the report stage renders the run's no-PR verdict from the artifact channel and posts it on the source issue
+
   Scenario: A report is not blocked by a stage that never ran
     Given an earlier stage failed and its job was skipped downstream
     When the report job downloads the stage artifacts

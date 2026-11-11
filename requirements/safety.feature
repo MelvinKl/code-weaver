@@ -157,3 +157,19 @@ Feature: Secrets and safety
     Given the warning at the top of the README
     When it is read
     Then it states that such a run consumes tokens and creates cost for the repo
+
+  @safety
+  Scenario: Every stage job of the pipeline trusts the workspace for git before any later step runs git in it
+    Given a runner whose workspace the runner process does not own (a re-provisioned runner, a squashed share mount)
+    And the checkout step's safe.directory shim lives in a temporary HOME that exists for that step alone
+    When a later step of the job runs git against the workspace — the stage's branch cut, fetch, commit or push
+    Then that step's git reads the workspace's safe.directory entry from the runner user's own global git configuration
+    And no step of the job dies with "detected dubious ownership" on that runner
+    And a write that cannot land (a runner user whose home is unwritable) warns and continues — the job must never die on the trust
+
+  @safety
+  Scenario: A stage script's git children carry the workspace's safe.directory entry in their own process environment
+    Given the checkout step's safe.directory shim is written into a temporary HOME that exists for that step alone
+    When the stage script's git child process runs in a later step of the job
+    Then its managed git environment pins the workspace as a safe.directory entry for that child process, beside the runner user's home and the current working directory
+    And the child process's git works whatever the runner user's global git configuration holds

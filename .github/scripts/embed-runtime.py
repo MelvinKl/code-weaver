@@ -256,22 +256,30 @@ EXPECTED_JOBS = ("trigger", "setup-pi", "baseline", "extract", "plan",
 # the gate's failure message.
 EXPECTED_STEP_COUNTS = {
     "trigger": 7,
-    "setup-pi": 6,  # re-pinned: +1 — the job's Setup Node step (a pristine
+    # Every stage job below re-pinned +1 for its Trust step (the
+    # workspace's safe.directory entry written into the runner user's
+    # own global git configuration before any later step of the job
+    # runs git in the workspace: run 42968837898's baseline stage died
+    # on 'detected dubious ownership' in its first git fetch — the
+    # checkout action's shim lives in a temporary HOME that exists for
+    # that step alone, and the stage's git children now carry the
+    # entry in their own managed process environment as well).
+    "setup-pi": 7,  # re-pinned: +1 — the job's Setup Node step (a pristine
     # runner has no npm for stage 2's pi install: node is provisioned by
     # the job, never presumed)
-    "baseline": 9,  # re-pinned: +1 — the job's second restore step (the
+    "baseline": 10,  # re-pinned: +1 — the job's second restore step (the
     # setup-pi stage's artefact, downloaded alongside the trigger's, so
     # the cumulative chain carries the setup state past the
     # setup→baseline hop — every later artefact needs it, and the first
     # pi-calling stage after baseline dies at the pi call it cannot
     # resolve without it; run 42480359617)
-    "extract": 8,
-    "plan": 8,
-    "implement": 10,
-    "review": 9,
-    "pr": 16,
-    "gates": 10,
-    "report": 15,
+    "extract": 9,
+    "plan": 9,
+    "implement": 11,
+    "review": 10,
+    "pr": 17,
+    "gates": 11,
+    "report": 16,
 }
 
 # A step's `run` block scalar over this many lines is a giant inline

@@ -972,7 +972,45 @@ def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     the real git binary"). Each inline workflow step's python runs in
     its own interpreter and carries the same one-function shape with
     its own copy.
+
+    The child's git reads the workspace's safe.directory entry from its
+    OWN process environment: actions/checkout's safe.directory shim is
+    written into a temporary HOME that exists for the checkout step
+    alone, so a git child running in a LATER step of the same job (the
+    stage's branch cut, fetch, commit and push against the checked-out
+    workspace) would read a user-global configuration without the
+    entry, and git refuses the workspace with 'detected dubious
+    ownership' where the runner process does not own it (the death of
+    run 42968837898's baseline stage). The managed entries pin the
+    runner user's home directory, the current working directory, and —
+    where the step's GITHUB_WORKSPACE is known (set on every runner
+    step, unset for a local invocation) — the workspace itself as
+    safe.directory; they are appended after any GIT_CONFIG_* entries
+    the caller already composed (the push's empty-cookie entry keeps
+    its index), so the child's configuration is complete and
+    count-consistent whatever the user-global configuration holds.
     """
+    env = dict(kwargs.pop("env", None) or os.environ)
+    try:
+        n = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        n = 0
+    for k in [k for k in env
+              if k.startswith("GIT_CONFIG_KEY_") or k.startswith("GIT_CONFIG_VALUE_")]:
+        if k.rsplit("_", 1)[-1].isdigit() and int(k.rsplit("_", 1)[-1]) >= n:
+            del env[k]  # a dangling caller/runner entry beyond the count
+    entries = [
+        ("safe.directory", os.path.expanduser("~")),
+        ("safe.directory", os.getcwd()),
+    ]
+    ws = os.environ.get("GITHUB_WORKSPACE")
+    if ws:
+        entries.append(("safe.directory", ws))
+    env["GIT_CONFIG_COUNT"] = str(n + len(entries))
+    for i, (k, v) in enumerate(entries, start=n):
+        env["GIT_CONFIG_KEY_%d" % i] = k
+        env["GIT_CONFIG_VALUE_%d" % i] = v
+    kwargs["env"] = env
     return subprocess.run(["git"] + list(argv), **kwargs)
 
 

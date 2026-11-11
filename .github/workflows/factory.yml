@@ -145,6 +145,39 @@
 # nested shell with only `GH_TOKEN` set inherits dangling
 # `GIT_CONFIG_KEY_i` entries and dies with
 # `unknown value GIT_CONFIG_COUNT`.
+#
+# The workspace is trusted for git before any step runs git in it.
+# A runner whose workspace was written by a different uid than the
+# runner process (a re-provisioned runner, a squashed share mount)
+# makes git refuse the workspace with "detected dubious ownership" —
+# and only inside a step whose own git reads the workspace: the
+# checkout action's safe.directory shim lives in a temporary HOME
+# that exists for that step alone, so every later step of the job
+# (the stage's python git calls, the branch push) would run against
+# a configuration without the entry and die (run 42968837898's
+# baseline stage: its first git fetch exited 128 on the ownership
+# check while the checkout step above it had passed, and the report
+# job's checkout of the never-pushed AI branch died on top of it).
+# Every stage job therefore writes the workspace's safe.directory
+# entry into the runner user's own global git configuration in its
+# Trust step — after the artifact restore the stashed tree rides on,
+# before the checkout that replaces the workspace: a guarded
+# idempotent write that warns and continues where it cannot land,
+# so a job never dies on the trust. The stage scripts' git children
+# carry the same entry in their own managed process environment (the
+# common module's git-env constructor, and each stage script's local
+# fallback copy): the process-level half of the same property, and
+# the half that keeps a runner user whose home is unwritable from
+# refusing the workspace in the stage's git children.
+# The report job's checkout ref is decided from a live probe of the
+# AI branch (an API read the job's token makes): a run that died
+# before its baseline job pushed the branch has no AI branch to
+# check out — the probe's absence branch checks out the base ref
+# instead, and the report stage (which renders the no-PR verdict
+# from the artefact channel and posts it on the source issue, and
+# which keeps the target tree untouched on a base-ref checkout)
+# completes where a checkout of the absent ref would have killed the
+# job before its report work.
 name: Code Weaver factory
 
 on:
@@ -738,6 +771,36 @@ jobs:
         with:
           name: cw-trigger
           path: ${{ runner.temp }}/cw
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           token: ${{ secrets.GH_TOKEN }}
@@ -916,6 +979,36 @@ jobs:
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
               echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1078,6 +1171,36 @@ jobs:
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
               echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1218,6 +1341,36 @@ jobs:
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
               echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1357,6 +1510,36 @@ jobs:
               echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
               echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
@@ -1627,6 +1810,36 @@ jobs:
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
               echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -1799,6 +2012,36 @@ jobs:
               echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
               echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
@@ -2195,6 +2438,36 @@ jobs:
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
               echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -2390,9 +2663,82 @@ jobs:
               # expression (observed: baseline's checkout got the value, extract's
               # did not, from the same file); a step's own outputs are the
               # deterministic in-job relay
-              echo "checkout-ref=ai/code-weaver/$V_ISSUE" >> "$GITHUB_OUTPUT"
+              # A live probe decides which ref that relay carries (the old relay
+              # wrote checkout-ref=ai/code-weaver/<issue> unconditionally — a run
+              # whose baseline job died before pushing the branch left this job's
+              # checkout with no branch to check out, and the job died before its
+              # report work: run 42968837898's final status report never
+              # rendered because its checkout of the absent branch failed):
+              #   the probe (a read this job's token makes against the target's
+              #   API — the checkout cannot be asked) asks whether the AI branch
+              #   exists on the remote, and which ref the PR opened from:
+              #     branch exists       → the AI branch
+              #     missing, PR exists  → the PR's base ref: the baseline died
+              #     before pushing; a run that failed before a pull request
+              #     could open is itself the verdict, and the base ref is the
+              #     checkout that lets the report stage render and post that
+              #     verdict
+              #     missing, no PR      → the trigger's base ref (the fallback
+              #     the old relay carried)
+              #   a probe that errors (the token without the read it needs, the
+              #   API flaking) falls back to the trigger's base ref too — the
+              #   report must never be killed by the checkout it renders from
+              V_CHECKOUT_REF=$( \
+                PROBE_HTTP=$(curl -s -o /dev/null -w '%{http_code}' \
+                  -H "Authorization: token $GH_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${{ inputs.base-repo }}/git/refs/ai/code-weaver/$V_ISSUE")
+                if [ "$PROBE_HTTP" = "200" ]; then
+                  echo "ai/code-weaver/$V_ISSUE"
+                  exit 0
+                fi
+                PR_BASE_REF=$(curl -s \
+                  -H "Authorization: token $GH_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${{ inputs.base-repo }}/pulls/${{ inputs.pr-number }}" 2>/dev/null \
+                  | python3 -c 'import json,sys
+                        try:
+                            print(json.load(sys.stdin)["base"]["ref"])
+                        except Exception:
+                            pass')
+                if [ -n "$PR_BASE_REF" ]; then
+                  echo "$PR_BASE_REF"
+                else
+                  echo "$V_BASE_REF"
+                fi)
+              echo "checkout-ref=$V_CHECKOUT_REF" >> "$GITHUB_OUTPUT"
               echo "base-ref=$V_BASE_REF" >> "$GITHUB_OUTPUT"
-              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA"
+              echo "trigger state: started=$V_STARTED issue=$V_ISSUE title=$V_TITLE base=$V_BASE_REF@$V_BASE_SHA checkout-ref=$V_CHECKOUT_REF (branch probe: http=$PROBE_HTTP)"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Trust the workspace for git (safe.directory for the job's later steps)
+        # The runner user's own global git configuration must carry the
+        # workspace as a safe directory before any later step of the job
+        # runs git against it: the checkout action's safe.directory shim
+        # lives in a temporary HOME that exists for that step alone, so on
+        # a runner whose workspace the runner process does not own every
+        # later step — the stage's python git calls, the branch push —
+        # would refuse the workspace with 'detected dubious ownership'
+        # (run 42968837898's baseline stage died exactly there). The
+        # write is guarded idempotent (a re-triggered run adds no
+        # duplicate entry), and a write that cannot land (a runner user
+        # whose home is unwritable) warns and continues — the job must
+        # never die on the trust: the stage scripts' git children carry
+        # their own managed safe.directory environment, which is what
+        # makes the later steps' git work on such a runner.
+        shell: bash
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" \
+                || git config --global --add safe.directory "$GITHUB_WORKSPACE" \
+                || echo "::warning::the runner user's git configuration could not take the workspace's safe.directory entry — the job's later steps rely on the stage scripts' own managed git environment"
+              echo "workspace git trust: safe.directory $GITHUB_WORKSPACE $(git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$GITHUB_WORKSPACE" && echo recorded || echo not-recorded)"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/checkout@v7
         with:

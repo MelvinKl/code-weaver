@@ -40,8 +40,34 @@ def git_exec(argv: list, **kwargs):
     """This script's single git entry point — the same one-function shape
     the shared module carries (the test suite mocks that one function, so
     no test ever spawns the real git binary). The canonical path calls
-    common's copy; the inline fallback below calls this one."""
+    common's copy; the inline fallback below calls this one.
+
+    The child's git reads the workspace's safe.directory entry from its
+    own process environment: actions/checkout's safe.directory shim is
+    written into a temporary HOME that exists for the checkout step
+    alone, so a git child running in a later step of the same job would
+    otherwise read a user-global configuration without the entry, and
+    git would refuse the workspace with 'detected dubious ownership'
+    where the runner process does not own it (the death of run
+    42968837898's baseline stage). The managed entries pin the runner
+    user's home directory, the current working directory, and — where
+    the step's GITHUB_WORKSPACE is known — the workspace itself as
+    safe.directory, on a copy of the environment sanitised of any
+    leaked GIT_CONFIG_* entries (a dangling key the count never fills
+    would make the child's git die on the missing key)."""
     import subprocess
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_CONFIG_")}
+    entries = [("safe.directory", os.path.expanduser("~")),
+               ("safe.directory", os.getcwd())]
+    ws = os.environ.get("GITHUB_WORKSPACE")
+    if ws:
+        entries.append(("safe.directory", ws))
+    env["GIT_CONFIG_COUNT"] = str(len(entries))
+    for i, (k, v) in enumerate(entries):
+        env["GIT_CONFIG_KEY_%d" % i] = k
+        env["GIT_CONFIG_VALUE_%d" % i] = v
+    kwargs["env"] = env
     return subprocess.run(["git"] + list(argv), **kwargs)
 
 

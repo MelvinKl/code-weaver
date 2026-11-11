@@ -4,3 +4,6 @@ __pycache__/
 test-results/
 # pi project package installs (npm:pi-jev, see .pi/settings.json)
 .pi/npm/
+# local scratch: the release-remote tag/sha listing written by ad-hoc
+# ls-remote probing of the `public` remote — runner-local, never part of the tree
+shas
