@@ -2145,6 +2145,23 @@ jobs:
           EOF
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Generate the PR body with pi (from the requirements, the plan and the review)
+        env:
+          # The stage code resolves each value as INPUT_*, then the CW_*
+          # env, then the state file — this step's env is the relay the
+          # composite-action boundary used to provide: the #106
+          # stashed-launch conversion dropped the block, and the call died
+          # on the chain's end 'input template unbound' (run
+          # 43013214047's stage 12 failure). A step env entry is the
+          # reliable channel on this runner build; the job-level
+          # GITHUB_ENV relay is not, and the trigger writes no template
+          # / model / prompt state file — the step is their only source.
+          CW_MODEL: ${{ inputs.llm-model }}
+          CW_TEMPLATE: pr-body
+          CW_PROMPT_FILE: ${{ runner.temp }}/cw/pr-prompt.md
+          CW_CONTEXT: ${{ steps.prepare-body.outputs.context }}
+        # a failed pi call must not block the PR — the template fallback
+        # below assembles the body instead
+        continue-on-error: true
         # The stage script runs from the stash — the runtime tree this
         # job's first step copied from the called repo at the called ref,
         # before the stage's checkout replaced the workspace with the
