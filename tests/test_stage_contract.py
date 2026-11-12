@@ -3971,6 +3971,119 @@ def test_job_timeout_documentation_names_the_runner_that_enforces_it():
          "passes validation honours the declared value")
 
 
+def test_fastmode_threshold_is_a_configurable_workflow_input():
+    """(configuration "The fastmode threshold is a configurable workflow
+    input"; reference
+    `requirements/configuration.feature::The fastmode threshold is a
+    configurable workflow input`) the reusable workflow declares
+    fastmode-threshold on its input surface — a string input, optional
+    (an older consumer's with: block stays schema-valid), default "5"
+    steps, the string-typed optional input with a code default sibling
+    pattern the contract tests already pin (pi-timeout default 21600,
+    max-loops default 5, dependency-upgrade default on) — and the
+    file↔code one property holds: the input's default matches the
+    threshold constant the shared plumbing's chain resolves to. The
+    value relays into the stage environment through the documented
+    INPUT_FASTMODE_THRESHOLD → CW_FASTMODE_THRESHOLD chain (the
+    implement job's env block carries the CW_ leg — the per-job env
+    relay whose existence the composite-action input-binding constraint
+    forces), and the trigger's resolved-configuration record lists the
+    resolved value — the target's declared value, or 5 where the
+    consumer leaves the input undeclared — which stays in the workflow
+    log, never committed to the repo. No trigger-time validation guards
+    the input (the trigger-validation scenario's Examples table covers
+    the timeout pair only): a declared value resolves as-is through the
+    standard chain and is consumed at the implement stage's comparison
+    in the step that branches on it — the stage's branch (a plan below
+    the threshold worked in a single iteration; at or above it the
+    one-step-at-a-time loop) lands in that consuming step. A consumer
+    that leaves the input undeclared keeps the default of 5: this
+    repo's own consumer workflow (the dogfood) declares no
+    fastmode-threshold of its own, so such a run is unchanged — this
+    test pins the declaration, the chain's code default, the env relay
+    and the resolved-config record."""
+    factory = _read(".github/workflows/factory.yml")
+    # the input surface declares the threshold — a string input,
+    # optional (an older consumer's with: block stays schema-valid),
+    # default "5" steps
+    assert _workflow_input_default(factory, "fastmode-threshold") == "5", \
+        "the fastmode threshold's default is 5 steps"
+    entry = _workflow_input_entry(factory, "fastmode-threshold")
+    assert "type: string" in entry, \
+        "the fastmode-threshold input is not a string input"
+    assert "required: false" in entry, \
+        "the fastmode-threshold input must be optional — an older " \
+        "consumer's with: block stays schema-valid"
+    # the file↔code one property: the shared plumbing's chain end
+    # matches the input's default — the value an undeclared
+    # consumer's run resolves
+    spec = importlib.util.spec_from_file_location(
+        "cw_fastmode_threshold_common",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_fastmode_threshold_common"] = mod
+    try:
+        spec.loader.exec_module(mod)
+        assert mod.FASTMODE_THRESHOLD_DEFAULT == 5, \
+            (f"the shared plumbing's FASTMODE_THRESHOLD_DEFAULT "
+             f"({mod.FASTMODE_THRESHOLD_DEFAULT}) does not match the "
+             f"fastmode-threshold input's default (5) — the value an "
+             f"undeclared consumer's run resolves")
+    finally:
+        sys.modules.pop("cw_fastmode_threshold_common", None)
+    # the implement job — the stage that consumes the threshold —
+    # relays the input's value as the chain's CW_ leg (the per-job env
+    # relay the stage jobs carry)
+    lines = factory.splitlines()
+    job_keys = ("trigger", "setup-pi", "baseline", "extract", "plan",
+                "implement", "review", "pr", "gates", "report")
+    starts = [i for i, ln in enumerate(lines)
+              if ln.startswith("  ") and not ln.startswith("   ")
+              and ln.strip() in {k + ":" for k in job_keys}]
+    impl = "\n".join(lines[starts[job_keys.index("implement")]:
+                           starts[job_keys.index("review")]])
+    assert ("CW_FASTMODE_THRESHOLD: "
+            "${{ inputs.fastmode-threshold }}") in impl, \
+        ("the implement job's env does not relay the fastmode-threshold "
+         "input as CW_FASTMODE_THRESHOLD — the stage code resolves the "
+         "threshold through INPUT_FASTMODE_THRESHOLD → "
+         "CW_FASTMODE_THRESHOLD → the 5-step code default, and the CW_ "
+         "leg is the job-env entry the implement job carries from the "
+         "input")
+    # the trigger's resolved-configuration record lists the resolved
+    # value — the target's declared value, or 5 where the consumer
+    # leaves the input undeclared — in the same `{ … } | tee` group as
+    # the rest of the resolved configuration (the documented audit
+    # surface: recorded in the workflow log, never committed)
+    trig = factory[factory.index("  trigger:"):factory.index("  setup-pi:")]
+    heading = trig.index('echo "### Code Weaver — resolved configuration')
+    assert heading != -1, "the trigger lost its resolved-config heading"
+    start = trig.rfind("{", 0, heading)
+    assert start != -1, \
+        "the resolved-config group lost its opening brace"
+    end = trig.find('} | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"',
+                    heading)
+    assert end != -1, "the resolved-config group lost its `} | tee` close"
+    block = trig[start:end]
+    value = [ln for ln in block.splitlines()
+             if "echo" in ln and "fastmode threshold" in ln
+             and "{{ inputs.fastmode-threshold }}" in ln]
+    assert value, ("the resolved-configuration record does not list the "
+                   "resolved fastmode threshold")
+    assert any("or its 5-step default where the input is undeclared" in ln
+               for ln in value), \
+        ("the record's fastmode-threshold line does not name the 5-step "
+         "default a consumer that leaves the input undeclared keeps")
+    # a consumer that leaves the input undeclared keeps the default of
+    # 5: this repo's own consumer workflow (the dogfood) declares no
+    # fastmode-threshold of its own — such a run rides the default
+    # unchanged
+    consumer = _read(".github/workflows/code-weaver.yml")
+    assert "fastmode-threshold" not in consumer, \
+        "the consumer workflow gains no fastmode-threshold line — a " \
+        "consumer that leaves the input undeclared keeps the default of 5"
+
+
 def test_dependency_upgrade_setting_is_configurable():
     """(configuration "The dependency-upgrade setting is configurable";
     reference
@@ -4838,8 +4951,20 @@ _FAKE_PI_IMPLEMENT = (
         "print(json.dumps({'type': 'agent_settled'}))\n"
 )
 
+# The fastmode variant of the sandbox's fake implementer: the same
+# one-call JSONL stream and events-file recording, but one call works
+# EVERY open step of the plan (the fastmode branch's single-iteration
+# contract) instead of only the first — the one-step variant's `break`
+# after the first flipped checkbox is the only flip-loop difference, and
+# the message's content line names the form.
+_FAKE_PI_IMPLEMENT_FASTMODE = _FAKE_PI_IMPLEMENT.replace(
+    "                break\n", "").replace(
+    "one open plan step implemented and marked done",
+    "every open plan step implemented and marked done")
 
-def _implement_stage_sandbox(plan_text):
+
+def _implement_stage_sandbox(plan_text, fastmode_threshold=None,
+                             fake_pi_script=None):
     """Run the implement stage against a sandboxed plan file: a temp
     workspace (GITHUB_WORKSPACE) the sandbox's fake model tracks as a git
     repo, whose plan file holds the given checklist, a
@@ -4853,7 +4978,15 @@ def _implement_stage_sandbox(plan_text):
     (stage-console.log in the state dir — the runner's job log is a ghost
     on this build). Returns a namespace: repo, rt, mod (the implement
     stage module), baseline, and cleanup (restore the env, the git-exec
-    mock and the sys.modules entries, and remove the temp dirs)."""
+    mock and the sys.modules entries, and remove the temp dirs).
+    `fastmode_threshold` declares the sandbox's fastmode threshold in the
+    stage env (the documented CW_ leg of the resolution chain — a value at
+    or below the plan's open-step count keeps the plan on the
+    one-step-at-a-time branch, above it puts the plan on the
+    single-iteration fastmode branch; unset leaves the stage's 5-step code
+    default), and `fake_pi_script` swaps the fake implementer's script
+    (default: the one-step-per-call form; the fastmode sandbox passes the
+    every-open-step form)."""
     import shutil
     import tempfile
     repo = tempfile.mkdtemp(prefix="cw-implement-ws-")
@@ -4881,11 +5014,12 @@ def _implement_stage_sandbox(plan_text):
         f.write("74\n")
     os.makedirs(os.path.join(fake, "bin"))
     with open(os.path.join(fake, "bin", "pi"), "w") as f:
-        f.write(_FAKE_PI_IMPLEMENT)
+        f.write(fake_pi_script or _FAKE_PI_IMPLEMENT)
     os.chmod(os.path.join(fake, "bin", "pi"), 0o755)
     keys = ("GITHUB_WORKSPACE", "RUNNER_TEMP", "LLM_MODEL", "MAX_LOOPS",
             "PATH", "PLAN_DIR", "REQUIREMENTS_DIR", "DOC_DIR",
-            "BASELINE_REF", "CW_ISSUE_NUMBER", "INPUT_ISSUE_NUMBER")
+            "BASELINE_REF", "CW_ISSUE_NUMBER", "INPUT_ISSUE_NUMBER",
+            "INPUT_FASTMODE_THRESHOLD", "CW_FASTMODE_THRESHOLD")
     saved = {k: os.environ.get(k) for k in keys}
     for k in keys:
         os.environ.pop(k, None)
@@ -4898,6 +5032,8 @@ def _implement_stage_sandbox(plan_text):
         "PLAN_DIR": "plans",
         "REQUIREMENTS_DIR": "requirements",
     })
+    if fastmode_threshold is not None:
+        os.environ["CW_FASTMODE_THRESHOLD"] = fastmode_threshold
     saved_mods = {k: sys.modules.get(k) for k in ("common", "stages")}
     spec = importlib.util.spec_from_file_location(
         "cw_implement_stage_sandbox",
@@ -4934,7 +5070,13 @@ def _implement_stage_sandbox(plan_text):
 def test_implement_logs_per_step_line_on_clean_call():
     """(implement "A clean call with steps still open logs the per-step
     line, not a stage completion" — new scenario; reference
-    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`) the plan file has
+    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`,
+    `requirements/implement.feature::The implementation works the next open
+    step and marks it done` — the adjusted scenario's Given: the plan's
+    step count is at or above the fastmode threshold, declared in the
+    sandbox's stage env (the documented CW_ leg) at or below the plan's
+    two open steps, so the one-step-at-a-time branch this test works is
+    the branch the adjusted scenario keeps) the plan file has
     open (`- [ ]`) and done (`- [x]`) steps, and a clean generation call
     inside the implement stage has just marked a step done (one step per
     invocation — the sandbox's fake `pi` flips the plan's first open
@@ -4953,7 +5095,11 @@ def test_implement_logs_per_step_line_on_clean_call():
         "# Issue 74\n\n## Steps\n\n"
         "- [x] a done step\n"
         "- [ ] an open step one\n"
-        "- [ ] an open step two\n")
+        "- [ ] an open step two\n",
+        # the adjusted scenario's Given: the plan's step count is at or
+        # above the fastmode threshold — declared at or below the plan's
+        # two open steps, so the plan keeps the one-step-at-a-time branch
+        fastmode_threshold="1")
     hook, cwd = sys.excepthook, os.getcwd()
     os.chdir(ns["repo"])
     try:
@@ -5042,9 +5188,16 @@ def test_every_completed_implement_step_is_committed_and_pushed():
     """(implement "Every completed implementation step is committed and
     pushed" — new scenario; reference
     `requirements/implement.feature::Every completed implementation step
-    is committed and pushed`) the implement stage works the plan one step
-    at a time — the sandbox's fake `pi` flips the plan's first open step
-    per call (the sandbox plan holds two open steps, so the stage's
+    is committed and pushed`,
+    `requirements/implement.feature::The implementation works the next open
+    step and marks it done` — the adjusted scenario's Given: the plan's
+    step count is at or above the fastmode threshold, declared in the
+    sandbox's stage env (the documented CW_ leg) at or below the plan's
+    two open steps, so the one-step-at-a-time branch this test works is
+    the branch the adjusted scenario keeps) the implement stage works the
+    plan one step at a time — the sandbox's fake `pi` flips the plan's
+    first open step per call (the sandbox plan holds two open steps, so the
+    stage's
     per-step loop runs the shared generation loop once per step) — and
     the shared loop's stage-completion push is the mechanism that makes
     each completed step's work durable: after each clean iteration (the
@@ -5067,7 +5220,11 @@ def test_every_completed_implement_step_is_committed_and_pushed():
     ns = _implement_stage_sandbox(
         "# Issue 74\n\n## Steps\n\n"
         "- [ ] a first step\n"
-        "- [ ] a second step\n")
+        "- [ ] a second step\n",
+        # the adjusted scenario's Given: the plan's step count is at or
+        # above the fastmode threshold — declared at or below the plan's
+        # two open steps, so the plan keeps the one-step-at-a-time branch
+        fastmode_threshold="1")
     ws_fake = _FAKE_REPOS[os.path.realpath(ns["repo"])]
     # the ordered event log: the fake model appends one line per git call
     # it handles, the sandbox's fake `pi` appends its own invocation line
@@ -5149,6 +5306,127 @@ def test_every_completed_implement_step_is_committed_and_pushed():
                     encoding="utf-8").read()
         assert "- [ ]" not in plan, plan
         assert plan.count("- [x]") == 2, plan
+    finally:
+        os.chdir(cwd)
+        sys.excepthook = hook
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        ns["cleanup"]()
+
+
+def test_implement_works_every_open_step_in_a_single_iteration():
+    """(implement "A plan below the fastmode threshold is implemented in a
+    single iteration" — new scenario; reference
+    `requirements/implement.feature::A plan below the fastmode threshold
+    is implemented in a single iteration`) the sandbox plan holds three
+    open (`- [ ]`) steps — its open-step count below the fastmode threshold
+    the sandbox declares in the stage env (the documented CW_ leg:
+    CW_FASTMODE_THRESHOLD=4, 3 < 4) — so the implement stage works the
+    plan in a single iteration: one generation call (the sandbox's fake
+    `pi` in its every-open-step form works every open step of the plan in
+    that one call), every step marked done (`- [x]`) in the plan file when
+    the call comes back, and the stage runs no further per-step iteration
+    for the plan — the stage's log carries the single all-steps-done
+    completion line (and no per-step line), and the recorded git events
+    show the single pi call, then a single commit and a single push at the
+    shared loop's completion point — the mode's durability point (there is
+    no "next step" to push before) — with no per-step call/commit/push
+    interleaving. The pushed tip's tree carries the plan file with every
+    step marked done: a run terminated after the push keeps the work on the
+    remote branch, and a re-triggered run finds every step done and exits
+    as the documented satisfied no-op."""
+    ns = _implement_stage_sandbox(
+        "# Issue 74\n\n## Steps\n\n"
+        "- [ ] an open step one\n"
+        "- [ ] an open step two\n"
+        "- [ ] an open step three\n",
+        # the scenario's Given: the plan's open-step count is below the
+        # fastmode threshold — declared in the stage env (the documented
+        # CW_ leg) above that count
+        fastmode_threshold="4",
+        # one call works every open step, not only the first
+        fake_pi_script=_FAKE_PI_IMPLEMENT_FASTMODE)
+    ws_fake = _FAKE_REPOS[os.path.realpath(ns["repo"])]
+    # the ordered event log: the fake model appends one line per git call
+    # it handles, the sandbox's fake `pi` appends its own invocation line
+    # to the same file — the test reads one sequence with no per-step
+    # call/commit/push interleaving
+    events = os.path.join(ns["rt"], "cw", "git-events.log")
+    ws_fake.events_file = events
+    # the documented stage-value channel the stage-completion push
+    # resolves (the AI_BRANCH job env every stage job writes, the
+    # push idiom's GITHUB_REPOSITORY/GH_TOKEN riding along), and the
+    # events file the sandbox's fake `pi` appends to
+    extra = ("AI_BRANCH", "GITHUB_REPOSITORY", "GH_TOKEN",
+             "FAKE_PI_EVENTS")
+    saved = {k: os.environ.get(k) for k in extra}
+    for k in extra:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "AI_BRANCH": "ai/code-weaver/74",
+        "GITHUB_REPOSITORY": "code-weaver/target",
+        "GH_TOKEN": "fake-token",
+        "FAKE_PI_EVENTS": events,
+    })
+    hook, cwd = sys.excepthook, os.getcwd()
+    os.chdir(ns["repo"])
+    try:
+        ns["mod"].main()
+        console = open(os.path.join(ns["rt"], "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        lines = [l for l in console.splitlines() if l.strip()]
+        all_done = ("stage 8 implementation: all 3 plan steps done — "
+                    "stage complete")
+        # the single all-steps-done completion line — and no other
+        # stage-complete line, no per-step line: the stage ran no further
+        # per-step iteration for the plan after the single call
+        assert all_done in lines, console
+        for l in lines:
+            if "stage complete" in l:
+                assert l == all_done, \
+                    f"an unexpected stage-complete line: {l!r}"
+        assert not any("of the plan done" in l for l in lines), \
+            "no per-step line — the single-iteration mode runs no " \
+            "further per-step iteration for the plan"
+        # one fake `pi` call worked every open step — no further call
+        cf = os.path.join(ns["rt"], "cw", "fake-pi-count.txt")
+        assert open(cf).read().strip() == "1", \
+            "a single generation call works every open step of the plan"
+        # every step is marked done in the plan file when finished
+        plan = open(os.path.join(ns["repo"], "plans", "74.md"),
+                    encoding="utf-8").read()
+        assert "- [ ]" not in plan, plan
+        assert plan.count("- [x]") == 3, plan
+        # the recorded git events: the single pi call, then a single
+        # commit-and-push at the stage's completion point — no per-step
+        # call/commit/push interleaving
+        ev = [l.strip()
+              for l in open(events, encoding="utf-8").read().splitlines()
+              if l.strip()]
+        pi_calls = [i for i, l in enumerate(ev) if l == "pi"]
+        commits = [i for i, l in enumerate(ev) if l.startswith("commit ")]
+        pushes = [i for i, l in enumerate(ev) if l.startswith("push ")]
+        assert len(pi_calls) == 1, \
+            f"one pi call — no further per-step iteration: {ev!r}"
+        assert len(commits) == 1 and len(pushes) == 1, \
+            f"a single commit-and-push at the stage's completion point: " \
+            f"{ev!r}"
+        assert pi_calls[0] < commits[0] < pushes[0], \
+            f"the single call, then the single commit-and-push: {ev!r}"
+        # the pushed tip's tree carries the plan file with every step
+        # marked done — a run terminated after the push keeps the work on
+        # the remote branch, and a re-triggered run finds every step done
+        (branch, tip) = ws_fake.pushes[0]
+        assert branch == "ai/code-weaver/74", ws_fake.pushes
+        plan_tip = ws_fake.commits.get(tip, {}).get("plans/74.md")
+        assert plan_tip is not None, \
+            "the pushed tip does not carry the plan file"
+        for step in ("an open step one", "an open step two",
+                     "an open step three"):
+            assert f"- [x] {step}" in plan_tip, plan_tip
     finally:
         os.chdir(cwd)
         sys.excepthook = hook
@@ -5437,8 +5715,15 @@ def test_completed_stage_work_is_committed_and_pushed():
 def test_templates_plans_and_logs_agree_on_step_wording():
     """(implement "The templates, the plan files and the stage log agree
     on one word for the plan's units" — new scenario; reference
-    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`) one word for
-    the plan's checklist units — "step" — across every plan-facing
+    `requirements/implement.feature::The implement stage's completion log tracks the plan's steps`,
+    `requirements/plan.feature::The plan is written in Jira ticket style`
+    — the adjusted scenario's checklist And line: the plan lists an
+    ordered, atomic Steps checklist as checkboxes so the implementation
+    works it one step at a time — or all steps in a single iteration
+    where the plan is below the fastmode threshold, the dual-mode clause
+    the plan template's checklist line now carries and this test pins)
+    one word for the plan's checklist units — "step" — across every
+    plan-facing
     surface: the planner template prescribes the plan's section heading
     "Steps" and its units as steps, the implementer template calls the
     units steps, the implement stage's log lines use "steps", and the
@@ -5457,8 +5742,13 @@ def test_templates_plans_and_logs_agree_on_step_wording():
             "independently-achievable checkbox\n"
             "checklist (`- [ ] <step>`)") in plan
     assert "Each step states, in order:" in plan
+    # the adjusted scenario's checklist And line: the implementation
+    # works the plan one step at a time — or all steps in a single
+    # iteration where the plan is below the fastmode threshold
     assert ("The implementation stage reads the Steps checklist "
-            "top-to-bottom, one step at a\ntime") in plan
+            "top-to-bottom, one step at a\ntime — or all steps in a "
+            "single iteration where the plan is below the fastmode\n"
+            "threshold — flipping each to `- [x]` when done") in plan
     # the implementer template calls the plan's units steps
     implement = _read("pi-prompts/implement.md")
     assert ("its **Steps** section is an ordered checklist\n"
@@ -5466,6 +5756,16 @@ def test_templates_plans_and_logs_agree_on_step_wording():
     assert "first `- [ ]` step (from the top)" in implement
     assert ("**Mark the step done** — flip its checkbox to `- [x]` in "
             "the plan file.") in implement
+    # step 2's implement-template edit conditioned the per-step clause:
+    # the new fastmode item names the single-iteration mode — every open
+    # step worked and marked done in that one call — and item 1's
+    # one-step-at-a-time rule applies at or above the threshold only
+    assert ("**A plan below the fastmode threshold is worked in a "
+            "single") in implement
+    assert "this call works **every** open step of the plan" in implement
+    assert "Item 1's one-step-at-a-time rule applies at or above the" in implement
+    assert ("threshold\n   only — below it, the stage runs no further "
+            "per-step iteration") in implement
     # the implement stage's log lines use "steps": the per-step line
     # while steps remain open, the full-step-count line the stage's
     # completion exit prints (the only line that calls the stage

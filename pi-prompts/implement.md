@@ -46,6 +46,16 @@ of open (`- [ ]`) and done (`- [x]`) steps. Execute the plan.
    (a step implements code, as on the standing runs), this
    clause does not apply — the standing instructions govern.
 
+8. **A plan below the fastmode threshold is worked in a single
+   iteration.** Where the target instructions below name the fastmode
+   iteration — the plan's open-step count is below the resolved fastmode
+   threshold — this call works **every** open step of the plan in this
+   single call and marks every one of them done (`- [x]`) in the plan file
+   when finished; the target lists the open steps this call works, one per
+   line. Item 1's one-step-at-a-time rule applies at or above the threshold
+   only — below it, the stage runs no further per-step iteration after this
+   call.
+
 Hard rules
 1. **Never edit `requirements/`.** A requirement you cannot fulfil is
    reported, not rewritten — the requirement file is never the one you

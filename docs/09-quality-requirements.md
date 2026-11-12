@@ -28,7 +28,18 @@
   exits 124 — the stage treats it as a slow model (the iteration is
   consumed, the loop retries), never as a broken environment. A call that
   dies with no output is a dropped provider stream: retried, not fatal;
-  only a failure that produced output fails the stage.
+  only a failure that produced output fails the stage. The fastmode
+  threshold rides the same relay family: the `fastmode-threshold`
+  input's value at the `INPUT_FASTMODE_THRESHOLD` →
+  `CW_FASTMODE_THRESHOLD` links (the job-env relay the implement job
+  carries from the input), then the 5-step code default — a consumer
+  that leaves the input undeclared keeps the default; unlike the
+  timeout pair, no trigger-time validation guards the input, so a
+  declared value that is not an integer number of steps is skipped for
+  the default where the implement stage resolves it, and the stage's
+  branch on the resolved value — a plan below the threshold worked in
+  a single iteration, a plan at or above it on the
+  one-step-at-a-time loop — is the input's only consumer.
 - **Skipped-not-failed.** The test suite runs on an interpreter without
   pytest (the `make test` target drives the stdlib-only runner in the
   tree); where the official Gherkin-parser port is absent from that

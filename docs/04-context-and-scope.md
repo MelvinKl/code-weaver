@@ -72,6 +72,22 @@ The trigger and the setup-pi jobs are unaffected by the input. Like the
 value, so it rides the input channel (chapter 3), not the `secrets:`
 block.
 
+The `with:` block also carries the optional `fastmode-threshold`
+input — the plan's step count below which the implement stage works
+every open step of the plan in a single iteration: a plan at or above
+it keeps the one-step-at-a-time loop (chapter 6). The input's default
+is `5` steps, so a target that leaves it undeclared runs on the
+default, its run unchanged in the at-or-above shape. Unlike the
+`pi-timeout`/`job-timeout` pair, no trigger-time validation guards the
+input — the trigger's validation half covers that pair only (chapter
+7): a declared value resolves as-is through the input channel and is
+consumed at the implement stage's comparison of the plan's step count
+against it, a value that is not an integer number of steps being
+skipped for the 5-step code default where the stage resolves it. Like
+the `pi-timeout` input, the value is project configuration, not a
+secret value, so it rides the input channel (chapter 3), not the
+`secrets:` block.
+
 The consumer workflow is the **only per-target code** — it stays short
 and stable (it declares the `labeled`-only issue trigger plus a manual
 dispatch; opening or editing an issue schedules no run), carries no

@@ -59,7 +59,13 @@ Key mechanisms:
   own default pair already provides: the 480-minute default job timeout minus
   the 21600-second default pi call cap), the default pair passing at exactly
   the margin; a run that reaches a stage has validated the pair, and its pi
-  calls honour the resolved value.
+  calls honour the resolved value. The implement stage's loop is the branch
+  the `fastmode-threshold` input works on (chapter 4's `with:` input
+  channel; the resolution chain, chapter 9): a plan whose open-step count
+  is below the resolved threshold — the target's declared value, or the
+  5-step default — is worked every open step in a single iteration, a plan
+  at or above it keeps the one-step-at-a-time loop, and the caps bound the
+  stage's iterations in both modes.
 - **The context contract — two disjoint slices** (the oracle's two
   pinning scenarios are re-sliced onto disjoint stage boundaries): the
   *extraction* stage is the **`@`-file slice** — the arc42 markdown,
@@ -92,8 +98,10 @@ Key mechanisms:
   stage completion — inside the stage machinery, not only the job's
   tail: the shared generation loop pushes after each clean iteration
   (the single-call stages' push at stage completion; the implement
-  stage's push after each completed step, before the next step starts),
-  the dependency-upgrade step pushes after its own commit, and the
+  stage's push after each completed step, before the next step starts,
+  where the plan is at or above the fastmode threshold — below it, its
+  single fastmode iteration's push at the stage's completion point), the
+  dependency-upgrade step pushes after its own commit, and the
   review stage pushes at its completion point — a run terminated after
   a stage completes loses none of the completed stage's work; the push
   fires only after the guard has passed (a violating iteration is never

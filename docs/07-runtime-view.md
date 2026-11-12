@@ -14,11 +14,14 @@ an issue carrying only the bug label starts no factory — and it rides
 the state channel like every other trigger value (every value a file;
 the files travel on the trigger's artifact to every later stage job,
 whose Read trigger state step relays them into the job's env) — and
-lists the run's resolved job timeout — the target's
-declared `job-timeout` value, or the `480`-minute default where the
-consumer leaves the input undeclared — in the resolved-configuration
-record that stays in the workflow log, never committed to the repo —
-and gates: the issue carries the trigger label (default
+lists the run's resolved fastmode threshold — the target's
+declared `fastmode-threshold` value, or the `5`-step default where the
+consumer leaves the input undeclared — beside the run's resolved job
+timeout — the target's declared `job-timeout` value, or the
+`480`-minute default where the consumer leaves the input undeclared —
+in the resolved-configuration record that stays in the workflow log,
+never committed to the repo — and gates: the issue carries the trigger
+label (default
 `ai-requirements`) — or it was dispatched — else the run is idle
 (`factory idle`, `started=false`) and every downstream job skips. The
 validation extends that gate with the configuration half, no new
@@ -36,7 +39,14 @@ fails with a precise error naming both resolved values and the headroom;
 a failed validation leaves `started` false like an idle run, and every
 downstream job skips — no stage runs after the trigger (the default pair
 passes at exactly the margin, so a consumer that declares nothing
-validates and its run is unchanged). Re-entrant triggers on the same
+validates and its run is unchanged). The resolved fastmode threshold
+rides the record without a trigger-time validation of its own — the
+validation half's configuration gate covers the timeout pair only: a
+declared value that is not an integer number of steps is skipped for
+the 5-step code default where the implement stage resolves it, and
+otherwise the value resolves as-is through the input channel and is
+consumed at the implement stage's comparison. Re-entrant triggers on
+the same
 issue are idempotent (an in-progress run with the same issue number → a
 comment on the issue, exit 0).
 
@@ -112,8 +122,11 @@ step stays as the job's final sync; for stage work it is a redundant
 no-op). The shared generation loop pushes the branch at its completion
 points — after each clean iteration (the single-call stages' push at
 stage completion; the implement stage's push after each completed step,
-before the next step starts) and on the no-op exit path — the
-dependency-upgrade step pushes after its own commit, and the review
+before the next step starts, where the plan is at or above the
+fastmode threshold — below it, its single fastmode iteration's push at
+the stage's completion point, the single-iteration mode's durability
+point) and on the no-op exit path — the dependency-upgrade step pushes
+after its own commit, and the review
 stage pushes at its completion point (a no-op in the normal case, its
 fix iterations already pushing per iteration). The push reuses the
 factory's sanitised push idiom (the token rewritten out of the log, the

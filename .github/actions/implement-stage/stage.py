@@ -6,7 +6,14 @@ state tracker: a checklist of steps, each open (`- [ ]`) or done (`- [x]`),
 and the code that reads the plan keys on the checkbox, not the word.
 Each invocation of this stage works on the NEXT OPEN step — implements it and
 marks it done — and the per-step loop below calls again until every step is
-done (or a cap is hit).
+done (or a cap is hit) — that is the mode a plan whose open-step count is at
+or above the resolved fastmode threshold keeps. A plan BELOW the threshold
+is worked in a single iteration: one generation call works every open step
+(the implement template's fastmode clause; the target instructions list the
+open steps the call works), the work is committed and pushed at the shared
+loop's completion point — the mode's durability point, there is no "next
+step" to push before — and when that call comes back the stage runs no
+further per-step iteration for the plan.
 
 Completion logging is per step while steps remain open: after each clean
 generation call the stage counts the plan file's checkboxes and, while any
@@ -121,12 +128,16 @@ def current_plan_path(issue: str, plan_dir: str) -> str:
     return os.path.join(plan_dir, f"{issue}.md")
 
 
-def build_target(issue: str, plan_dir: str) -> str:
+def build_target(issue: str, plan_dir: str, fastmode: bool = False) -> str:
     """A one-line instruction naming the exact plan path for THIS issue —
     passed to pi as the prompt alongside the implement template. The template
     refers to `plans/<issue_number>.md` as a placeholder; the concrete issue
     number and path come from here (rebuilt every run so a resume targets the
-    same file). Empty (a blank prompt) when the issue/plan dir is unresolved."""
+    same file). Empty (a blank prompt) when the issue/plan dir is unresolved.
+    Where `fastmode` is set (the plan's open-step count is below the
+    resolved fastmode threshold), the target names the fastmode iteration
+    the implement template's fastmode clause keys on and lists the plan's
+    open steps — the steps that single call works and marks done."""
     pf = common.state_file("implement-target.md")
     if not (issue and plan_dir):
         open(pf, "w", encoding="utf-8").write("")
@@ -135,6 +146,18 @@ def build_target(issue: str, plan_dir: str) -> str:
         f.write(f"The plan for issue number {issue}. Open and update exactly "
                 f"this plan file (and only this issue's plan):")
         f.write(f"\n\n    ```\n    {stages.plan_path(issue, plan_dir)}\n    ```\n")
+        if fastmode:
+            f.write(
+                "\nThe fastmode iteration — the plan is below the fastmode "
+                "threshold: work every open step of the plan in this single "
+                "call, and mark every one of them done (`- [x]`) in the plan "
+                "file when finished. The open steps this call works are:\n")
+            plan_file = current_plan_path(issue, plan_dir)
+            if os.path.isfile(plan_file):
+                with open(plan_file, encoding="utf-8") as plan:
+                    for line in plan:
+                        if OPEN_TASK_RE.match(line):
+                            f.write(f"  {line.rstrip()}\n")
     return pf
 
 
@@ -192,6 +215,13 @@ def main() -> None:
     # context file is therefore only referenced by path (embedding the whole
     # project costs far too many tokens); pi reads what it needs on demand.
     inject = [current] if current else []
+    # the fastmode threshold, resolved through the documented settings chain
+    # (INPUT_FASTMODE_THRESHOLD, then the CW_FASTMODE_THRESHOLD job-env relay
+    # the implement job carries from the workflow's fastmode-threshold input,
+    # then the 5-step code default): a plan whose open-step count is below it
+    # is worked in a single iteration, a plan at or above it keeps the
+    # one-step-at-a-time loop below
+    threshold = common.resolve_fastmode_threshold()
 
     # One step per invocation, looped until the plan is fully tracked out or
     # a cap is reached. `allow_noop=False` so an empty model response is a
@@ -235,21 +265,26 @@ def main() -> None:
 
     i = 0
     no_progress = 0
+    # the fastmode branch's single iteration has run: when that call comes
+    # back the stage runs no further per-step iteration for the plan
+    fastmode_ran = False
     while True:
         common.caps_ok(i)
         if not (current and has_open_task(current)):
             # the per-step loop's exit: the plan has no open steps left.
             # One form on both exit paths (a plan already fully tracked
             # when the stage starts, and a plan made fully tracked by the
-            # last call) — the full step count, the only line that calls
-            # the stage complete
+            # last call — the fastmode branch's single call on its success
+            # path is such a last call) — the full step count, the only
+            # line that calls the stage complete
             _, total = count_plan_steps(current)
             common.log(f"stage 8 implementation: all {total} plan steps "
                        f"done — stage complete")
             # that completion rides the stage-summary channel too — the
             # only point that writes the line: a run that stops with steps
-            # still open (a cap) leaves the per-step lines without it, and
-            # the report renders that stage as one that will re-run
+            # still open (a cap, or the fastmode call returning with steps
+            # left) leaves the per-step lines without it, and the report
+            # renders that stage as one that will re-run
             with open(common.state_file("stage-summary.txt"), "a",
                       encoding="utf-8") as f:
                 f.write("stage 8 implementation: stage complete\n")
@@ -257,6 +292,49 @@ def main() -> None:
             common.record_stage_ran("cw-implement")
             return
         before = set(common.changed_files(stages.baseline_sha()))
+        if fastmode_ran:
+            # the fastmode single call came back with steps still open: the
+            # single-iteration mode runs no further per-step iteration — the
+            # stage fails clean, and a re-triggered run works the remaining
+            # open steps in its own single fastmode call (or finds the plan
+            # fully done and exits as the satisfied no-op above)
+            _done, _total = count_plan_steps(current)
+            common.log(f"::error::stage 8: the fastmode call returned with "
+                       f"{_total - _done} step(s) still open — the "
+                       f"single-iteration mode runs no further per-step "
+                       f"iteration; the stage fails clean, and a "
+                       f"re-triggered run resumes the remaining steps")
+            sys.exit(1)
+        done_now, total_now = count_plan_steps(current)
+        if (total_now - done_now) < threshold:
+            # the fastmode branch: the plan's open-step count is below the
+            # resolved fastmode threshold — a single generation call works
+            # EVERY open step of the plan (the implement template's
+            # fastmode clause; the target instructions list the open steps
+            # the call works), and the shared loop's completion point
+            # commits and pushes the work — the mode's durability point
+            # (there is no "next step" to push before). When the call comes
+            # back the stage runs no further per-step iteration: the loop's
+            # exit check finds the plan fully done, or the fastmode_ran
+            # stop above fails the stage clean where steps remain open.
+            common.log(f"stage 8 implementation: the plan's "
+                       f"{total_now - done_now} open step(s) are below the "
+                       f"fastmode threshold ({threshold}) — a single "
+                       f"iteration works every open step, and the stage "
+                       f"runs no further per-step iteration after the call")
+            stages.run_generation_stage(
+                stage="stage 8 implementation",
+                template="implement",
+                allow=allow,
+                deny=deny,
+                context=context,
+                prompt_file=build_target(issue, plan_dir, fastmode=True),
+                allow_noop=False,
+                completion_line=per_step_line,
+            )
+            fastmode_ran = True
+            i += 1
+            continue
         stages.run_generation_stage(
             stage="stage 8 implementation",
             template="implement",

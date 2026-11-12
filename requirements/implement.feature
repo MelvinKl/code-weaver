@@ -1,12 +1,13 @@
 # requirements/implement.feature
-# Factory stages 8 + 9 — implement the plan one step at a time: code,
-# tests, arc42 docs, README; the plan is a live Jira-ticket state tracker
-# (the next open step is worked and marked done each invocation); only the
-# current issue's plan is editable.
+# Factory stages 8 + 9 — implement the plan: code, tests, arc42 docs,
+# README; the plan is a live Jira-ticket state tracker (the next open step
+# is worked and marked done each invocation — or, where the plan's step
+# count is below the fastmode threshold, every step is worked in a single
+# iteration); only the current issue's plan is editable.
 
 Feature: Implementation
   As the factory
-  I want the plan implemented as code, tests, arc42 docs and README, one step at a time
+  I want the plan implemented as code, tests, arc42 docs and README — one step at a time, or in a single iteration where the plan is below the fastmode threshold
   so that the program reflects the requirements in every artefact of the project
   and a re-run resumes exactly where the last run left off
 
@@ -23,9 +24,18 @@ Feature: Implementation
   @implement
   Scenario: The implementation works the next open step and marks it done
     Given the plan file has one or more open (`- [ ]`) steps
+    And the plan's step count is at or above the fastmode threshold
     When the implement stage runs pi with the implement prompt template
     Then the implementation works exactly one open step — the first open step reading from the top of the Steps checklist
     And it marks that step done (`- [x]`) in the plan file when finished
+
+  @implement
+  Scenario: A plan below the fastmode threshold is implemented in a single iteration
+    Given the plan file's open step count is below the fastmode threshold
+    When the implement stage runs pi with the implement prompt template
+    Then the implementation works every open step of the plan in that single call
+    And every step is marked done (`- [x]`) in the plan file when finished
+    And the stage runs no further per-step iteration for the plan
 
   @implement
   Scenario: The implementation loops until every step is done or a cap is reached

@@ -11,7 +11,9 @@
   factory writes to; a completed stage's work is pushed there on stage
   completion (the shared loop pushes at the stage's completion points —
   the implement stage after each completed step, before the next step
-  starts), the documented cross-job channel.
+  starts, where the plan is at or above the fastmode threshold — below
+  it, after its single fastmode iteration, at the stage's completion
+  point), the documented cross-job channel.
 - **Baseline** — the trigger's base sha (the target branch's head) plus
   the issue's change-set diff, recorded as state files; the reference
   every guard check measures against.
@@ -39,7 +41,7 @@
   mirrored per iteration into the state dir and fed into the fixer: the
   fix directive names it by path, the fixer reads it on demand
 - **Oracle** — the Gherkin requirements under `requirements/` (16 files,
-  170 scenarios), structured by topic: each file is named after the topic
+  172 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed

@@ -337,6 +337,36 @@ def resolve_pi_timeout() -> int:
     return PI_TIMEOUT_DEFAULT
 
 
+FASTMODE_THRESHOLD_DEFAULT = 5
+
+
+def resolve_fastmode_threshold() -> int:
+    """The fastmode threshold, resolved through the documented chain
+    (chapter 3's settings flow): the reusable workflow's
+    `fastmode-threshold` input's value first — the workflow's own binding
+    `INPUT_FASTMODE_THRESHOLD` on a healthy runner, then
+    `CW_FASTMODE_THRESHOLD`, the job-env entry the implement job relays
+    from the input — then the 5-step code default: a consumer that leaves
+    the input undeclared keeps the default, and a plan whose step count is
+    at or above it keeps the standing one-step-at-a-time behaviour. No
+    trigger-time validation guards this input (the trigger-validation
+    scenario's Examples table covers the timeout pair only): a declared
+    value resolves as-is through the chain, and a value that is not an
+    integer number of steps is not a threshold — it is skipped for the
+    next link of the chain, and for the default at its end."""
+    for key in ("INPUT_FASTMODE_THRESHOLD", "CW_FASTMODE_THRESHOLD"):
+        v = (os.environ.get(key) or "").strip()
+        if not v:
+            continue
+        try:
+            return int(v)
+        except ValueError:
+            log(f"::error::the declared fastmode threshold {v!r} is not an "
+                f"integer number of steps — the value is skipped for the "
+                f"{FASTMODE_THRESHOLD_DEFAULT}-step default")
+    return FASTMODE_THRESHOLD_DEFAULT
+
+
 def ensure_pi_on_path() -> None:
     """Make the runner's PATH resolve `pi` to the copy the setup-pi stage
     installed for the run — the contract every later pi invocation in the

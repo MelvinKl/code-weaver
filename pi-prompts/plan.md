@@ -43,8 +43,9 @@ Each step states, in order:
    justify any contradiction with the arc42. Do not specify file-level changes.
 
 The implementation stage reads the Steps checklist top-to-bottom, one step at a
-time, flipping each to `- [x]` when done — so keep steps broad, individually
-achievable, and ordered.
+time — or all steps in a single iteration where the plan is below the fastmode
+threshold — flipping each to `- [x]` when done; so keep steps broad,
+individually achievable, and ordered.
 
 Hard rules
 1. **Stay inside `plans/`.** Requirements and code are read-only inputs; a

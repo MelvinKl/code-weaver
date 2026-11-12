@@ -49,7 +49,7 @@ Feature: Planning
     Given a plan file for the issue
     When the plan is read
     Then it has a Jira-issue structure (Summary, Description, Acceptance Criteria mapped to the scenarios)
-    And it lists an ordered, atomic Steps checklist as checkboxes so the implementation works one step at a time
+    And it lists an ordered, atomic Steps checklist as checkboxes so the implementation works it one step at a time — or all steps in a single iteration where the plan is below the fastmode threshold
 
   @plan
   Scenario: The plan describes how the requirements are fulfilled

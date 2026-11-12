@@ -118,12 +118,18 @@ this repo's reusable workflow takes over:
    scenario cites it in its docstring as `<feature file>::<scenario name>`;
    a correctness-only test cites nothing — the reference is the join the
    review stage and the suite read), the arc42 docs kept complete, README
-   current; the stage works the plan one open step at a time, committing
+   current; the stage compares the plan's step count against the resolved
+   fastmode threshold (the `fastmode-threshold` input's value, its
+   5-step default where a consumer leaves the input undeclared): at or
+   above it the stage works the plan one open step at a time, committing
    each completed step and pushing the AI branch before the next step
    starts — a run terminated after a step's push keeps the completed
    step's work on the remote branch, and a re-triggered run finds the step
-   still marked done in the plan file — and, where the plan is a brownfield
-   plan, the run adjusts the
+   still marked done in the plan file; below it a single iteration works
+   every open step of the plan, and the work is committed and pushed at
+   the stage's completion point — a run terminated after that push keeps
+   the work on the remote branch, and a re-triggered run finds every step
+   done — and, where the plan is a brownfield plan, the run adjusts the
    tests without implementing code: no source code changes (the changed
    files are the tests and the issue's plan file), the existing tests are
    adjusted to reference the requirements they describe, and each adjusted
@@ -208,6 +214,7 @@ jobs:
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
       dependency-install: make install  # the command that installs the target project's dependencies — omit the line where the target needs no such step (the run is unchanged)
       dependency-upgrade: on  # whether the run's pipeline runs the dependency-upgrade stage — the stage upgrades the project's dependencies to newer versions, before the implementation stage; set it to "off" where the target wants the pipeline to run without the stage (the run is unchanged)
+      fastmode-threshold: 5  # the plan's step count below which the implement stage works every open step in a single iteration (a plan at or above it keeps the one-step-at-a-time loop); omit the line where the target runs on the "5" default
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
@@ -284,6 +291,7 @@ never empty for a release that publishes changes.
 | `max-loops` | `5` | fix/guard loop cap per stage — **`0` = no cap** |
 | `pi-timeout` | `21600` | the per-call time cap in seconds every pi invocation in the pipeline runs under — the stages' generation calls, the guard's repair call, the PR-body call; the default 21600 is the current 360-minute cap, which a consumer that leaves the input undeclared keeps; a declared value that leaves the stage's non-call work no headroom fails the run at trigger — a run that passes validation honours the declared value |
 | `job-timeout` | `480` | the job-level `timeout-minutes` the five stage jobs that make pi calls (extract, plan, implement, review, pr) run under — the target's value where the target sets the input, the `480`-minute default where a consumer leaves it undeclared (its run is unchanged); the trigger and setup-pi jobs are unaffected by the input; the job timeout is enforced by whichever runner runs the job — the target names that runner through the `runner` input |
+| `fastmode-threshold` | `5` | the plan's step count below which the implement stage works every open step in a single iteration (a plan at or above it keeps the one-step-at-a-time loop); the target's value where the target sets the input, the 5-step default where a consumer leaves it undeclared (its run is unchanged); no trigger-time validation guards the input — a declared value that is not an integer number of steps is skipped for the 5-step default where the implement stage resolves it |
 | `runner` | `ubuntu-latest` | runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the runner's environment) |
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
 | `dependency-install` | *(empty)* | the command the run's pipeline runs to install the target project's dependencies — executed in the jobs whose stages consume them (the implementation, the test-and-review's suite run), after each job's checkout and before its stage; empty = no such step, the run is unchanged |
@@ -387,7 +395,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published; and (`--verify-structure`, the flow's second pre-tag step): the committed file's job/step graph parses to the pinned shape under every standard engine, no step declares keys after its run block, no run block past the giant-body budget, no run block's heredoc terminator indented past the block's base, no `python3` code-heredoc body indented past the block's base, and no block opens a heredoc it never terminates — a file the gate's shape checks fail is never published
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 170 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 172 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -395,7 +403,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **170 Gherkin scenarios** — the oracle this
+`requirements/` holds **172 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

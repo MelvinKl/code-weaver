@@ -71,6 +71,13 @@ Feature: Configuration surface
     And the trigger and setup-pi jobs are unaffected by the input
     And a consumer that leaves the input undeclared keeps the 480-minute backstop
 
+  @config
+  Scenario: The fastmode threshold is a configurable workflow input
+    Given the default fastmode threshold is 5 steps
+    When a target sets the fastmode threshold to another number of steps
+    Then the implement stage compares the plan's step count against the target's value
+    And a consumer that leaves the input undeclared keeps the default of 5
+
   @config @safety
   Scenario Outline: A declared timeout that fails the trigger's validation ends the run before any stage runs
     Given the target declares <violation>

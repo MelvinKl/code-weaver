@@ -231,6 +231,11 @@ on:
         type: string
         required: false
         default: "480"
+      fastmode-threshold:
+        description: The plan step count the implement stage compares the plan's step count against — a plan below the threshold is worked every open step in a single iteration; a plan at or above it keeps the one-step-at-a-time loop; the default 5 is the value a consumer that leaves the input undeclared keeps
+        type: string
+        required: false
+        default: "5"
       runner:
         description: Runner label the stage jobs run on (pi is installed & configured for the run by stage 2 — not a pre-requisite of the environment)
         type: string
@@ -660,6 +665,7 @@ jobs:
                 echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
                 echo "- dirs: requirements=\`${{ inputs.requirements-dir }}\` plans=\`${{ inputs.plan-dir }}\` docs=\`${{ inputs.doc-dir }}\`"
                 echo "- caps: max-loops=\`${{ inputs.max-loops }}\` (0 = no cap)"
+                echo "- fastmode threshold: \`${{ inputs.fastmode-threshold }}\` steps — the value a target declared for the fastmode-threshold input, or its 5-step default where the input is undeclared (a plan below the threshold the implement stage works every open step in a single iteration; at or above it the one-step-at-a-time loop)"
                 # the record's job timeout line carries the resolved value —
                 # the declared value where a target declared one, the 480
                 # default where the input is undeclared: the value the five
@@ -1503,6 +1509,7 @@ jobs:
       LLM_MODEL: ${{ inputs.llm-model }}
       MAX_LOOPS: ${{ inputs.max-loops }}
       CW_PI_TIMEOUT: ${{ inputs.pi-timeout }}
+      CW_FASTMODE_THRESHOLD: ${{ inputs.fastmode-threshold }}
       # ISSUE_NUMBER / AI_BRANCH / BASELINE_REF arrive via
       # GITHUB_ENV from the trigger artifact (Read trigger state)
     steps:
