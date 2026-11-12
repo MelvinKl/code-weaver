@@ -5958,3 +5958,158 @@ def test_tests_never_invoke_the_real_git_binary():
                if isinstance(node, ast.FunctionDef)
                and node.name.startswith("test_")), \
         "no test cites the scenario in the machine form"
+
+
+def test_pr_gate_reads_the_review_stage_completion():
+    """(pr-and-gates "a pull request is opened against the target
+    branch" — the PR opens once the review is clean; the cleanliness is
+    the review STAGE's completion, which is not the same question as the
+    review JOB's conclusion — reference
+    `requirements/pr-and-gates.feature::A pull request is opened
+    against the target branch`) run 43085640068's review stage
+    completed and pushed its work, then the job's final state upload
+    failed on the runner's broken GitHub egress — the job failed, the
+    success gate the needs list applies skipped the PR job, and the run
+    ended with no PR, no report and (the job logs being ghosts) no
+    diagnosis. The gate therefore runs the PR job where the review job
+    succeeded, or where the review job's stage-completed output records
+    the stage completing — the marker the stage script writes before the
+    upload step, relayed as a job output, the job-level channel that
+    survives a failed job. A review stage that failed for real records
+    no marker, and a failed upstream chain leaves the review job skipped
+    with no output — the gate stays closed for both. The lost channel is
+    tolerated on both sides of the relay: the pr job downloads the
+    missing state artefact with continue-on-error (its steps degrade on
+    purpose — the context list holds only files that exist, the pi call
+    runs continue-on-error, the template fallback assembles the body),
+    and the gates job does the same for the PR state it would download
+    from a PR job that failed for its own reasons."""
+    factory = _read(".github/workflows/factory.yml")
+    m = re.search(r"(?ms)^  review:.*?(?=^  \S|\Z)", factory)
+    assert m is not None, "the review job is gone"
+    review_job = m.group(0)
+    assert "id: stage-completed" in review_job, \
+        ("the review job must record its stage-completion marker as a job "
+         "output (the channel that survives the job's failed tail)")
+    assert ("stage-completed: ${{ steps.stage-completed.outputs"
+            ".stage-completed }}" in review_job), \
+        ("the review job must expose the stage-completed output for the "
+         f"PR job's gate: {review_job!r}")
+    # the probe the fix adds for the next occurrence: a snapshot of the
+    # runner's GitHub egress at the run's end, the same idiom the trigger
+    # job's preflight applies at the run's start — its ::error:: line is
+    # the durable diagnosis the ghost job log withholds
+    assert "Probe the runner's GitHub egress" in review_job, \
+        ("the review job must probe its egress before the state upload — "
+         "the failure this run answered with an HTML page on five retries "
+         "leaves no log to read the cause from")
+    m = re.search(r"(?ms)^  pr:.*?(?=^  \S|\Z)", factory)
+    assert m is not None, "the pr job is gone"
+    pr_job = m.group(0)
+    # always() is what lifts the needs success gate (a plain if does not
+    # — this run's pr job was skipped, not run, on a plain expression);
+    # the expression then carries the policy
+    assert "always()" in pr_job, \
+        "the pr job must bypass the needs success gate (always())"
+    assert ("needs.review.result == 'success'" in pr_job
+            and "needs.review.outputs.stage-completed == 'true'"
+            in pr_job), \
+        ("the pr job's gate must run on a successful review job OR a "
+         f"recorded stage completion: {pr_job!r}")
+    assert re.search(
+        r"continue-on-error: true\s*\n\s*with:\s*\n\s*name: cw-review",
+        pr_job), \
+        "the pr job's cw-review download must tolerate the missing artefact"
+    m = re.search(r"(?ms)^  gates:.*?(?=^  \S|\Z)", factory)
+    assert m is not None, "the gates job is gone"
+    assert re.search(
+        r"continue-on-error: true\s*\n\s*with:\s*\n\s*name: cw-pr",
+        m.group(0)), \
+        ("the gates job's cw-pr download must tolerate the missing "
+         "artefact (a PR job that failed for its own reasons)")
+    m = re.search(r"(?ms)^  report:.*?(?=^  \S|\Z)", factory)
+    assert m is not None, "the report job is gone"
+    assert "CW_REVIEW_STAGE_COMPLETED" in m.group(0), \
+        ("the report job must relay the same output as env — the verdict "
+         "reads it (the job-level channel the expression context cannot "
+         "reach inside the stage script)")
+
+
+def test_report_verdict_separates_a_lost_review_artefact_from_a_stage_failure():
+    """(reporting "a failed run is reported too" — "the failure summary
+    states which stage failed and why"; reference
+    `requirements/reporting.feature::A failed run is reported too`) the
+    review job's stage-completed output is the channel that survives its
+    failed tail: where it records the stage completing, the report stage
+    must not classify the review stage as a job that never ran (its
+    marker and its console evidence ride the artefact the failed upload
+    step never delivered) — the stage is reported complete, the loss is
+    named as the channel's, and the verdict points at the job that
+    carried the state. run 43085640068 is the case: the stage completed
+    and pushed, the upload failed, and the report the dangling report job
+    would have rendered said "stage job `review` never ran — its job did
+    not enter the run's job graph". The self-heal path the fix exists
+    for takes the same distinction through the PR-open branch: the PR is
+    open, the run concludes failure (the review job failed), and the
+    comment names the completed stage beside the lost channel instead of
+    the pipeline having stopped at a stage it completed."""
+    # the surviving artefact chain: every stage up to the implement stage
+    # recorded its outcome; the review stage's artefact (and with it its
+    # summary line and its completion marker) is the one the failed
+    # upload never delivered
+    stage_summary = (
+        "stage 1 trigger: issue #42 accepted\n"
+        "stage 2 setup-pi: verified\n"
+        "stage 3 baseline: branch ai/code-weaver/42 at "
+        "0123456789abcdef0123456789abcdef01234567\n"
+        "stage 4 requirements-extraction: clean — stage complete\n"
+        "stage 6 planning: clean — stage complete\n"
+        "stage 8 implementation: stage complete\n")
+    # without the relay: the lost artefact reads as a job that never ran
+    # (the misdiagnosis of run 43085640068)
+    _pr_body, comment, _closed = _run_report_action(
+        run_result="failure", pr_number="",
+        stage_summary=stage_summary)
+    assert "stage job `review` never ran" in comment, \
+        f"the standing classification, without the relay: {comment!r}"
+    os.environ["CW_REVIEW_STAGE_COMPLETED"] = "true"
+    try:
+        # the no-PR verdict (the relay to the PR job dropped — the rare
+        # ghost): the stop is no longer the completed review stage — the
+        # gap moves to the job downstream of it, and review is the last
+        # stage with a recorded outcome
+        _pr_body, comment, _closed = _run_report_action(
+            run_result="failure", pr_number="",
+            stage_summary=stage_summary)
+        assert "stage job `review` never ran" not in comment, \
+            ("the stage-completed output records the completion — the "
+             f"gap must move past the completed stage: {comment!r}")
+        assert ("the last stage with a recorded outcome is `review`"
+                in comment), \
+            (f"the completed stage is the last recorded one: {comment!r}")
+        assert "stage 10 test-and-review: stage complete" in comment, \
+            (f"a stage that is done is reported 'stage complete': "
+             f"{comment!r}")
+        # the self-heal path the fix exists for: the stage-completed
+        # output steered the PR job — the PR is open and its downstream
+        # jobs ran, so every job recorded an outcome; the run still
+        # concludes failure (the review job failed), and the stage table
+        # carries the completed stage, named for the channel its
+        # completion rode
+        full_summary = stage_summary + (
+            "stage 12 pr: PR #7 open — https://gh.example/pr/7\n"
+            "stage 13-14 gates: all PR-triggered workflows green — "
+            "stage complete\n")
+        _pr_body, comment, _closed = _run_report_action(
+            run_result="failure", pr_number="7",
+            stage_summary=full_summary)
+        assert "run failed" in comment, \
+            f"the run's conclusion carries the job's failure: {comment!r}"
+        assert "never ran" not in comment, \
+            (f"no job is misclassified as never run: {comment!r}")
+        assert "stage 10 test-and-review: stage complete" in comment, \
+            f"the stage table carries the done stage: {comment!r}"
+        assert "stage-completed" in comment, \
+            f"the table names the surviving channel: {comment!r}"
+    finally:
+        os.environ.pop("CW_REVIEW_STAGE_COMPLETED", None)

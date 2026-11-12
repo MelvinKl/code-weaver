@@ -276,7 +276,14 @@ EXPECTED_STEP_COUNTS = {
     "extract": 9,
     "plan": 9,
     "implement": 11,
-    "review": 10,
+    "review": 12,  # re-pinned: +2 — the job's egress probe step (a
+    # snapshot of the runner's GitHub egress at the run's end, the
+    # trigger preflight's idiom applied at the other end of the window:
+    # its ::error:: line is the durable diagnosis the ghost job log
+    # withholds where the state upload dies on a broken egress path)
+    # and its stage-completed step (the stage's completion marker
+    # relayed as a job output — the channel that survives the job's
+    # failed tail, steering the PR job's gate: run 43085640068)
     "pr": 17,
     "gates": 11,
     "report": 16,

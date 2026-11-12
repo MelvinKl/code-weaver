@@ -1929,6 +1929,36 @@ jobs:
           (
               git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" "${AI_BRANCH}"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+      - name: Probe the runner's GitHub egress (the state upload rides it)
+        if: always()
+        shell: bash
+        run: |-
+          # The trigger job's preflight probes this same egress at the
+          # run's start; this snapshot probes it at the run's end — the
+          # window the stage work lives in. A failed probe must not fail
+          # the job (the upload step runs regardless — it may still
+          # succeed, and the stage-completed step below steers the PR job
+          # either way); the ::error:: line is the durable diagnosis the
+          # ghost job log would otherwise withhold. The failure this probe
+          # anticipates answered the CreateArtifact call with an HTML page
+          # on all five of its retries (run 43085640068: the runner's
+          # egress to the GitHub API broken at the run's end), and the
+          # job's resulting failure conclusion skipped the PR job that the
+          # completed stage work had earned — the run ended with no PR,
+          # no report and no log to read the cause from.
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              HTTP=$(curl -s -o /tmp/cw-egress-probe.json -w '%{http_code}' --max-time 30 \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}") || HTTP=000
+              if [ "$HTTP" = "200" ]; then
+                echo "GitHub API egress probe: HTTP $HTTP — the state upload's egress is healthy"
+              else
+                echo "::error::GitHub API egress probe: HTTP $HTTP — the runner's egress to the GitHub API is broken or flaking at the end of the run; where the state upload now fails, the stage work is safe on the AI branch (already pushed) and the PR job proceeds on the stage-completed output"
+              fi
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -1936,12 +1966,63 @@ jobs:
           path: ${{ runner.temp }}/cw
           if-no-files-found: ignore
           include-hidden-files: true
+      - id: stage-completed
+        name: Record the stage-completion marker as a job output (the PR job's gate reads it)
+        if: always()
+        shell: bash
+        run: |-
+          # The stage script records its completion marker (state dir,
+          # state/artifacts/cw-review.txt) the moment its work completes —
+          # before this job's upload step. The marker outlives a failed
+          # upload (the state dir stays on the runner to this last step),
+          # and a step output is the job-level relay that survives it: it
+          # records in the run's job data whether the review STAGE
+          # completed — which is not the same question as whether this
+          # JOB succeeded. The job conclusion alone cannot make that
+          # distinction (run 43085640068: the stage completed and pushed,
+          # then the upload step failed on the runner's broken egress —
+          # the job's failure skipped the PR job and stranded the
+          # completed work), and the pr-and-gates contract gates the PR on
+          # the review being clean: the stage's completion marker is the
+          # evidence of that cleanliness the job-level conclusion can lie
+          # about.
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              M="$RUNNER_TEMP/cw/state/artifacts/cw-review.txt"
+              if [ -f "$M" ]; then
+                echo "stage-completed=true" >> "$GITHUB_OUTPUT"
+                echo "stage 10-11 completion marker present — the review stage completed; the job output records it for the PR job's gate"
+              else
+                echo "stage-completed=false" >> "$GITHUB_OUTPUT"
+                echo "no stage 10-11 completion marker — the review stage did not complete; the PR job's gate stays closed"
+              fi
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
+    outputs:
+      # the PR job's gate (and the report job's stage-outcome
+      # cross-check) reads the review stage's completion from here —
+      # the job conclusion alone cannot separate "the stage failed"
+      # from "the stage completed and the job's tail (the state
+      # upload) failed"
+      stage-completed: ${{ steps.stage-completed.outputs.stage-completed }}
 
   # ── stage 12 ───────────────────────────────────────────────────────────
   pr:
     name: "12 open the pull request (its body = the status report)"
     needs: [trigger, baseline, review]
-    if: ${{ needs.trigger.outputs.started == 'true' }}
+    # always() lifts the success gate the needs list would otherwise
+    # apply, and the expression carries the policy: the PR opens when the
+    # review job succeeded, or when its stage work completed and only the
+    # job's tail failed — the state upload, whose failure on broken runner
+    # egress must not strand the completed work (run 43085640068: the
+    # stage completed and pushed, the upload died on an HTML answer from
+    # the runner's egress path, and the success gate skipped the PR job,
+    # leaving the run with no PR, no report and no diagnosis the ghost
+    # job log would not withhold). A review stage that failed for real
+    # records no completion marker, and a failed upstream chain leaves the
+    # review job skipped with no output — the gate stays closed for both,
+    # as the pr-and-gates contract ("once the review is clean") demands.
+    if: ${{ always() && needs.trigger.outputs.started == 'true' && (needs.review.result == 'success' || needs.review.outputs.stage-completed == 'true') }}
     runs-on: ${{ inputs.runner }}
     # `fromJSON`: the job-timeout input is a string, this property a
     # number — the header's job-property paragraph: a plain expression
@@ -2073,6 +2154,15 @@ jobs:
           name: cw-implement
           path: ${{ runner.temp }}/cw
       - uses: actions/download-artifact@v8
+        # an upload that failed after the review stage completed (the
+        # runner's egress to the artifact endpoint broken at the run's
+        # end) leaves the artefact missing while the stage work is
+        # complete: this download tolerates the loss, and the steps below
+        # degrade on purpose — prepare-body lists only the context files
+        # that exist, the pi call runs continue-on-error, and the template
+        # fallback assembles the body from the trigger's state files and
+        # the repo tree
+        continue-on-error: true
         with:
           name: cw-review
           path: ${{ runner.temp }}/cw
@@ -2491,6 +2581,12 @@ jobs:
           ref: ${{ steps.state.outputs.checkout-ref }}
           token: ${{ secrets.GH_TOKEN }}
       - uses: actions/download-artifact@v8
+        # an upstream stage that never ran (or whose job failed) never
+        # uploads its artefact; the report lists it as not-run — the
+        # gates stage degrades the same way: without the PR state its
+        # head-sha resolution fails explicitly, and the report job (which
+        # runs on always) posts the verdict
+        continue-on-error: true
         with:
           name: cw-pr
           path: ${{ runner.temp }}/cw
@@ -2627,6 +2723,14 @@ jobs:
       # where they do)
       CW_PI_TIMEOUT: ${{ inputs.pi-timeout }}
       CW_RUN_RESULT: "${{ ((contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure') || 'success' }}"
+      # the review job's stage-completed output, relayed as env (the
+      # job-level channel the expression context cannot reach inside the
+      # stage script): it lets the verdict tell "the review stage
+      # completed and its state artefact was lost in the failed upload
+      # step" (a channel loss on the job that carried the state — reported
+      # as such, with the cause on that job) from "the review stage never
+      # ran"
+      CW_REVIEW_STAGE_COMPLETED: ${{ needs.review.outputs.stage-completed }}
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
         # Stage 1 fetched the called version's runtime tree into

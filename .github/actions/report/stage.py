@@ -211,6 +211,33 @@ try:
         for line in open(f):
             if line.strip() and line.strip() not in stage_lines:
                 stage_lines.append(line.strip())
+    # The review job's stage-completed output, relayed to this job as env
+    # by the report job's env block: it separates "the review stage
+    # completed and only the job's tail failed" (the state upload — its
+    # loss then reads as a channel loss, the cause on the job that carried
+    # the state, never on the stage) from "the review stage never ran".
+    # The job conclusion alone cannot make the distinction (run
+    # 43085640068: the stage completed and pushed, the upload step failed
+    # on the runner's broken egress, and the job's failure read — with the
+    # ghost job log withholding the cause — as a stage the pipeline
+    # stopped at). Absent or false: the classification below is
+    # unchanged.
+    _review_completed = os.environ.get(
+        "CW_REVIEW_STAGE_COMPLETED", "") == "true"
+    if (_review_completed
+            and not any(l.split(": ", 1)[0].startswith("stage 10")
+                        for l in stage_lines)):
+        # the review stage's summary lines ride the review job's artefact
+        # — the artefact a failed upload step never delivered, the state
+        # dir's copy lost with it. Where the job output records the
+        # completion, the table carries a line for the stage (a stage that
+        # is done is reported "stage complete" — the reporting
+        # contract), named for what the surviving channel actually is.
+        stage_lines.append(
+            "stage 10 test-and-review: stage complete — recorded in the "
+            "job's stage-completed output (its state artefact was lost "
+            "with the job that carried it; the stage's work is on the AI "
+            "branch)")
     # the stage-outcome assembly renders from those lines: the
     # implement stage records its per-step state on this channel
     # (one "stage 8 implementation: step <k>/<n> done" line per
@@ -329,6 +356,12 @@ try:
             return "ran-no-outcome", []
         if any(any(cl.startswith(pref) for pref in _console_prefix[job])
                for cl in _console.splitlines()):
+            return "ran-no-outcome", []
+        if job == "review" and _review_completed:
+            # the stage's completion survives in the job data (the
+            # stage-completed output) though its state artefact — the
+            # channel this evidence class normally rides — is the one
+            # that was lost
             return "ran-no-outcome", []
         return "never-ran", []
     _job_order = ("trigger", "setup-pi", "baseline", "extract", "plan",
@@ -609,6 +642,17 @@ try:
                     _stop = (f"\n- the pipeline stopped at stage job `{_gap}` "
                               "(it never ran — its job is not in the run's "
                               "job graph)")
+                elif _gap == "review" and _review_completed:
+                    _stop = ("\n- stage job `review` completed — its "
+                             "stage-completed job output records the "
+                             "completion; its state artefact is absent "
+                             "from the run, lost with the job that carried "
+                             "it (the job's failed steps — the check-run "
+                             "annotations on that job carry the API's "
+                             "error). A channel loss on the job's tail, "
+                             "not evidence of stage failure: the "
+                             "completed work was pushed to the AI branch "
+                             "and the PR opened from it")
                 else:
                     _stop = (f"\n- stage job `{_gap}` ran but recorded no "
                               "outcome — a channel loss, not evidence of "
@@ -667,6 +711,22 @@ try:
                     + (f"; the last stage with a recorded outcome is "
                        f"`{last}`" if last else "") + ".\n"
                     f"- result: **{result}**\n- completed: {now}\n"
+                    f"- stage outcomes:\n{stage_table}\n"
+                    f"{usage_lines}\n"
+                    "- full logs: the workflow run's artifacts (the repo tree "
+                    "is never used for report files).\n")
+        elif _gap == "review" and _review_completed:
+            data = ("⚠️ **code-weaver run — outcome undetermined** (the "
+                    "review stage completed — its job's stage-completed "
+                    "output records it — but its state artefact never "
+                    "reached the run: a channel loss on the job that "
+                    "carried it, not evidence of stage failure; the "
+                    "check-run annotations on that job carry the API's "
+                    "error).\n"
+                    f"- result: **{result}**\n- completed: {now}\n"
+                    f"- stage job `review` completed; its state artefact "
+                    "is absent from the run and a pull request was not "
+                    "opened\n"
                     f"- stage outcomes:\n{stage_table}\n"
                     f"{usage_lines}\n"
                     "- full logs: the workflow run's artifacts (the repo tree "
