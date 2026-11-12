@@ -190,6 +190,12 @@ def count_plan_steps(path: str) -> tuple[int, int]:
 
 def main() -> None:
     common.install_crash_diagnostics("stage 8 implementation")
+    # the run's resolved extension env applied to this stage's process
+    # environment at entry (the artefact-channel half of the relay that
+    # keeps the every-step contract whole on a runner build whose
+    # GITHUB_ENV write ghosts): every CLI the stage then spawns — its pi
+    # invocations, its git children — inherits the provider's values
+    common.apply_extension_env()
     plan_dir = common.env_dir("PLAN_DIR")
     issue = common.cw_state("issue-number") or common.cw_input_opt("issue-number") or ""
     current = current_plan_path(issue, plan_dir)

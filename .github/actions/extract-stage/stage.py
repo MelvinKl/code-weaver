@@ -234,6 +234,12 @@ def _record_no_delta_stop() -> None:
 
 def main() -> None:
     common.install_crash_diagnostics("stage 4 requirements-extraction")
+    # the run's resolved extension env applied to this stage's process
+    # environment at entry (the artefact-channel half of the relay that
+    # keeps the every-step contract whole on a runner build whose
+    # GITHUB_ENV write ghosts): every CLI the stage then spawns — its pi
+    # invocations, its git children — inherits the provider's values
+    common.apply_extension_env()
     req = common.env_dir("REQUIREMENTS_DIR")
     body = common.state_file("issue-body.md")
     body_empty = (not os.path.exists(body)

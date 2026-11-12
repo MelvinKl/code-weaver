@@ -34,7 +34,7 @@ try:
     if os.path.isdir(scripts):
         sys.path.insert(0, scripts)
     try:
-        from common import state_dir, state_file, log
+        from common import state_dir, state_file, log, apply_extension_env
     except ImportError:
         def state_dir():
             d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
@@ -44,6 +44,33 @@ try:
             return os.path.join(state_dir(), n)
         def log(m):
             print(m, flush=True)
+        def apply_extension_env():
+            # local fallback — the run's resolved extension env applied to
+            # this stage's process environment at entry (the
+            # artefact-channel half of the relay that keeps the
+            # every-step contract whole on a runner build whose
+            # GITHUB_ENV write ghosts): every CLI the stage then spawns
+            # inherits the provider's values
+            d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw",
+                             "state", "trigger")
+            try:
+                fns = os.listdir(d)
+            except OSError:
+                fns = []
+            for fn in sorted(fns):
+                if not (fn.startswith("extension-env-")
+                        and fn.endswith(".txt")):
+                    continue
+                k = fn[len("extension-env-"):-len(".txt")]
+                try:
+                    v = open(os.path.join(d, fn),
+                             encoding="utf-8").read()
+                except OSError:
+                    continue
+                v = v.strip()
+                if v and not os.environ.get(k):
+                    os.environ[k] = v
+    apply_extension_env()
 
     # a crashed stage must leave a persistent diagnosis (the job log dies
     # with the run; a ghost run's logs are unreachable from the API) —
@@ -156,13 +183,12 @@ try:
             # the git child's environment with the provider's
             # leave-untouched rule (a value already present wins over
             # the run's provided one), so the branch cut and the
-            # factory's commit identity it configures run with the
-            # provider's variables in the git process env — where it
-            # carries GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL, git's
-            # environment-over-configuration precedence makes the
-            # provider's account the commit's author. A run without the
-            # provider recorded no file: the child's environment is
-            # exactly as before.
+            # stage's commits run with the provider's variables in the
+            # git process env — where it carries GIT_AUTHOR_NAME /
+            # GIT_AUTHOR_EMAIL, git's environment-over-configuration
+            # precedence makes the provider's account the commit's
+            # author. A run without the provider recorded no file:
+            # the child's environment is exactly as before.
             d = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw",
                              "state", "trigger")
             try:
@@ -170,10 +196,10 @@ try:
             except OSError:
                 fns = []
             for fn in sorted(fns):
-                if not (fn.startswith("pi-extension-env-")
+                if not (fn.startswith("extension-env-")
                         and fn.endswith(".txt")):
                     continue
-                k = fn[len("pi-extension-env-"):-len(".txt")]
+                k = fn[len("extension-env-"):-len(".txt")]
                 try:
                     v = open(os.path.join(d, fn),
                              encoding="utf-8").read()
@@ -230,10 +256,8 @@ try:
         g("checkout", "-B", ai_branch, base_sha)
         log(f"baseline: {ai_branch} cut at {base_sha} (head of "
             f"{base_ref}); fresh cut")
-    g("config", "user.name", "Code Weaver")
-    g("config", "user.email", "code-weaver@users.noreply.github.com")
 
-    # the issue's change set, snapshotted as state (empty at a fresh cut —
+    # The issue's change set, snapshotted as state (empty at a fresh cut —
     # it grows as stages write, and anchors every guard check)
     state = state_dir()
     with open(state_file("baseline.sha"), "w") as f:

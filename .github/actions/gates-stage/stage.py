@@ -131,6 +131,12 @@ def _cw_in(name: str) -> str:
 
 def main() -> None:
     common.install_crash_diagnostics("stage 13-14 PR gates")
+    # the run's resolved extension env applied to this stage's process
+    # environment at entry (the artefact-channel half of the relay that
+    # keeps the every-step contract whole on a runner build whose
+    # GITHUB_ENV write ghosts): every CLI the stage then spawns — its pi
+    # invocations, its git children — inherits the provider's values
+    common.apply_extension_env()
     head_sha = _cw_in("head-sha")
     polls = 0
     fix_iter = 0

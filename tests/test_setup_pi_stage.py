@@ -77,7 +77,7 @@ class _sandbox:
             "INPUT_PI_MODELS", "CW_PI_MODELS",
             "INPUT_PI_SETTINGS", "CW_PI_SETTINGS",
             "INPUT_PI_MCP", "CW_PI_MCP",
-            "INPUT_PI_EXTENSION_ENV", "CW_PI_EXTENSION_ENV",
+            "INPUT_EXTENSION_ENV", "CW_EXTENSION_ENV",
             "INPUT_LLM_MODEL", "CW_LLM_MODEL",
             # the extension-env values the stage applies to its process
             # environment — a host environment carrying its own must not
@@ -302,7 +302,7 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
             '{"providers": {"p": {"baseUrl": "http://b.example/v1"}}}'
         os.environ["CW_PI_SETTINGS"] = '{"packages": ["npm:pi-jev"]}'
         os.environ["CW_PI_MCP"] = '{"mcpServers": {"laya": {}}}'
-        os.environ["CW_PI_EXTENSION_ENV"] = (
+        os.environ["CW_EXTENSION_ENV"] = (
             "PI_JEV_THINKING=1\n"
             "PI_JEV_BASE_URL=http://laya.example/\n"
             "# a comment line carries no variable\n")
@@ -347,7 +347,7 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
             f"the comment line carries no variable; {recorded!r}"
         for name, value in recorded:
             sf = os.path.join(sb.rt, "cw", "state", "trigger",
-                              f"pi-extension-env-{name}.txt")
+                              f"extension-env-{name}.txt")
             assert os.path.isfile(sf), \
                 ("each resolved value is recorded as a state file in the "
                  "run's state dir (the later stage jobs' Read trigger "
@@ -483,3 +483,4 @@ def test_pi_calls_need_no_path_help_where_pi_is_already_resolved():
             os.environ["PATH"] = base_path
         assert os.environ["PATH"] == base_path, \
             "a runner whose PATH already resolves pi is modified"
+

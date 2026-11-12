@@ -30,7 +30,7 @@ environment: it provides the harness for the run.
                         an absent provider means the run's pi runs without MCP
                         servers
         extensions/   ← the extension's environment (the .env-style
-                        PI_EXTENSION_ENV secret) materialised as a user-level
+                        EXTENSION_ENV secret) materialised as a user-level
                         extension that sets the provided variables, so the
                         run's pi invocations run the extension with them —
                         and set effective: the resolved values are recorded
@@ -39,9 +39,10 @@ environment: it provides the harness for the run.
                         cumulative artefact chain to every later stage job,
                         whose per-job Read trigger state relay relays them
                         into the job's env like the other trigger-state keys,
-                        and are applied to this stage's own process
-                        environment — so every pi invocation of the run runs
-                        with the values in its process environment; a run
+                        and every stage job applies them to its process
+                        environment at the stage's entry — so every CLI the
+                        stage spawns (its pi invocations, its git children)
+                        runs with them in its process environment; a run
                         without the provider sets no variables (the element
                         is cleared, the run is unchanged)
       The runner's pre-existing user-level configuration is replaced for the
@@ -142,9 +143,11 @@ def resolve_provider(input_name: str, repo_rel: str) -> tuple[str, str] | None:
 
 def resolve_extension_env() -> str | None:
     """The extension's environment provider — a `.env`-style GitHub secret
-    (KEY=VALUE lines; blank lines and # comments carry no variables).
-    Empty or comment-only is an absent provider."""
-    v = provider_value("pi-extension-env")
+    (the EXTENSION_ENV secret's relay; KEY=VALUE lines, blank lines and
+    # comments carry no variables). The provider is secret-only: its values
+    are never committed to the target's tree (an empty or comment-only
+    secret is an absent provider — the run is unchanged)."""
+    v = provider_value("extension-env")
     if v is None:
         return None
     kept = [ln.strip() for ln in v.splitlines()
@@ -290,7 +293,7 @@ def record_extension_env(extension_env: str | None) -> list[tuple[str, str]]:
     d = os.path.join(common.state_dir(), "state", "trigger")
     os.makedirs(d, exist_ok=True)
     for name, value in pairs:
-        with open(os.path.join(d, f"pi-extension-env-{name}.txt"), "w",
+        with open(os.path.join(d, f"extension-env-{name}.txt"), "w",
                   encoding="utf-8") as f:
             f.write(value + "\n")
         if not os.environ.get(name):
@@ -494,6 +497,12 @@ def check_run_configuration(models, model: str, agent_dir: str,
 
 def main() -> None:
     common.install_crash_diagnostics(STAGE)
+    # the run's resolved extension env applied to this stage's process
+    # environment at entry (a no-op at this point — this stage is the
+    # writer: it records the values later in main, where they are applied
+    # to this stage's process environment as well; the entry call keeps
+    # the every-stage entry-apply uniform)
+    common.apply_extension_env()
     agent = agent_dir()
     model = (os.environ.get("LLM_MODEL")
              or common.cw_input_opt("llm-model") or "")

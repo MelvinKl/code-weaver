@@ -396,6 +396,12 @@ def tail(path: str, n: int = 200) -> str:
 
 def main() -> None:
     common.install_crash_diagnostics("stage 10-11 test & review")
+    # the run's resolved extension env applied to this stage's process
+    # environment at entry (the artefact-channel half of the relay that
+    # keeps the every-step contract whole on a runner build whose
+    # GITHUB_ENV write ghosts): every CLI the stage then spawns — its pi
+    # invocations, its git children — inherits the provider's values
+    common.apply_extension_env()
     i = 0
     pending_audit = False
     while True:

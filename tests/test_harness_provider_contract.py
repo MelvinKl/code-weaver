@@ -8,7 +8,7 @@ workflow's secrets block"; safety "Secrets are never plain inputs"):
 
 - the factory declares the four providers — PI_MODELS (the model
   configuration), PI_SETTINGS (the additional packages), PI_MCP (the MCP
-  configuration), PI_EXTENSION_ENV (the extension's .env-style
+  configuration), EXTENSION_ENV (the extension's .env-style
   environment variables) — as optional entries of its workflow_call
   `secrets:` block; GH_TOKEN stays the only `required: true` one;
 - the setup-pi job delivers them to its inlined setup-pi stage through the job's `CW_<name>` env: after the consolidation the stage step is an ordinary job step (no composite boundary between), so the job env reaches the stage's script directly and the stage code's INPUT_*/CW_*/state-file chain resolves each provider from there (an empty secret value arrives empty and the stage treats it as an absent provider)
@@ -39,7 +39,7 @@ PROVIDERS = (
     ("PI_MODELS", "pi-models"),
     ("PI_SETTINGS", "pi-settings"),
     ("PI_MCP", "pi-mcp"),
-    ("PI_EXTENSION_ENV", "pi-extension-env"),
+    ("EXTENSION_ENV", "extension-env"),
 )
 
 

@@ -20,7 +20,7 @@ jobs:
 
 The `secrets:` block also carries the run's four optional
 harness-provider secrets (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`,
-`PI_EXTENSION_ENV` — the run's pi harness, chapter 8); a provider value
+`EXTENSION_ENV` — the run's pi harness, chapter 8); a provider value
 never appears in a `with:` input or a committed file.
 
 The `with:` block's optional `dependency-install` input declares the

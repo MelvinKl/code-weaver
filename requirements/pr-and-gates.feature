@@ -20,6 +20,13 @@ Feature: Pull request and gate loop
     And the PR body describes the issue the run implements
 
   @pr
+  Scenario: The PR's identity rides the run's artefact state
+    Given the pr-open stage opened (or updated) the run's pull request
+    When the pr stage completes
+    Then the PR's number and url are recorded as state files in the run's state dir (one value a file), beside the trigger's recorded state
+    And the state files ride the cumulative artefact chain to the gates and report jobs, whose PR identity they read from them
+
+  @pr
   Scenario: The PR body describes the issue it implements
     When the pr job assembles the PR body — by pi, or by the template fallback
     Then the body states the source issue's number and title
@@ -33,6 +40,13 @@ Feature: Pull request and gate loop
     Given the PR is open
     When the pr-gates stage waits for every pull_request workflow on the PR
     Then the stage succeeds only when all of them are green
+
+  @gates
+  Scenario: A head that resolves to no sha fails the gate cleanly
+    Given the PR's head sha cannot be resolved (the PR state is missing from the run's artefact, or the API call 404s)
+    When the gates stage resolves the PR's head sha
+    Then the stage fails with an explicit error before any gate polling
+    And the unresolvable value is never written to the job's output file (a value that is not a sha is an invalid file command that kills the step in the runner's parser)
 
   @gates
   Scenario: The gate sees the PR's runs on a busy repo

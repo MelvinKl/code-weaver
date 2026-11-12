@@ -15,7 +15,7 @@
   `issues:write` + `pull-requests:write` + `contents:write`) rides the
   reusable workflow's `secrets:` block only; no secret value ever appears
   in `with:` inputs or committed files — the four optional harness
-  providers (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`, `PI_EXTENSION_ENV`)
+  providers (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`, `EXTENSION_ENV`)
   ride the same block. The optional `dependency-install` input rides the
   `with:` block rather than this one — an install command is project
   configuration, not a secret value, so the input channel is the

@@ -283,7 +283,7 @@ on:
       PI_MCP:
         description: The run's MCP configuration — the content of .pi/mcp.json; absent means the run's pi runs without MCP servers
         required: false
-      PI_EXTENSION_ENV:
+      EXTENSION_ENV:
         description: The pi extension's environment variables in .env style (such as the ones .pi/extensions/pi-jev-config.ts carries)
         required: false
 
@@ -759,11 +759,13 @@ jobs:
       CW_PI_TIMEOUT: ${{ inputs.pi-timeout }}
       # The run's pi harness providers (the documented with: + CW_<name>
       # env relay idiom): an empty secret value arrives empty and the stage
-      # treats it as an absent provider — the repo file is the fallback.
+      # treats it as an absent provider — the repo file is the fallback for
+      # the three file-carrying elements (the extension's env is
+      # secret-only: its values are never committed to the target's tree).
       CW_PI_MODELS: ${{ secrets.PI_MODELS }}
       CW_PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
       CW_PI_MCP: ${{ secrets.PI_MCP }}
-      CW_PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
+      CW_EXTENSION_ENV: ${{ secrets.EXTENSION_ENV }}
     steps:
       - name: Stash the factory runtime tree (before any checkout replaces the workspace)
         # Stage 1 fetched the called version's runtime tree into
@@ -982,9 +984,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -1191,9 +1193,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -1378,9 +1380,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -1566,9 +1568,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -1736,11 +1738,24 @@ jobs:
               # branch) and rides the implementation's branch work — the
               # branch is the only documented cross-job workspace channel.
               git add -A
-              # The documented factory identity (the baseline job's):
-              # repo-local, a fallback for a runner whose environment carries
-              # no git identity — it never rides a commit or the PR
-              git config user.name "Code Weaver"
-              git config user.email "code-weaver@users.noreply.github.com"
+              # The run's resolved extension env — the state-file channel
+              # (the GITHUB_ENV half of the relay ghosts on this runner
+              # build, so the job's env alone would not reach this step): a
+              # provider value exported here rides the commit below — git's
+              # environment-over-configuration precedence makes it the
+              # commit's author (the factory writes no identity of its own)
+              for f in "$RUNNER_TEMP/cw/state/trigger"/extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
+                [ -z "${!k:-}" ] && v=$(cat "$f") && [ -n "$v" ] && export "$k=$v"
+              done
+              # The commit's author identity rides the exported provider
+              # values — or, where the run's provider carries none, the
+              # runner's own git configuration. The factory writes no
+              # identity of its own: a run with neither a provider value
+              # nor a runner identity fails the commit with git's explicit
+              # "tell me who you are" error, mirrored into the run's
+              # artefact log.
               git commit -q -m "dependency-upgrade: upgrade the project's dependencies to newer versions"
               # The completed stage's work is committed and pushed to the AI
               # branch — the push inside the step, not only this job's tail
@@ -1882,9 +1897,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -2183,9 +2198,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -2651,9 +2666,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -2727,7 +2742,7 @@ jobs:
           set -o pipefail
           (
               T="$RUNNER_TEMP/cw/state/pr"
-              [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
+              [ -f "$T/pr-number.txt" ] || { echo "no PR state under the pr stage's state dir (the pr stage did not complete, or its identity write was lost)"; exit 0; }
               echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
               [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
               echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"
@@ -2754,14 +2769,21 @@ jobs:
               [ -n "$PR" ] || PR="${CW_PR_NUMBER}"
               # The sha comes from the FULL PR object via jq: the field-suffix
               # form of the endpoint (`pulls/<n>/head.sha`) 404s on this API
-              # surface — and its 404 body echoed into GITHUB_OUTPUT is an
-              # invalid file command, so the step died before the gate loop ever
-              # started (run 40219192721's gates job: 4 s from start to death,
-              # against a perfectly healthy PR #48 whose full object carried
-              # head.sha all along).
+              # surface. gh api writes a failed call's response body to its
+              # stdout: an unresolvable PR number 404s and the captured value
+              # is the JSON body, not a sha — echoed into GITHUB_OUTPUT it is
+              # an invalid file command and the runner's parser kills the step
+              # before the gate loop ever starts (run 40219192721's gates
+              # job: 4 s from start to death, against a perfectly healthy PR
+              # #48 whose full object carried head.sha all along; the same
+              # death recurred on every run whose pr state the pr stage's
+              # state-file write lost — runs 43085640068 and
+              # 43175773049's gates jobs). A value that is not a sha is a
+              # failure: it fails the step with an explicit error and never
+              # reaches the output file.
               HEAD_SHA=$(gh api repos/$GITHUB_REPOSITORY/pulls/"$PR" --jq .head.sha 2>/dev/null) || true
-              if [ -z "$HEAD_SHA" ]; then
-                echo "::error::could not resolve the head sha of PR #${PR} — the gates have nothing to poll; check the PR and the token's access to the repo"
+              if [ -z "$HEAD_SHA" ] || ! printf '%s\n' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+                echo "::error::could not resolve the head sha of PR #${PR:-?} — the gates have nothing to poll: the PR number is unbound (the pr stage's state files are missing from the artefact), or the resolved value is not a sha (an API error body, or the token's access to the repo is unsound)"
                 exit 1
               fi
               echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
@@ -2911,9 +2933,9 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
-              for f in "$T"/pi-extension-env-*.txt; do
+              for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
-                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
@@ -3061,7 +3083,7 @@ jobs:
           set -o pipefail
           (
               T="$RUNNER_TEMP/cw/state/pr"
-              [ -f "$T/pr-number.txt" ] || { echo "no PR state (the pr stage did not complete)"; exit 0; }
+              [ -f "$T/pr-number.txt" ] || { echo "no PR state under the pr stage's state dir (the pr stage did not complete, or its identity write was lost)"; exit 0; }
               echo "CW_PR_NUMBER=$(cat "$T/pr-number.txt")" >> "$GITHUB_ENV"
               [ -f "$T/pr-url.txt" ] && echo "CW_PR_URL=$(cat "$T/pr-url.txt")" >> "$GITHUB_ENV"
               echo "pr state: #$(cat "$T/pr-number.txt") $(cat "$T/pr-url.txt" 2>/dev/null)"

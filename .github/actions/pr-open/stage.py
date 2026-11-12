@@ -28,6 +28,13 @@ try:
         import common
     except ImportError:
         common = None
+    # the run's resolved extension env applied to this stage's process
+    # environment at entry (the artefact-channel half of the relay that
+    # keeps the every-step contract whole on a runner build whose
+    # GITHUB_ENV write ghosts): every CLI the stage then spawns
+    # inherits the provider's values
+    if common:
+        common.apply_extension_env()
 
     # The factory's single git entry point (one function every
     # git call routes through — the test suite mocks that one
@@ -55,6 +62,39 @@ try:
             # the child's git die on the missing key).
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith("GIT_CONFIG_")}
+            # the run's resolved extension env — the setup-pi stage
+            # records the provider's values in the run's state dir
+            # (one value a file, beside the trigger's recorded state);
+            # this state-file read is the artefact-channel half that
+            # keeps the relay whole on a runner build whose GITHUB_ENV
+            # write ghosts: applied to the git child's environment with
+            # the provider's leave-untouched rule (a value already
+            # present wins over the run's provided one), so the stage's
+            # git work runs with the provider's variables in the git
+            # process env — where it carries GIT_AUTHOR_NAME /
+            # GIT_AUTHOR_EMAIL, git's environment-over-configuration
+            # precedence makes the provider's account the commit's
+            # author. A run without the provider recorded no file: the
+            # child's environment is exactly as before.
+            d = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw",
+                             "state", "trigger")
+            try:
+                fns = os.listdir(d)
+            except OSError:
+                fns = []
+            for fn in sorted(fns):
+                if not (fn.startswith("extension-env-")
+                        and fn.endswith(".txt")):
+                    continue
+                k = fn[len("extension-env-"):-len(".txt")]
+                try:
+                    v = open(os.path.join(d, fn),
+                             encoding="utf-8").read()
+                except OSError:
+                    continue
+                v = v.strip()
+                if v and not env.get(k):
+                    env[k] = v
             entries = [("safe.directory", os.path.expanduser("~")),
                        ("safe.directory", os.getcwd())]
             ws = os.environ.get("GITHUB_WORKSPACE")
@@ -177,10 +217,20 @@ try:
     with open(os.environ["GITHUB_OUTPUT"], "a") as f:
         f.write(f"pr-number={number}\npr-url={url}\n")
     # state files — the gates & report jobs read the PR identity from
-    # the artifact (the job-outputs relay is not their value channel)
+    # the artifact (the job-outputs relay is not their value channel —
+    # and on this runner build it ghosts entirely, so the state files are
+    # the only channel of the pair). An empty state/pr dir (a write the
+    # body lost in the #106 flat-file migration) rides no artefact at all
+    # — the gates job then resolves an empty PR number, its head-sha probe
+    # 404s, and the run dies in the gate before the report stage ever
+    # renders (runs 43085640068 and 43175773049)
     st = os.path.join(os.environ.get("RUNNER_TEMP", ""),
                       "cw", "state", "pr")
     os.makedirs(st, exist_ok=True)
+    with open(os.path.join(st, "pr-number.txt"), "w") as f:
+        f.write(str(number))
+    with open(os.path.join(st, "pr-url.txt"), "w") as f:
+        f.write(url)
     # the stage's outcome line + completion marker — written by the stage
     # STEP itself (a job tail the runner's parser mangles into a no-op
     # must not be the stage's verdict's only writer — issue #106). The

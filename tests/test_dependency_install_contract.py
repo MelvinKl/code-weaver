@@ -214,7 +214,7 @@ def test_factory_exposes_the_optional_dependency_install_input():
     # the four harness providers on the secrets: block are untouched —
     # the new channel is an input, and no secret value rides a with: input
     secrets_block = _workflow_call_block(factory, "secrets")
-    for name in ("PI_MODELS", "PI_SETTINGS", "PI_MCP", "PI_EXTENSION_ENV"):
+    for name in ("PI_MODELS", "PI_SETTINGS", "PI_MCP", "EXTENSION_ENV"):
         assert f"      {name}:" in secrets_block, \
             f"the harness provider {name} left the factory's secrets block"
     assert "GH_TOKEN:" in secrets_block

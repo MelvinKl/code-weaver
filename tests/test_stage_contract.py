@@ -2030,7 +2030,7 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     # in its workflow_call secrets: block, the deployed workflow and the
     # README example wire them in their own secrets: blocks
     factory = _read(".github/workflows/factory.yml")
-    for name in ("PI_MODELS", "PI_SETTINGS", "PI_MCP", "PI_EXTENSION_ENV"):
+    for name in ("PI_MODELS", "PI_SETTINGS", "PI_MCP", "EXTENSION_ENV"):
         assert f"      {name}:" in factory, \
             f"the factory's secrets: block must declare {name} as an optional entry"
         line = f"      {name}: ${{{{ secrets.{name} }}}}"
@@ -6350,7 +6350,7 @@ def test_run_git_operations_honour_the_provider_identity():
         # provider's account the commit's author
         for name, value in provider.items():
             with open(os.path.join(trig,
-                                   f"pi-extension-env-{name}.txt"),
+                                   f"extension-env-{name}.txt"),
                       "w", encoding="utf-8") as f:
                 f.write(value + "\n")
         mod.git_exec(["commit", "-q", "-m", "the stage's work"],
@@ -6400,7 +6400,7 @@ def test_run_git_operations_honour_the_provider_identity():
         # GIT_CONFIG hygiene's default identity the run's commits run
         # under, and the run is unchanged
         for name in provider:
-            os.remove(os.path.join(trig, f"pi-extension-env-{name}.txt"))
+            os.remove(os.path.join(trig, f"extension-env-{name}.txt"))
         with open(os.path.join(trig, "issue-number.txt"), "w") as f:
             f.write("132\n")
         calls.clear()
@@ -6582,3 +6582,117 @@ def test_report_verdict_separates_a_lost_review_artefact_from_a_stage_failure():
             f"the table names the surviving channel: {comment!r}"
     finally:
         os.environ.pop("CW_REVIEW_STAGE_COMPLETED", None)
+
+
+def test_pr_open_records_the_pr_identity_as_state_files():
+    """(pr-and-gates "The PR's identity rides the run's artefact state";
+    reference `requirements/pr-and-gates.feature::The PR's identity rides
+    the run's artefact state`) the pr stage's terminal body writes the PR's
+    number and url as state files in the run's state dir
+    (state/pr/pr-number.txt, state/pr/pr-url.txt) beside the trigger's
+    recorded state: the gates and report jobs read the PR identity from the
+    artefact — the job-outputs relay is not their value channel (and on
+    this runner build it ghosts) — and an empty state dir rides no artefact
+    at all, so a write the body lost is a gates job that resolves an empty
+    PR number, 404s, and dies in the runner's parser (runs 43085640068 and
+    43175773049's gates jobs — the write the #106 flat-file migration
+    dropped)."""
+    text = _read(".github/actions/pr-open/stage.py")
+    assert 'open(os.path.join(st, "pr-number.txt"), "w")' in text, (
+        "the pr stage's body must write the PR number as a state file — the "
+        "gates and report jobs read it from the artefact")
+    assert 'open(os.path.join(st, "pr-url.txt"), "w")' in text, (
+        "the pr stage's body must write the PR url as a state file — the "
+        "gates and report jobs read it from the artefact")
+    makedirs_i = text.index("os.makedirs(st, exist_ok=True)")
+    assert makedirs_i < text.index(
+        'open(os.path.join(st, "pr-number.txt"), "w")'), (
+        "the state file writes must follow the state dir's creation")
+
+
+def test_gates_head_sha_step_fails_cleanly_on_a_non_sha():
+    """(pr-and-gates "A head that resolves to no sha fails the gate cleanly";
+    reference `requirements/pr-and-gates.feature::A head that resolves to
+    no sha fails the gate cleanly`) the gates job's head-sha step validates
+    the resolved value against the sha shape before it writes it to
+    GITHUB_OUTPUT: gh api writes a failed call's response body to its
+    stdout, and a value that is not a sha (an API error body) is an invalid
+    file command that kills the step in the runner's parser before the gate
+    loop ever starts — the value must fail the step with an explicit error
+    and never reach the output file."""
+    text = _read(".github/workflows/factory.yml")
+    start = text.index("name: Resolve the PR's head sha")
+    nxt = re.search(r"\n      - (name|id):", text[start:])
+    step = text[start:start + nxt.start()]
+    assert "^[0-9a-f]{40}$" in step, (
+        "the head-sha step must validate the resolved value against the sha "
+        "shape before writing it to the job's output file")
+    guard = step.index("if [ -z \"$HEAD_SHA\" ]")
+    write = step.index('echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"')
+    assert guard < write, (
+        "the sha-shape guard must run before the output write — a value "
+        "that is not a sha must fail the step and never reach the file")
+
+
+def test_dependency_upgrade_step_exports_the_run_extension_env():
+    """(setup-pi "The additional environment variables are provided via a
+    .env-style GitHub secret" — the value every commit of the run carries;
+    reference `requirements/setup-pi.feature::The additional environment
+    variables are provided via a .env-style GitHub secret`,
+    `requirements/setup-pi.feature::The run's commits carry the author
+    identity the extension's environment provides`) the dependency-upgrade
+    step's commit is a bash step: the GITHUB_ENV half of the per-job relay
+    ghosts on this runner build, so the step reads the run's resolved
+    extension env from the state-file channel itself — a provider value
+    exported in the step rides the commit's process environment, where
+    git's environment-over-configuration precedence makes it the commit's
+    author over the repo-local fallback identity."""
+    text = _read(".github/workflows/factory.yml")
+    start = text.index("name: Upgrade the target project's dependencies")
+    nxt = re.search(r"\n      - (name|id):", text[start:])
+    step = text[start:start + nxt.start()]
+    assert "extension-env-*.txt" in step, (
+        "the dependency-upgrade step must read the run's resolved extension "
+        "env from the state-file channel before its commit")
+    assert 'export "$k=$v"' in step, \
+        "the read value must be exported into the step's environment"
+
+
+def test_every_stage_applies_the_recorded_extension_env_at_entry():
+    """(setup-pi "The additional environment variables are provided via a
+    .env-style GitHub secret" — the every-stage clause; reference
+    `requirements/setup-pi.feature::The additional environment variables
+    are provided via a .env-style GitHub secret`) every stage script
+    applies the run's recorded extension env to its process environment
+    at the stage's entry — every CLI the stage then spawns (its pi
+    invocations, its git children, any subprocess) inherits the
+    provider's values in its process environment: the artefact-channel
+    half of the relay that keeps the every-step contract whole on a
+    runner build whose GITHUB_ENV write ghosts. The stage scripts that
+    carry their own git entry point copy (baseline, pr-open, report,
+    guard-check — the test suite mocks that one function, so no test
+    spawns the real git binary) apply the values to that copy's child
+    environment as well; pi-run rides the shared pi-call plumbing,
+    which applies the recorded values to the invocation's process
+    environment itself."""
+    acts = os.path.join(ROOT, ".github", "actions")
+    for d in sorted(os.listdir(acts)):
+        sp = os.path.join(acts, d, "stage.py")
+        if not os.path.isfile(sp):
+            continue
+        text = open(sp, encoding="utf-8").read()
+        if d == "pi-run":
+            assert "pi_invoke" in text, \
+                "pi-run rides the shared pi-call plumbing (which applies the recorded values)"
+            continue
+        assert "apply_extension_env" in text, \
+            f"{d}'s stage script must apply the recorded extension env to its process environment at entry"
+    for name in ("baseline", "pr-open", "report"):
+        text = open(os.path.join(acts, name, "stage.py"), encoding="utf-8").read()
+        assert 'extension-env-' in text, \
+            (f"{name}'s own git entry point copy must apply the recorded "
+             "extension env to the git child's environment")
+    text = open(os.path.join(acts, "guard-check", "guard-check.py"),
+                encoding="utf-8").read()
+    assert "extension-env-" in text, \
+        "guard-check's inline git fallback must apply the recorded extension env"

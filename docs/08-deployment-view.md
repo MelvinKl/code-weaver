@@ -27,8 +27,8 @@ repo at the ref that selected the file — the consumer's `uses:` line
 stays the only pin). Its `secrets:` block carries
 `GH_TOKEN` (the only required one) plus the four optional
 harness-provider secrets (`PI_MODELS`, `PI_SETTINGS`, `PI_MCP`,
-`PI_EXTENSION_ENV`) — a provider value never appears in a `with:` input
-or a committed file. The `with:` block may also declare the optional
+`EXTENSION_ENV`) — a provider value never appears in a `with:`
+input or a committed file. The `with:` block may also declare the optional
 `dependency-install` input — the command the run's pipeline runs to
 install the target project's dependencies: project configuration, not a
 secret value (the chapter-3 constraint holds on the input channel), and
@@ -124,13 +124,13 @@ invocation resolves:
 | the model configuration — the run's LLM backend (e.g. the keyless internal swap) is defined in it, and the `llm-model` input selects from its model set | `PI_MODELS` | `.pi/agent/models.json` |
 | the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` | `.pi/settings.json` |
 | the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` | `.pi/mcp.json` |
-| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir and relayed to every later stage job like the other trigger-state keys — the `CW_*`/state-file relay) | `PI_EXTENSION_ENV` | — (the secret is the provider) |
+| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys — the `CW_*`/state-file relay, and applied at every stage job's entry) | `EXTENSION_ENV` | — (the secret is the provider) |
 
 The stage writes each resolved element into the agent directory the run's
 pi invocations resolve (`~/.pi/agent/`, honouring `PI_CODING_AGENT_DIR`):
 `models.json`, `settings.json`, `mcp.json`, and the extension's
 environment materialised as a user-level extension in the agent
-directory's `extensions/`. A non-empty `PI_EXTENSION_ENV` is, in
+directory's `extensions/`. A non-empty `EXTENSION_ENV` is, in
 addition to that materialisation, set as environment variables in the
 environment of every pi invocation of the run: the stage records each
 resolved value into the run's state dir as a state file (every value a
@@ -138,7 +138,10 @@ file, beside the trigger's recorded state), the cumulative artefact
 chain carries the values to every later stage job, and the per-job Read
 trigger state relay feeds them into the job's environment like the other
 trigger-state keys (the `CW_*`/state-file relay — the documented
-containment for the runner's GITHUB_ENV ghost-binding risk); a run
+containment for the runner's GITHUB_ENV ghost-binding risk), and every
+stage job applies the recorded values to its process environment at the
+stage's entry — so every CLI the stage spawns (its pi invocations, its
+git children) runs with them; a run
 without the provider sets no variable and is unchanged. The consequence
 for the run's git operations: where the provider carries
 `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`, the run's commits run with the

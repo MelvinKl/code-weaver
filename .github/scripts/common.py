@@ -419,7 +419,7 @@ def ensure_pi_on_path() -> None:
 
 def recorded_extension_env() -> list[tuple[str, str]]:
     """The setup-pi stage's recorded extension env, read from the run's
-    state dir — one value a file (`pi-extension-env-<name>.txt`, beside
+    state dir — one value a file (`extension-env-<name>.txt`, beside
     the trigger's recorded state; the files ride the cumulative
     artefact chain to every later stage job). The single read both
     apply halves share: apply_extension_env applies the values to the
@@ -440,10 +440,10 @@ def recorded_extension_env() -> list[tuple[str, str]]:
         return []
     out = []
     for fname in sorted(names):
-        if not (fname.startswith("pi-extension-env-")
+        if not (fname.startswith("extension-env-")
                 and fname.endswith(".txt")):
             continue
-        name = fname[len("pi-extension-env-"):-len(".txt")]
+        name = fname[len("extension-env-"):-len(".txt")]
         try:
             with open(os.path.join(root, fname), encoding="utf-8") as f:
                 value = f.read().strip()
@@ -456,7 +456,7 @@ def recorded_extension_env() -> list[tuple[str, str]]:
 
 def apply_extension_env() -> None:
     """The setup-pi stage's recorded extension env — its resolved values
-    from a non-empty PI_EXTENSION_ENV provider, each recorded as a state
+    from a non-empty EXTENSION_ENV provider, each recorded as a state
     file in the run's state dir (one value a file, beside the trigger's
     recorded state; the per-job Read trigger state relay feeds the same
     files into the job's env, the in-process half of the documented

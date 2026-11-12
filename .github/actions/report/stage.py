@@ -64,6 +64,36 @@ try:
             # the child's git die on the missing key).
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith("GIT_CONFIG_")}
+            # the run's resolved extension env — the setup-pi stage
+            # records the provider's values in the run's state dir
+            # (one value a file, beside the trigger's recorded state);
+            # this state-file read is the artefact-channel half that
+            # keeps the relay whole on a runner build whose GITHUB_ENV
+            # write ghosts: applied to the git child's environment with
+            # the provider's leave-untouched rule (a value already
+            # present wins over the run's provided one), so the stage's
+            # git work runs with the provider's variables in the git
+            # process env. A run without the provider recorded no file:
+            # the child's environment is exactly as before.
+            d = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw",
+                             "state", "trigger")
+            try:
+                fns = os.listdir(d)
+            except OSError:
+                fns = []
+            for fn in sorted(fns):
+                if not (fn.startswith("extension-env-")
+                        and fn.endswith(".txt")):
+                    continue
+                k = fn[len("extension-env-"):-len(".txt")]
+                try:
+                    v = open(os.path.join(d, fn),
+                             encoding="utf-8").read()
+                except OSError:
+                    continue
+                v = v.strip()
+                if v and not env.get(k):
+                    env[k] = v
             entries = [("safe.directory", os.path.expanduser("~")),
                        ("safe.directory", os.getcwd())]
             ws = os.environ.get("GITHUB_WORKSPACE")
@@ -96,6 +126,7 @@ try:
         log = common.log
         gh_api = common.gh_api
         push_branch = common.push_branch
+        apply_extension_env = common.apply_extension_env
     except ImportError:
         def state_dir():
             d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
@@ -122,6 +153,33 @@ try:
                       f"https://x-access-token:{token}@github.com/{os.environ['GITHUB_REPOSITORY']}", branch],
                      cwd=os.environ["GITHUB_WORKSPACE"], check=True,
                      env={k: v for k, v in os.environ.items() if k != "GH_TOKEN"})
+        def apply_extension_env():
+            # local fallback — the run's resolved extension env applied
+            # to this stage's process environment at entry (the
+            # artefact-channel half of the relay that keeps the
+            # every-step contract whole on a runner build whose
+            # GITHUB_ENV write ghosts): every CLI the stage then spawns
+            # inherits the provider's values
+            d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw",
+                             "state", "trigger")
+            try:
+                fns = os.listdir(d)
+            except OSError:
+                fns = []
+            for fn in sorted(fns):
+                if not (fn.startswith("extension-env-")
+                        and fn.endswith(".txt")):
+                    continue
+                k = fn[len("extension-env-"):-len(".txt")]
+                try:
+                    v = open(os.path.join(d, fn),
+                             encoding="utf-8").read()
+                except OSError:
+                    continue
+                v = v.strip()
+                if v and not os.environ.get(k):
+                    os.environ[k] = v
+    apply_extension_env()
 
     # a crashed stage must leave a persistent diagnosis (the job log dies
     # with the run; a ghost run's logs are unreachable from the API) —

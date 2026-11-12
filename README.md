@@ -41,11 +41,14 @@ this repo's reusable workflow takes over:
    extension's environment variables — resolving each element's provider
    (a non-empty GitHub secret wins over the named repo file) into the agent
    directory the run's pi invocations resolve (`~/.pi/agent/`, or
-   `PI_CODING_AGENT_DIR`). A non-empty `PI_EXTENSION_ENV` is, in
+   `PI_CODING_AGENT_DIR`). A non-empty `EXTENSION_ENV` is, in
    addition to that materialisation, set as environment variables in the
-   environment of every pi invocation of the run — the stage records the
-   values into the run's state dir and relays them to every later stage
-   job like the other trigger-state keys. No pre-installed or
+   environment of every pi invocation of the run — every stage job
+   applies the recorded values to its process environment at the stage's
+   entry, so every CLI the stage spawns (its pi invocations, its git
+   children) carries them — and the stage records the values into the
+   run's state dir and relays them to every later stage job like the
+   other trigger-state keys. No pre-installed or
    pre-configured pi is a pre-requisite of the runner environment — the
    stage installs and configures pi itself, and fails explicitly where it
    cannot; the only adjustable LLM setting is which configured model the
@@ -220,11 +223,12 @@ jobs:
       # the run's pi harness providers — optional: an unset secret arrives
       # empty and stage 2 treats it as an absent provider (the repo's
       # .pi/agent/models.json, .pi/settings.json and .pi/mcp.json are the
-      # fallbacks); never a plain input
+      # fallbacks — the extension's env is secret-only: it has no repo-file
+      # fallback, and it is the one provider a correct run must set); never a plain input
       PI_MODELS: ${{ secrets.PI_MODELS }}
       PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
       PI_MCP: ${{ secrets.PI_MCP }}
-      PI_EXTENSION_ENV: ${{ secrets.PI_EXTENSION_ENV }}
+      EXTENSION_ENV: ${{ secrets.EXTENSION_ENV }}  # .env style — must set GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL: the run's commit identity (the factory writes no identity of its own — without them the run won't work)
 ```
 
 **Why the consumer pins once.** GitHub fetches only the called
@@ -318,7 +322,17 @@ one), a non-empty secret winning over the named repo file:
 | the model configuration — the run's LLM backend is defined in it | `PI_MODELS` | `.pi/agent/models.json` |
 | the additional-packages settings | `PI_SETTINGS` | `.pi/settings.json` |
 | the MCP configuration | `PI_MCP` | `.pi/mcp.json` |
-| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir and relayed to every later stage job like the other trigger-state keys) | `PI_EXTENSION_ENV` | — (the secret is the provider) |
+| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys, and applied at every stage job's entry) | `EXTENSION_ENV` | — (the secret is the provider) |
+
+The extension's environment is the run's commit-identity provider, and
+the only one: the factory writes no git identity of its own, so the
+secret must set **both `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL`** — git's
+environment-over-configuration precedence makes them the author of every
+commit the run makes. Without them it won't work: a runner whose own git
+configuration carries no identity fails the run's commit with git's
+explicit "please tell me who you are" error, and a runner that carries
+one sends the run's commits out under that runner's account instead of
+yours.
 
 An empty or absent settings provider leaves pi without additional
 packages, and an absent MCP provider means the run's pi runs without MCP
@@ -395,7 +409,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published; and (`--verify-structure`, the flow's second pre-tag step): the committed file's job/step graph parses to the pinned shape under every standard engine, no step declares keys after its run block, no run block past the giant-body budget, no run block's heredoc terminator indented past the block's base, no `python3` code-heredoc body indented past the block's base, and no block opens a heredoc it never terminates — a file the gate's shape checks fail is never published
 pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 172 scenarios)
+requirements/          the Gherkin oracle for THIS repo (16 files, 174 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -403,7 +417,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **172 Gherkin scenarios** — the oracle this
+`requirements/` holds **174 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and
