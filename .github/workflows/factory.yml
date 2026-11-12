@@ -965,6 +965,23 @@ jobs:
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+              done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
@@ -1157,6 +1174,23 @@ jobs:
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+              done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
@@ -1327,6 +1361,23 @@ jobs:
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+              done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
@@ -1496,6 +1547,23 @@ jobs:
               for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -1796,6 +1864,23 @@ jobs:
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+              done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
@@ -2079,6 +2164,23 @@ jobs:
               for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -2531,6 +2633,23 @@ jobs:
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+              done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "ISSUE_NUMBER=$V_ISSUE" >> "$GITHUB_ENV"
@@ -2773,6 +2892,23 @@ jobs:
               for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
+              done
+              # the run's resolved extension env — the setup-pi stage
+              # records the resolved values of the extension's environment
+              # provider in the state dir beside the trigger's recorded
+              # state (one value a file, riding the cumulative artefact
+              # chain to every later stage job): relay each value into the
+              # job's env under its own name — every later step of the job
+              # (the stage's process and the pi and git invocations it
+              # spawns) inherits it. The provider's leave-untouched rule
+              # applies: a value already present in the job's env wins
+              # over the run's provided one. A run without the provider
+              # records no file and relays nothing — its env is unchanged.
+              for f in "$T"/pi-extension-env-*.txt; do
+                [ -e "$f" ] || continue
+                k=$(basename "$f" .txt | sed 's/^pi-extension-env-//')
+                v=$(cat "$f")
+                [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"

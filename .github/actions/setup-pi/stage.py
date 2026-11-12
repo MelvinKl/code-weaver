@@ -32,7 +32,18 @@ environment: it provides the harness for the run.
         extensions/   ← the extension's environment (the .env-style
                         PI_EXTENSION_ENV secret) materialised as a user-level
                         extension that sets the provided variables, so the
-                        run's pi invocations run the extension with them
+                        run's pi invocations run the extension with them —
+                        and set effective: the resolved values are recorded
+                        into the run's state dir as state files (one value a
+                        file, beside the trigger's recorded state), ride the
+                        cumulative artefact chain to every later stage job,
+                        whose per-job Read trigger state relay relays them
+                        into the job's env like the other trigger-state keys,
+                        and are applied to this stage's own process
+                        environment — so every pi invocation of the run runs
+                        with the values in its process environment; a run
+                        without the provider sets no variables (the element
+                        is cleared, the run is unchanged)
       The runner's pre-existing user-level configuration is replaced for the
       run, never read as the run's: an element without a provider is cleared
       from the agent directory, not inherited.
@@ -143,6 +154,28 @@ def resolve_extension_env() -> str | None:
     return "\n".join(kept)
 
 
+def extension_env_values(env_text: str) -> list[tuple[str, str]]:
+    """The resolved extension env's variables as (name, value) pairs —
+    the .env-style provider's parse: blank lines and # comments carry no
+    variables, a line is a variable at its first `=`, a value's wrapping
+    quotes are stripped, and a name that does not match the
+    environment-variable shape is skipped (never fatal). The generated
+    extension source and the state-file record both parse through this one
+    function, so the materialised extension and the environment the run's
+    processes resolve carry exactly the same variables."""
+    out = []
+    for line in env_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name, value = name.strip(), value.strip().strip('"').strip("'")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            continue  # a malformed line is skipped, never fatal
+        out.append((name, value))
+    return out
+
+
 def _extension_source(env_text: str) -> str:
     """The generated user-level extension's source — the extension's
     environment file written into the agent directory for the run
@@ -156,16 +189,7 @@ def _extension_source(env_text: str) -> str:
     object of the provided variables, applied with the same leave-untouched
     rule (a value already present in the environment wins over the run's
     provided one)."""
-    entries = []
-    for line in env_text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        name, value = name.strip(), value.strip().strip('"').strip("'")
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-            continue  # a malformed line is skipped, never fatal
-        entries.append((name, value))
+    entries = extension_env_values(env_text)
     body = "".join(f"  {json.dumps(n)}: {json.dumps(v)},\n"
                    for n, v in entries)
     return (
@@ -236,6 +260,42 @@ def materialize_harness(models, settings, mcp, extension_env,
     else:
         clear(os.path.join("extensions", "cw-harness-env.ts"), "extension-env")
     return written
+
+
+def record_extension_env(extension_env: str | None) -> list[tuple[str, str]]:
+    """(b) the effective half of the extension-env element — set the
+    resolved values in the environment of the run's pi invocations.
+
+    In addition to the materialised user-level extension, the resolved
+    values ride the run's state relay: every value is recorded into the
+    run's state dir as a state file (one value a file, beside the
+    trigger's recorded state), the cumulative artefact chain carries the
+    files to every later stage job, and the per-job Read trigger state
+    relay relays each value into the job's env like the other
+    trigger-state keys — the `CW_*`/state-file relay, the documented
+    containment for the runner's GITHUB_ENV ghost-binding risk. The values
+    are also applied to this stage's own process environment (the stage's
+    own pi invocations run with them), with the provider's leave-untouched
+    rule: a value already present in the environment wins over the run's
+    provided one — the rule the materialised extension applies at pi's
+    load. A run without the provider records no file and sets no variable:
+    the element is cleared from the agent directory and the run's
+    environment is unchanged."""
+    if extension_env is None:
+        return []
+    pairs = [(name, value)
+             for name, value in extension_env_values(extension_env) if value]
+    if not pairs:
+        return []
+    d = os.path.join(common.state_dir(), "state", "trigger")
+    os.makedirs(d, exist_ok=True)
+    for name, value in pairs:
+        with open(os.path.join(d, f"pi-extension-env-{name}.txt"), "w",
+                  encoding="utf-8") as f:
+            f.write(value + "\n")
+        if not os.environ.get(name):
+            os.environ[name] = value
+    return pairs
 
 
 def backend_from_config(raw: str) -> str | None:
@@ -468,6 +528,28 @@ def main() -> None:
              f"{agent} could not be written: {e}")
     for el in ("models", "settings", "mcp", "extension-env"):
         common.log(f"setup-pi: harness {el}: {written.get(el)}")
+
+    # (b, the effective half) the resolved extension env's values, set in
+    # the environment of the run's pi invocations: recorded as state files
+    # in the run's state dir (every later stage job's Read trigger state
+    # relay carries them into the job's env) and applied to this stage's
+    # process environment (the stage's own pi invocations run with them).
+    # A run without the provider sets no variables — the run is unchanged.
+    if extension_env is not None:
+        try:
+            recorded = record_extension_env(extension_env)
+        except OSError as e:
+            fail(f"pi installation or configuration failed — the extension "
+                 f"env's state files could not be written to the run's "
+                 f"state dir {common.state_dir()}: {e}")
+        if recorded:
+            common.log(
+                f"setup-pi: the resolved extension env's {len(recorded)} "
+                "value(s) are set in the environment of the run's pi "
+                "invocations — recorded into the run's state dir as state "
+                "files (one value a file; every later stage job's Read "
+                "trigger state relay carries them into the job's env) and "
+                "applied to this stage's process environment")
 
     # (c) the checks, re-pointed at what the stage installed and wrote
     backend = check_run_configuration(models, model, agent, installed)

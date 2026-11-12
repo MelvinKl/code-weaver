@@ -387,6 +387,65 @@ def ensure_pi_on_path() -> None:
         + os.environ.get("PATH", "")
 
 
+def recorded_extension_env() -> list[tuple[str, str]]:
+    """The setup-pi stage's recorded extension env, read from the run's
+    state dir — one value a file (`pi-extension-env-<name>.txt`, beside
+    the trigger's recorded state; the files ride the cumulative
+    artefact chain to every later stage job). The single read both
+    apply halves share: apply_extension_env applies the values to the
+    process environment (every pi invocation of the run carries them in
+    its process environment — the artefact-channel half of the per-job
+    Read trigger state relay, the link that resolves on a runner build
+    whose GITHUB_ENV write ghosts), and git_exec applies the same values
+    to the git child's environment (the run's git operations ride them —
+    where the provider carries GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL, git's
+    environment-over-configuration precedence makes the provider's
+    account the commit's author). A run without the provider recorded no
+    file — the list is empty and neither half sets anything."""
+    root = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw",
+                        "state", "trigger")
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    out = []
+    for fname in sorted(names):
+        if not (fname.startswith("pi-extension-env-")
+                and fname.endswith(".txt")):
+            continue
+        name = fname[len("pi-extension-env-"):-len(".txt")]
+        try:
+            with open(os.path.join(root, fname), encoding="utf-8") as f:
+                value = f.read().strip()
+        except OSError:
+            continue
+        if value:
+            out.append((name, value))
+    return out
+
+
+def apply_extension_env() -> None:
+    """The setup-pi stage's recorded extension env — its resolved values
+    from a non-empty PI_EXTENSION_ENV provider, each recorded as a state
+    file in the run's state dir (one value a file, beside the trigger's
+    recorded state; the per-job Read trigger state relay feeds the same
+    files into the job's env, the in-process half of the documented
+    `CW_*`/state-file relay). This call applies the recorded values to the
+    process environment, read through recorded_extension_env — the single
+    state-file read both apply halves share (git_exec applies the same
+    values to the git child's environment) — the artefact-channel half
+    of that relay, and the link it resolves through on a runner build
+    whose GITHUB_ENV write ghosts: every pi invocation of the run rides
+    this, so every one of them carries the values in its process
+    environment. The provider's leave-untouched rule applies: a value
+    already present in the environment wins over the run's provided one.
+    A run without the provider recorded no file — this call sets no
+    variable and the environment is unchanged."""
+    for name, value in recorded_extension_env():
+        if value and not os.environ.get(name):
+            os.environ[name] = value
+
+
 def pi_invoke(
     model: str,
     system_prompt_file: str,
@@ -474,6 +533,7 @@ def pi_invoke(
     if timeout is None:
         timeout = resolve_pi_timeout()
     ensure_pi_on_path()
+    apply_extension_env()
     with open(system_prompt_file, encoding="utf-8") as f:
         instructions = f.read()
     # --print keeps the one-shot contract the oracle pins ("a stage
@@ -989,6 +1049,24 @@ def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     the caller already composed (the push's empty-cookie entry keeps
     its index), so the child's configuration is complete and
     count-consistent whatever the user-global configuration holds.
+
+    The child's environment also carries the run's resolved extension
+    env — the values the setup-pi stage recorded in the run's state dir
+    (one value a file, beside the trigger's recorded state; the per-job
+    Read trigger state relay's GITHUB_ENV half feeds the job's env, this
+    state-file read is the artefact-channel half that keeps the relay
+    whole on a runner build whose GITHUB_ENV write ghosts), applied to
+    the child's environment under their own names with the provider's
+    leave-untouched rule (a value already present in the environment
+    wins over the run's provided one). Where the provider carries
+    GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL, git's
+    environment-over-configuration precedence makes the provider's
+    account the commit's author — the run's commits are attributed to
+    the account the provider names, not to the identity the run's git
+    configuration would otherwise yield; where the provider is
+    empty/absent no values are applied and the child's environment is
+    exactly as before — the sanitised push idiom's GIT_CONFIG hygiene
+    identity stands as the fallback the provider's variables override.
     """
     env = dict(kwargs.pop("env", None) or os.environ)
     try:
@@ -999,6 +1077,17 @@ def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
               if k.startswith("GIT_CONFIG_KEY_") or k.startswith("GIT_CONFIG_VALUE_")]:
         if k.rsplit("_", 1)[-1].isdigit() and int(k.rsplit("_", 1)[-1]) >= n:
             del env[k]  # a dangling caller/runner entry beyond the count
+    # the run's resolved extension env applied to the git child's
+    # environment — the git half of the same relay, on the same
+    # recorded values (the provider's variables are not GIT_CONFIG_*
+    # entries, so they keep the managed entries' indices clear): where
+    # the provider carries GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL, git's
+    # environment-over-configuration precedence makes the provider's
+    # account the commit's author; a run without the provider recorded
+    # no file and the child's environment is exactly as before
+    for name, value in recorded_extension_env():
+        if value and not env.get(name):
+            env[name] = value
     entries = [
         ("safe.directory", os.path.expanduser("~")),
         ("safe.directory", os.getcwd()),

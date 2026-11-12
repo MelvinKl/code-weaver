@@ -146,6 +146,42 @@ try:
             # the child's git die on the missing key).
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith("GIT_CONFIG_")}
+            # the run's resolved extension env — the setup-pi stage
+            # records the provider's values in the run's state dir
+            # (one value a file, beside the trigger's recorded state).
+            # The per-job Read trigger state relay's GITHUB_ENV half
+            # feeds the job's env; this state-file read is the
+            # artefact-channel half that keeps the relay whole on a
+            # runner build whose GITHUB_ENV write ghosts: applied to
+            # the git child's environment with the provider's
+            # leave-untouched rule (a value already present wins over
+            # the run's provided one), so the branch cut and the
+            # factory's commit identity it configures run with the
+            # provider's variables in the git process env — where it
+            # carries GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL, git's
+            # environment-over-configuration precedence makes the
+            # provider's account the commit's author. A run without the
+            # provider recorded no file: the child's environment is
+            # exactly as before.
+            d = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw",
+                             "state", "trigger")
+            try:
+                fns = os.listdir(d)
+            except OSError:
+                fns = []
+            for fn in sorted(fns):
+                if not (fn.startswith("pi-extension-env-")
+                        and fn.endswith(".txt")):
+                    continue
+                k = fn[len("pi-extension-env-"):-len(".txt")]
+                try:
+                    v = open(os.path.join(d, fn),
+                             encoding="utf-8").read()
+                except OSError:
+                    continue
+                v = v.strip()
+                if v and not env.get(k):
+                    env[k] = v
             entries = [("safe.directory", os.path.expanduser("~")),
                        ("safe.directory", os.getcwd())]
             ws = os.environ.get("GITHUB_WORKSPACE")

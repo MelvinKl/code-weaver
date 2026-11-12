@@ -21,7 +21,14 @@ implement stage's) and run it against a sandbox:
   usable configuration");
 - the harness write targets the agent directory with `PI_CODING_AGENT_DIR`
   honoured (setup-pi "The run's harness is written into the agent
-  subdirectory the invocation resolves").
+  subdirectory the invocation resolves") — the expected outcome for the
+  extension-env element carries the effective half: the resolved values
+  are set as environment variables in the environment of the run's pi
+  invocations (recorded as state files in the run's state dir that ride
+  the cumulative artefact chain to the later stage jobs, whose Read
+  trigger state relay carries them into each job's env; applied to the
+  stage's process environment) — a run without the provider sets no
+  variables and is unchanged.
 
 Plain-stdlib by design (no third-party imports): no-argument `test_`
 functions are auto-discovered by both runners (`tests/run.py` imports every
@@ -71,7 +78,11 @@ class _sandbox:
             "INPUT_PI_SETTINGS", "CW_PI_SETTINGS",
             "INPUT_PI_MCP", "CW_PI_MCP",
             "INPUT_PI_EXTENSION_ENV", "CW_PI_EXTENSION_ENV",
-            "INPUT_LLM_MODEL", "CW_LLM_MODEL")
+            "INPUT_LLM_MODEL", "CW_LLM_MODEL",
+            # the extension-env values the stage applies to its process
+            # environment — a host environment carrying its own must not
+            # leak into a case
+            "PI_JEV_THINKING", "PI_JEV_BASE_URL")
 
     def __init__(self):
         self.home = tempfile.mkdtemp(prefix="cw-setup-home-")
@@ -267,7 +278,17 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
     `settings.json`, `mcp.json`, and the extension's environment file
     (the .env-style provider materialised as a user-level extension that
     sets the provided variables, so the run's pi invocations run the
-    extension with them). The runner user's own agent directory stays
+    extension with them). The expected outcome for the extension-env
+    element carries the effective half beside that: the resolved values
+    are set as environment variables in the environment of the run's pi
+    invocations — recorded as state files in the run's state dir (one
+    value a file, beside the trigger's recorded state; the files ride the
+    cumulative artefact chain to every later stage job, whose Read
+    trigger state relay carries them into the job's env like the other
+    trigger-state keys) and applied to the stage's process environment —
+    and an absent provider records no file and sets no variable, the run
+    unchanged. Every standing step of the scenario keeps holding beside
+    the grown one, and the runner user's own agent directory stays
     untouched."""
     mod = _load_stage()
     with _sandbox() as sb:
@@ -311,6 +332,35 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
         assert '"PI_JEV_BASE_URL": "http://laya.example/"' in ext_src, ext_src
         assert "process.env" in ext_src, \
             "the generated extension must set the variables in the environment"
+        # the effective half of the extension-env element (the grown
+        # outcome): the resolved values are set as environment variables
+        # in the environment of the run's pi invocations — recorded as
+        # state files in the run's state dir (one value a file, beside the
+        # trigger's recorded state; the files ride the cumulative artefact
+        # chain to every later stage job, whose Read trigger state relay
+        # carries them into the job's env like the other trigger-state
+        # keys), and applied to the stage's process environment for its
+        # own pi invocations
+        recorded = mod.record_extension_env(ext)
+        assert recorded == [("PI_JEV_THINKING", "1"),
+                            ("PI_JEV_BASE_URL", "http://laya.example/")], \
+            f"the comment line carries no variable; {recorded!r}"
+        for name, value in recorded:
+            sf = os.path.join(sb.rt, "cw", "state", "trigger",
+                              f"pi-extension-env-{name}.txt")
+            assert os.path.isfile(sf), \
+                ("each resolved value is recorded as a state file in the "
+                 "run's state dir (the later stage jobs' Read trigger "
+                 f"state relay reads it): {sf!r}")
+            assert open(sf).read() == value + "\n", \
+                f"the state file carries the value: {sf!r}"
+            assert os.environ.get(name) == value, \
+                ("the value is set in the stage's process environment "
+                 "(the run's pi invocations resolve it there)")
+        # the clear-if-absent half: an absent extension-env provider
+        # records no file and sets no variable — the run is unchanged
+        assert mod.record_extension_env(None) == [], \
+            "an absent provider records no file and sets no variable"
         # the runner user's own agent directory is not the run's configuration
         assert not os.path.exists(
             os.path.join(sb.home, ".pi", "agent", "models.json")), \

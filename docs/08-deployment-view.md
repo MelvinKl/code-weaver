@@ -124,15 +124,31 @@ invocation resolves:
 | the model configuration — the run's LLM backend (e.g. the keyless internal swap) is defined in it, and the `llm-model` input selects from its model set | `PI_MODELS` | `.pi/agent/models.json` |
 | the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` | `.pi/settings.json` |
 | the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` | `.pi/mcp.json` |
-| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries | `PI_EXTENSION_ENV` | — (the secret is the provider) |
+| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir and relayed to every later stage job like the other trigger-state keys — the `CW_*`/state-file relay) | `PI_EXTENSION_ENV` | — (the secret is the provider) |
 
 The stage writes each resolved element into the agent directory the run's
 pi invocations resolve (`~/.pi/agent/`, honouring `PI_CODING_AGENT_DIR`):
 `models.json`, `settings.json`, `mcp.json`, and the extension's
 environment materialised as a user-level extension in the agent
-directory's `extensions/`. The repo's `.pi/` files are the repo-file half
-of the providers — a target that commits them steers the run's harness
-without any secret. The checks the stage then runs read only what it
+directory's `extensions/`. A non-empty `PI_EXTENSION_ENV` is, in
+addition to that materialisation, set as environment variables in the
+environment of every pi invocation of the run: the stage records each
+resolved value into the run's state dir as a state file (every value a
+file, beside the trigger's recorded state), the cumulative artefact
+chain carries the values to every later stage job, and the per-job Read
+trigger state relay feeds them into the job's environment like the other
+trigger-state keys (the `CW_*`/state-file relay — the documented
+containment for the runner's GITHUB_ENV ghost-binding risk); a run
+without the provider sets no variable and is unchanged. The consequence
+for the run's git operations: where the provider carries
+`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`, the run's commits run with the
+provider's variables in the git process environment — git's
+environment-over-configuration precedence makes the provider's account
+the commit's author — with the sanitised push idiom's GIT_CONFIG
+hygiene (chapter 7) standing as the fallback the provider's variables
+override. The repo's `.pi/` files are the repo-file half of the
+providers — a target that commits them steers the run's harness without
+any secret. The checks the stage then runs read only what it
 wrote: a provided model configuration that carries no OpenAI-compatible
 backend URL is not a usable configuration (the stage fails "no backend in
 the provided configuration" — it never falls back to the runner's

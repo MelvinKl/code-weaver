@@ -5959,6 +5959,175 @@ def test_tests_never_invoke_the_real_git_binary():
                and node.name.startswith("test_")), \
         "no test cites the scenario in the machine form"
 
+def test_run_git_operations_honour_the_provider_identity():
+    """(setup-pi "The run's commits carry the author identity the
+    extension's environment provides" — new; reference
+    `requirements/setup-pi.feature::The run's commits carry the author
+    identity the extension's environment provides`) the scenario the
+    previous run of this issue carried in its plan's carried section
+    (reported, not rewritten — a bug-labelled run's delta is empty and
+    the requirements are read-only) has landed in the oracle: in the
+    setup-pi topic file the setup stage's provider domain owns, not the
+    configuration topic file the carried section guessed. The citation
+    above is the convention's join — a test that implements a Gherkin
+    scenario cites it in its docstring, so the review can extract the
+    reference from the run's changed tests and judge the landed scenario
+    against the suite — and the assertions below implement the
+    scenario's two Then halves as it now reads.
+
+    What the test pins — the shared plumbing's git half of the
+    extension-env provider's effective environment: the run's git
+    operations run with the run's resolved extension env in the git
+    process env. The values the setup-pi stage recorded into the run's
+    state dir (one value a state file, beside the trigger's recorded
+    state — the per-job Read trigger state relay's GITHUB_ENV half
+    feeds the job's env; the state-file read is the artefact-channel
+    half that keeps the relay whole on a runner build whose GITHUB_ENV
+    write ghosts) are applied by the factory's single git entry point
+    to the environment of every git child it spawns, with the
+    provider's leave-untouched rule (a value already present in the
+    environment wins over the run's provided one). Both halves: a
+    provider carrying GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL — the
+    issue's own values — → the run's commits on the AI branch carry
+    the provided name and email as their author identity (git's
+    environment-over-configuration precedence makes the provider's
+    account the commit's author; the issue's wrong-GitHub-Account
+    symptom is resolved), the sanitised push idiom's GIT_CONFIG
+    hygiene standing composed beside the provider's variables as the
+    fallback they override; an empty/absent provider → no values are
+    set and the run's commit identity is exactly as before (the
+    GIT_CONFIG hygiene's default), the documented a-target-that-leaves-
+    it-undeclared-runs-unchanged invariant holding.
+
+    The production entry point runs its real logic to the subprocess
+    boundary with a recording stand-in for subprocess.run — no process
+    is ever spawned, and no test in the suite invokes the real git
+    binary (the mock keeps the whole suite off it).
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_common_gitenv",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    # registered under its own name before exec: the module's dataclass
+    # resolves its field types through sys.modules at class-creation
+    sys.modules["cw_common_gitenv"] = mod
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-gitenv-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-gitenv-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # the issue's own values — the account the provider names, which
+    # the run's commits must carry as their author identity
+    provider = {"GIT_AUTHOR_NAME": "Melvin Klein",
+                "GIT_AUTHOR_EMAIL": "70433111+MelvinKl@users.noreply."
+                                    "github.com"}
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = ws
+    calls = []
+    orig_run = subprocess.run
+
+    def recording_run(args, **kw):
+        calls.append((list(args), dict(kw)))
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+
+    try:
+        # subprocess.run stands in at the boundary the entry point
+        # hands the child to: the real env composition runs, no
+        # process is spawned
+        subprocess.run = recording_run
+        # ── half one: the provider carries the identity. The resolved
+        # extension env's values are recorded in the run's state dir
+        # (the job's env is clean of them in this sandbox — the state
+        # files are their only source: the artefact-channel half of the
+        # relay). They must sit in the git process env — git's
+        # environment-over-configuration precedence makes the
+        # provider's account the commit's author
+        for name, value in provider.items():
+            with open(os.path.join(trig,
+                                   f"pi-extension-env-{name}.txt"),
+                      "w", encoding="utf-8") as f:
+                f.write(value + "\n")
+        mod.git_exec(["commit", "-q", "-m", "the stage's work"],
+                     cwd=ws, check=True)
+        assert calls, "the git call must reach the subprocess boundary"
+        args, kw = calls[-1]
+        assert args and args[0] == "git" and args[1] == "commit", args
+        env = kw.get("env")
+        assert env is not None, \
+            "the entry point must hand the child a composed environment"
+        for name, value in provider.items():
+            assert env.get(name) == value, \
+                (f"the provider's {name} must sit in the git process "
+                 f"environment (environment-over-configuration "
+                 f"precedence makes it the commit's author): "
+                 f"got {env.get(name)!r}")
+        # the sanitised push idiom's GIT_CONFIG hygiene stays composed
+        # beside the provider's variables — the managed safe.directory
+        # entries are present, the fallback the provider's variables
+        # override stands intact
+        assert env.get("GIT_CONFIG_COUNT"), \
+            "the managed GIT_CONFIG hygiene entries must stay composed"
+        keys = [env.get("GIT_CONFIG_KEY_%d" % i)
+                for i in range(int(env["GIT_CONFIG_COUNT"]))]
+        assert keys.count("safe.directory") >= 2, \
+            f"the managed safe.directory hygiene entries: {keys!r}"
+        # the provider's leave-untouched rule: a value already present
+        # in the environment wins over the run's provided one (per
+        # variable — the name was present, the email was not, and the
+        # recorded email still fills its absence)
+        os.environ["GIT_AUTHOR_NAME"] = "an already-present value"
+        calls.clear()
+        mod.git_exec(["commit", "-q", "-m", "the stage's work"],
+                     cwd=ws, check=True)
+        env = calls[-1][1].get("env")
+        assert env.get("GIT_AUTHOR_NAME") == "an already-present value", \
+            "a value already present in the environment wins over the " \
+            f"run's provided one: {env.get('GIT_AUTHOR_NAME')!r}"
+        assert env.get("GIT_AUTHOR_EMAIL") == provider["GIT_AUTHOR_EMAIL"], \
+            "the recorded value fills a variable the environment lacks"
+        os.environ.pop("GIT_AUTHOR_NAME", None)
+        # ── half two: the provider is empty/absent — the setup-pi
+        # stage recorded no file. The trigger's state dir still carries
+        # its other recorded keys (relayed like the other trigger-state
+        # keys); none of them is an extension-env value. No values are
+        # set: the child's environment is exactly as before, the
+        # GIT_CONFIG hygiene's default identity the run's commits run
+        # under, and the run is unchanged
+        for name in provider:
+            os.remove(os.path.join(trig, f"pi-extension-env-{name}.txt"))
+        with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+            f.write("132\n")
+        calls.clear()
+        mod.git_exec(["commit", "-q", "-m", "the stage's work"],
+                     cwd=ws, check=True)
+        env = calls[-1][1].get("env")
+        assert "GIT_AUTHOR_NAME" not in env, \
+            ("an empty/absent provider sets no value — the run's "
+             f"commit identity is exactly as before: {sorted(env)!r}")
+        assert "GIT_AUTHOR_EMAIL" not in env, \
+            "an empty/absent provider sets no value for the email either"
+        assert env.get("GIT_CONFIG_COUNT"), \
+            "the GIT_CONFIG hygiene stays composed on the child's env"
+        keys = [env.get("GIT_CONFIG_KEY_%d" % i)
+                for i in range(int(env["GIT_CONFIG_COUNT"]))]
+        assert keys.count("safe.directory") >= 2, \
+            f"the managed safe.directory hygiene entries: {keys!r}"
+    finally:
+        sys.modules.pop("cw_common_gitenv", None)
+        subprocess.run = orig_run
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
 
 def test_pr_gate_reads_the_review_stage_completion():
     """(pr-and-gates "a pull request is opened against the target

@@ -109,6 +109,16 @@ Feature: The setup-pi stage installs and configures pi for the run
     When the setup stage configures pi for the run
     Then the provided variables are materialised as the extension's environment for the run
     And the run's pi invocations run the extension with those variables
+    And the provided variables are set as environment variables in the environment of every pi invocation of the run
+    And each value is recorded as a state file in the run's state dir beside the trigger's recorded state, rides the run's artefact chain to every later stage job, and is relayed into that job's environment like the other trigger-state keys
+    And a run without the provider sets no variable and is unchanged
+
+  @setup
+  Scenario: The run's commits carry the author identity the extension's environment provides
+    Given the run's provider for the extension's environment carries GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL
+    When the run commits its stage work on the AI branch
+    Then the commits carry the provided name and email as their author identity
+    And where the provider is empty or absent the run's commit identity is unchanged
 
   @setup @docs
   Scenario: The documented setup stage installs and configures pi for the run
