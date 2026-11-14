@@ -368,8 +368,9 @@ def test_trigger_records_the_bug_issue_flag():
     stage job (whose first step downloads the artifact back into its
     state dir), and the per-job env relay the Read trigger state step
     feeds from the restored files carries it in-process (the relay line
-    carries the run's trigger-state keys — the bug-issue flag and the
-    extract stage's no-delta stop flag). The trigger's
+    carries the run's trigger-state keys — the bug-issue flag, the
+    extract stage's no-delta stop flag and the resolved AUTO_UPDATE
+    setting). The trigger's
     gate stays untouched — the flag is recorded, never gated on: the
     trigger label (or a manual dispatch) starts a run, and an issue
     carrying only the bug label still starts no factory."""
@@ -418,7 +419,8 @@ def test_trigger_records_the_bug_issue_flag():
         ("the factory's nine stage jobs are not all found in the "
          f"workflow file: {len(starts)}")
     relay = ("for k in started issue-number issue-title base-ref "
-             "base-sha head title base bug-issue no-delta-stop; do")
+             "base-sha head title base bug-issue no-delta-stop "
+             "auto-update; do")
     relayed = 0
     for a, b in zip(starts, starts[1:] + [len(lines)]):
         name = lines[a].strip()[:-1]

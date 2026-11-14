@@ -64,13 +64,15 @@ or the standing empty-body stop), it records a stop flag in the run's
 state dir beside the trigger's recorded state (`no-delta-stop`) — the
 cumulative artefact chain carries it to every later stage job, whose
 Read trigger state step relays it into the job's env like the other
-trigger-state keys; the plan stage checks that flag before its own pi
-call — set, the stage stops cleanly without a pi call (no plan file;
-its own outcome line on the stage-summary channel the report renders as
-skipped, never as "stage complete") — the run that stopped at the
-extraction is not forwarded to the plan stage, and a bug-labelled run
-whose extraction merely skipped (the flag stays absent) proceeds to a
-plan built from the issue itself. The two
+trigger-state keys; the update stage (the plan job's inlined step — its
+step checks the same flag and no-ops) and the plan stage check it before
+their own work — set, the plan stage stops cleanly without a pi call (no
+plan file; its own outcome line on the stage-summary channel the report
+renders as skipped, never as "stage complete") — the run that stopped at
+the extraction is not forwarded to the update stage or the plan stage,
+and a bug-labelled run whose extraction merely skipped (the flag stays
+absent) proceeds to the update stage (when the AUTO_UPDATE setting runs
+it) and then to a plan built from the issue itself. The two
 consuming jobs (implement, review) additionally run the target's
 dependency-install step — the command the optional `dependency-install`
 input declares — after each of their checkouts of the AI branch and

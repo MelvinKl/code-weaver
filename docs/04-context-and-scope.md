@@ -103,9 +103,13 @@ it works with is the published version — the dogfood exercises what its
 external targets get.
 
 **In scope** — the 15-stage pipeline (chapter 5/6): trigger, setup-pi,
-baseline, requirement-extraction (+ requirement check), planning (+ plan
-check), implementation (+ implement check), test-and-review (+ fix
-loop), PR open, PR gates (+ gate-fix loop), final status report.
+baseline, requirement-extraction (+ requirement check), the optional
+update stage (an inlined step in the planning job — the AUTO_UPDATE
+setting gates it: `off` = the pipeline runs without the stage, the
+run's stages, pull request and final status report unchanged),
+planning (+ plan check), implementation (+ implement check),
+test-and-review (+ fix loop), PR open, PR gates (+ gate-fix loop), final
+status report.
 
 **Out of scope** — the optional "JS actions ship as an npm package"
 stretch (it is not on the Gherkin oracle's `main`; it becomes mandatory

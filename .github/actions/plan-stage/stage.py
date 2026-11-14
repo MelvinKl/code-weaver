@@ -34,8 +34,10 @@ empty-body stop): the extract stage records the run-level no-delta-stop
 flag in the run's state dir (beside the trigger's recorded state — it
 rides the cumulative artefact chain to every later stage job, the
 per-job env relay in-process, like the other trigger-state keys), and
-the plan stage checks that flag before its own work: the run is not
-forwarded to the plan stage — the stage stops cleanly without a pi call
+the update stage (the plan job's inlined step — it checks the same
+flag in its step and no-ops) and the plan stage check it before their
+own work: the run is not forwarded to the update stage or the plan
+stage — the plan stage stops cleanly without a pi call
 (no plan file, no prompt assembly — the bug branch's empty-body form,
 which would plan from the issue title alone, is never reached) and
 records its own outcome line on the stage-summary channel, which the
@@ -296,7 +298,8 @@ def run_plan_stage() -> None:
     # extraction stopped with no delta (a bug-labelled issue with an
     # empty body, or the standing empty-body stop), the extract stage
     # recorded the stop flag in the run's state dir, and the run is not
-    # forwarded to the plan stage: the stage checks the flag before
+    # forwarded to the update stage (its step checks the same flag and
+    # no-ops) or to the plan stage: the stage checks the flag before
     # build_target() and its generation loop, and stops cleanly on it —
     # no pi call, no plan file, and no prompt assembly (the bug branch's
     # empty-body form, which would plan from the issue title alone, is
@@ -308,13 +311,16 @@ def run_plan_stage() -> None:
     # proceeds to a plan built from the issue itself.
     if extract_stopped_no_delta():
         common.log("stage 6: the run's requirement extraction stopped "
-                   "with no delta — the run is not forwarded to the plan "
-                   "stage: no pi call is made for the stage, no plan file "
-                   "is written, the stage stops cleanly")
+                   "with no delta — the run is not forwarded to the "
+                   "update stage (its step checks the same flag and "
+                   "no-ops) or to the plan stage: no pi call is made "
+                   "for the stage, no plan file is written, the stage "
+                   "stops cleanly")
         common.record_stage_outcome(
             "stage 6 planning: skipped (the run's requirement extraction "
-            "stopped with no delta — the run is not forwarded to the plan "
-            "stage; no pi call, no plan file written)")
+            "stopped with no delta — the run is not forwarded to the "
+            "update stage or the plan stage; no pi call, no plan file "
+            "written)")
         common.record_stage_ran("cw-plan")
         return
     context = project_context()

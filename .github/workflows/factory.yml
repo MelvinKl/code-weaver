@@ -254,6 +254,11 @@ on:
         type: string
         required: false
         default: "on"
+      auto-update:
+        description: Whether the run's pipeline runs the update stage — the stage sits between the requirement-extraction and the planning stages (an inlined step in the `plan` job) and updates every requirement in the oracle to its newest version — a scenario that no longer holds against the project's current state is updated in place (the oracle is the single source of truth) — a requirement already at its newest version — including the ones this run's extraction just derived — is left untouched (the update's footprint never disturbs the run's delta the plan stage covers), and a Gherkin requirement that prohibits a requirement from being updated leaves that requirement at its current version; "off" = the pipeline runs without the stage (the run's stages, pull request and final status report are unchanged by the stage's absence)
+        type: string
+        required: false
+        default: "true"
       factory-ref:
         # legacy no-op, kept declared: a with: block written for an
         # older version of this file passes this input, and the run must
@@ -542,6 +547,7 @@ jobs:
                 .github/actions/report/stage.py \
                 .github/actions/guard-check/guard-check.py \
                 pi-prompts/requirements.md \
+                pi-prompts/update.md \
                 pi-prompts/plan.md \
                 pi-prompts/implement.md \
                 pi-prompts/review.md \
@@ -691,6 +697,11 @@ jobs:
                 else
                   echo "- dependency-upgrade: \`${{ inputs.dependency-upgrade }}\` (on by default) — the run's pipeline runs the dependency-upgrade stage before the implementation stage"
                 fi
+                if [ "${{ inputs.auto-update }}" = "off" ]; then
+                  echo "- auto-update: \`off\` — the run's pipeline runs without the update stage (the run's stages, pull request and final status report are unchanged by the stage's absence)"
+                else
+                  echo "- auto-update: \`${{ inputs.auto-update }}\` (true by default) — the run's pipeline runs the update stage between the requirement-extraction and the planning stages"
+                fi
               } | tee -a "$RUNNER_TEMP/cw/resolved-config.txt"
               echo "stage 1 trigger: issue #$ISSUE accepted (event ${{ github.event_name }}, label gate passed)" \
                 | tee -a "$RUNNER_TEMP/cw/stage-summary.txt"
@@ -725,6 +736,17 @@ jobs:
               fi
               echo "$BUG_ISSUE" > "$RUNNER_TEMP/cw/state/trigger/bug-issue.txt"
               echo "trigger state: bug-issue=$BUG_ISSUE (the issue's labels against the resolved bug label '$BUG_LABEL') — recorded, never gated on"
+              # the resolved AUTO_UPDATE setting — one value a file beside
+              # the trigger's recorded run state (the files ride the
+              # trigger's artefact to every later stage job, whose Read
+              # trigger state step relays them into the job's env like the
+              # other trigger-state keys): the value the target declared
+              # for the auto-update input, its "true" default where a
+              # consumer leaves the input undeclared — the plan job's
+              # update step gates on it, and the trigger's
+              # resolved-configuration record names it in both branches
+              echo "${{ inputs.auto-update }}" > "$RUNNER_TEMP/cw/state/trigger/auto-update.txt"
+              echo "trigger state: auto-update=${{ inputs.auto-update }} — the resolved AUTO_UPDATE setting (the run's pipeline runs the update stage unless the target turned the setting off)"
               # the trigger's completion marker — the report stage cross-checks
               # the markers (the state dir rides the artefact chain) to tell
               # "a stage ran" from "a stage never ran" (a job the runner's parser
@@ -969,7 +991,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1178,7 +1200,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1365,7 +1387,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1439,6 +1461,78 @@ jobs:
         with:
           name: cw-extract
           path: ${{ runner.temp }}/cw
+      - name: Update the requirements to the newest version (the update stage — the AUTO_UPDATE setting)
+        # The update stage (issue 145): it sits in the pipeline after the
+        # requirement-extraction stage and before the planning stage — as
+        # an inlined step in this job (the documented dependency-upgrade
+        # idiom: inlined workflow text, not a new component — no new job
+        # is added, the 15-stage / 9-job pipeline count and the five
+        # pi-calling stage jobs stay, and the self-contained shape is
+        # preserved). The step's pi call runs under this job's documented
+        # job-timeout, like the plan stage's.
+        # Placement: after this job's checkout of the AI branch and before
+        # the plan stage step and its stage-baseline recording, so the
+        # update's footprint is never counted as the plan stage's work by
+        # the guard (the plan stage's baseline recording re-records the
+        # branch tip after this step, over the update's).
+        # The gate: the AUTO_UPDATE setting — the workflow's optional
+        # auto-update input (the target's declared value, its "true"
+        # default where a consumer leaves the input undeclared — the
+        # trigger records the resolved value as a state file in its
+        # recorded run state, and this job's Read trigger state step
+        # relays it into the job's env like the other trigger-state keys;
+        # this step's env relay is the documented CW_<name> step-env
+        # idiom, chapter 3). On (the default): the stage runs — it updates
+        # every requirement in the oracle to its newest version (a
+        # scenario that no longer holds against the project's current
+        # state is updated in place — the oracle is the single source of
+        # truth — a requirement already at its newest version, including
+        # the ones this run's extraction just derived, is left untouched,
+        # so the update's footprint never disturbs the run's delta the
+        # plan stage covers; a Gherkin requirement that prohibits a
+        # requirement from being updated leaves that requirement at its
+        # current version). Off: the step is a no-op — it guards on the
+        # relayed value, logs the off case and exits 0 without touching
+        # the workspace (before its stage-baseline recording): the run's
+        # pipeline runs without the update stage, no other job gains a
+        # step, and the run's stages, pull request and final status
+        # report are unchanged by the stage's absence (the documented
+        # dependency-upgrade off-form). A run whose requirement extraction
+        # stopped with the no-delta-stop flag (already relayed to this job
+        # and checked by the plan stage) gets the step no-op'ing as well,
+        # so that run's documented clean-stop outcome is undisturbed.
+        env:
+          CW_AUTO_UPDATE: ${{ inputs.auto-update }}
+        run: |
+          # the step's full output mirrors into the run's artefact
+          # state dir (stage-console.log) — on this runner build the
+          # job logs are ghosts (every job's log unreachable from the
+          # API, successful or failed); the artefact is the only
+          # durable record of what the step did
+          mkdir -p "$RUNNER_TEMP/cw" 2>/dev/null || true
+          set -o pipefail
+          (
+              if [ "${CW_AUTO_UPDATE:-true}" = "off" ]; then
+                echo "the AUTO_UPDATE setting is off — the run's pipeline runs without the update stage (the run's stages, pull request and final status report are unchanged by the stage's absence)"
+                exit 0
+              fi
+              if grep -qx "true" "$RUNNER_TEMP/cw/state/trigger/no-delta-stop.txt" 2>/dev/null; then
+                echo "the run's requirement extraction stopped with no delta (the no-delta-stop flag) — the update stage no-ops: that run's documented clean-stop outcome is undisturbed (the plan stage checks the same flag and stops)"
+                exit 0
+              fi
+              # The update stage's baseline: the branch tip as the stage
+              # started — its guard judges only this stage's work
+              # (earlier stages' committed outputs must not look like
+              # off-limits changes). The plan stage's own baseline
+              # recording step re-records the branch tip after this step
+              # (the update's work is committed), so the update's
+              # footprint is never counted as the plan stage's work by
+              # the guard.
+              git rev-parse HEAD > "$RUNNER_TEMP/cw/stage-baseline.sha"
+              S="$RUNNER_TEMP/cw/stash/.github/actions/update-stage/stage.py"
+              [ -f "$S" ] || { echo "::error::stashed stage script $S is missing — the stash step did not run before this step"; exit 1; }
+              python3 "$S"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Stage 6 — plan every requirement change (markdown)
         # The guard judges THIS stage's work only: earlier stages' committed
         # outputs must not look like off-limits changes against the trigger's
@@ -1553,7 +1647,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1882,7 +1976,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -2183,7 +2277,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -2651,7 +2745,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -2918,7 +3012,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done

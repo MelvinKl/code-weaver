@@ -26,10 +26,11 @@ The pins (one per scenario the fix loop had to fulfil):
   requirement file written, the requirement check passes with no
   requirement file changed, the stage records its skip on the
   stage-summary channel (never as "stage complete"), and the run proceeds
-  directly to the planning stage (the skip records no run-level stop flag
-  — its absence is what lets the plan stage proceed to a plan built from
-  the issue itself) (requirement-extraction "A bug-labelled
-  run skips the extraction stage" — new); a run for an issue without the
+  to the update stage (when the AUTO_UPDATE setting runs it) and then to
+  the planning stage (the skip records no run-level stop flag — its
+  absence is what lets the update stage run and the plan stage proceed to
+  a plan built from the issue itself) (requirement-extraction "A
+  bug-labelled run skips the extraction stage" — new); a run for an issue without the
   bug label takes the standing entry logic unchanged (requirement-
   extraction "A run for an issue without the bug label extracts as usual"
   — new), and a bug-labelled issue with an empty body reaches the
@@ -38,8 +39,9 @@ The pins (one per scenario the fix loop had to fulfil):
   forwarded: the stop records its run-level half, the no-delta-stop flag
   in the run's state dir (beside the trigger's recorded state — it rides
   the cumulative artefact chain to every later stage job, and the
-  per-job env relay, like the other trigger-state keys), and the plan
-  stage checks that flag before its own pi call — set, the plan stage
+  per-job env relay, like the other trigger-state keys), and the update
+  stage (its step) and the plan stage check that flag before their own
+  work — set, the plan stage
   stops cleanly without a pi call (no plan file, no prompt assembly — the
   bug branch's empty-body form, which would plan from the issue title
   alone, is never reached) and records its own outcome line, which the
@@ -150,6 +152,43 @@ The pins (one per scenario the fix loop had to fulfil):
   resolved-configuration record lists the resolved value, and a consumer
   that leaves the input undeclared runs unchanged on the default
   (configuration "the bug label is configurable");
+- the factory's update stage sits between the requirement-extraction and
+  the planning stages as an inlined step in the plan job — the
+  documented dependency-upgrade idiom: no new job is added, the
+  15-stage / 9-job pipeline count and the five pi-calling stage jobs
+  stay, and the step's pi call runs under the plan job's documented
+  job-timeout. The optional AUTO_UPDATE setting rides the documented
+  settings channel on its declaration side: the reusable workflow
+  declares it on its input surface (a string input, optional — an older
+  consumer's with: block stays schema-valid — default "true"), the
+  trigger records the resolved value as a state file in its recorded run
+  state and names it in its resolved-config record in both branches, and
+  every stage job's Read trigger state step relays it into the job's env
+  like the other trigger-state keys. Off, the step is a no-op — it
+  guards on the relayed value, logs the off case and exits before its
+  stage-baseline recording: the run's pipeline runs without the update
+  stage, and the run's stages, pull request and final status report are
+  unchanged by the stage's absence (the documented dependency-upgrade
+  off-form); a run whose extraction stopped with the no-delta-stop flag
+  gets the step no-op'ing too — that run's documented clean-stop
+  outcome is undisturbed. On, the stage updates every requirement in the
+  oracle to its newest version through the shared bounded generation loop
+  against the update template under pi-prompts/ (a scenario that no
+  longer holds against the project's current state is updated in place —
+  the oracle is the single source of truth — a requirement already at
+  its newest version, including the ones this run's extraction just
+  derived, is left untouched, so the update's footprint never disturbs
+  the run's delta the plan stage covers, and a Gherkin requirement that
+  prohibits a requirement from being updated leaves that requirement at
+  its current version); its guard runs the shared idiom with the
+  requirements directory as the lane, its validation is the documented
+  extraction validation, and the stage records its outcome on the
+  stage-summary channel (requirements-update "The update stage runs
+  between the requirement-extraction and the planning stages", "A target
+  that leaves AUTO_UPDATE undeclared runs with the update stage", "The
+  update stage updates all requirements to the newest version", "A
+  Gherkin requirement can prohibit the update of a requirement";
+  configuration "The AUTO_UPDATE setting is configurable");
 - a file list appears in a stage instruction only where the set is the
   instruction's scope (the plan's changed-requirements list, the guard's
   off-limits list in the repair instructions, the implement target's single
@@ -913,9 +952,10 @@ def test_extract_empty_issue_body_stops_where_requirements_dir_exists():
     the scenario's Then outcomes are unchanged: no requirement file is
     written, and the factory reports "no delta requirements" and stops
     cleanly. The stop also records its run-level half — the no-delta-stop
-    flag in the run's state dir (the plan stage checks it before its own
-    pi call: a run that stopped with no delta is not forwarded to the plan
-    stage, on the standing stop as on the bug-labelled edge). No test in
+    flag in the run's state dir (the update stage — its step — and the
+    plan stage check it before their own work: a run that stopped with no
+    delta is not forwarded to the update stage or the plan stage, on the
+    standing stop as on the bug-labelled edge). No test in
     the suite cited the scenario before this delta, so the adjusted
     requirement is pinned by this new test, not by an edit to an older
     one."""
@@ -1021,7 +1061,8 @@ def test_extract_skips_the_stage_for_a_bug_labelled_run():
     call; the stage records its skip on the documented stage-summary
     channel — never as "stage complete", and not as the no-delta stop's
     report (the stop is the run's clean end, the skip its way through) —
-    and the run proceeds directly to the planning stage: the stage's
+    and the run proceeds to the update stage (when the AUTO_UPDATE setting
+    runs it) and then to the planning stage: the stage's
     completion marker rides with the skip line, and the pipeline count is
     unchanged (the skip is a recorded outcome inside the existing job).
     """
@@ -1127,13 +1168,15 @@ def test_extract_skips_the_stage_for_a_bug_labelled_run():
              f"never as 'stage complete': {text!r}")
         assert "no delta requirements" not in text, \
             f"the skip is not the no-delta stop's clean end: {text!r}"
-        # the run proceeds directly to the planning stage: the skip
+        # the run proceeds to the update stage (when the AUTO_UPDATE
+        # setting runs it) and then to the planning stage: the skip
         # completes the stage's work — its completion marker rides with
         # the skip line, and the pipeline proceeds on it
         assert os.path.exists(
             os.path.join(rt, "cw", "artifacts", "cw-extract.txt")), \
             ("the stage's completion marker rides with the skip line — "
-             "the run proceeds directly to the planning stage")
+             "the run proceeds to the update stage and then to the "
+             "planning stage")
     finally:
         os.chdir(cwd)
         sys.excepthook = hook
@@ -1295,7 +1338,7 @@ def test_extract_bug_labelled_empty_body_stops_cleanly():
     (both reach the same Then; the standing run reaches it by the
     extraction running and writing nothing, the bug-labelled run by the
     skip); the stage stops before its generation loop — the run is not
-    forwarded to the plan stage — its summary line carries the no-delta
+    forwarded to the update stage or the plan stage — its summary line carries the no-delta
     report (the stop's shape, distinct from the skip's "skipped" line,
     which is the run's way through), and its completion marker rides with
     the line as on the standing stop. The "instead of being forwarded"
@@ -1367,7 +1410,7 @@ def test_extract_bug_labelled_empty_body_stops_cleanly():
     try:
         mod.main()
         # the stage stops before its generation loop — the run is not
-        # forwarded to the plan stage
+        # forwarded to the update stage or the plan stage
         assert not calls, \
             ("a bug-labelled issue with an empty body stops cleanly "
              "instead of being forwarded — the stage stops before its "
@@ -1409,7 +1452,7 @@ def test_extract_bug_labelled_empty_body_stops_cleanly():
         # driven on the state the extract stage left behind, it stops
         # cleanly — no pi call, no plan file, its own outcome line (the
         # report renders it as skipped, never as "stage complete"): the
-        # run is not forwarded to the plan stage
+        # run is not forwarded to the update stage or the plan stage
         spec2 = importlib.util.spec_from_file_location(
             "cw_plan_bug_empty_body",
             os.path.join(ROOT, ".github", "actions", "plan-stage",
@@ -1429,7 +1472,8 @@ def test_extract_bug_labelled_empty_body_stops_cleanly():
         assert not plan_calls, \
             ("the plan stage stops on the run's no-delta stop flag "
              "before its generation loop — the run is not forwarded to "
-             "the plan stage: no pi call is made for it")
+             "the update stage or the plan stage: no pi call is made for "
+             "it")
         # no plan file is written (and no prompt assembled — the bug
         # branch's empty-body form, which would plan from the issue
         # title alone, is never reached)
@@ -2114,7 +2158,8 @@ def test_factory_workflow_is_self_contained():
         f"{stashes} stash steps for {jobs} stage jobs — every stage job's "
         "first step must stash the called repo's runtime tree before its "
         "first checkout")
-    for name in ("setup-pi", "baseline", "extract-stage", "plan-stage",
+    for name in ("setup-pi", "baseline", "extract-stage",
+                 "update-stage", "plan-stage",
                  "implement-stage", "review-stage", "pi-run", "pr-open",
                  "gates-stage", "report"):
         contig = f"cw/stash/.github/actions/{name}"
@@ -6696,3 +6741,284 @@ def test_every_stage_applies_the_recorded_extension_env_at_entry():
                 encoding="utf-8").read()
     assert "extension-env-" in text, \
         "guard-check's inline git fallback must apply the recorded extension env"
+
+
+# ── the update stage (issue 145) ────────────────────────────────────────
+
+
+def _job_region(factory: str, name: str, next_name: str = None) -> str:
+    """A job's region: from its 2-indent job key to the next job key (to
+    the end of the file for the last job)."""
+    start = factory.index(f"  {name}:")
+    end = (factory.index(f"  {next_name}:", start)
+           if next_name is not None else len(factory))
+    return factory[start:end]
+
+
+def _step_index(region: str, predicate) -> int:
+    """The region's line index of the first step whose opener line (a
+    6-indent `- ` item) matches the predicate; -1 if no step matches."""
+    for i, ln in enumerate(region.splitlines()):
+        if ln.startswith("      - ") and predicate(ln):
+            return i
+    return -1
+
+
+def _step_block(region: str, step_index: int) -> str:
+    """The step's full text: from its opener line to the next step opener
+    (or the end of the region)."""
+    lines = region.splitlines()
+    end = next((k for k in range(step_index + 1, len(lines))
+                if lines[k].startswith("      - ")), len(lines))
+    return "\n".join(lines[step_index:end])
+
+
+def test_update_step_sits_between_extraction_and_planning():
+    """(requirements-update "The update stage runs between the
+    requirement-extraction and the planning stages"; reference
+    `requirements/requirements-update.feature::The update stage runs
+    between the requirement-extraction and the planning stages`) the
+    update stage is an inlined step in the plan job — the documented
+    dependency-upgrade idiom: no new job is added, the 15-stage / 9-job
+    pipeline count and the five pi-calling stage jobs stay, and the
+    step's pi call runs under the plan job's documented job-timeout. The
+    step is positioned after the job's checkout of the AI branch and
+    before the plan stage step and its stage-baseline recording: the
+    step records the update stage's own baseline, and the plan stage's
+    baseline re-records the branch tip after the step, so the update's
+    footprint is never counted as the plan stage's work by the guard."""
+    factory = _read(".github/workflows/factory.yml")
+    region = _job_region(factory, "plan", "implement")
+    checkout = _step_index(region,
+                           lambda ln: "- uses: actions/checkout" in ln)
+    step = _step_index(region, lambda ln: "name:" in ln and "update" in ln)
+    stage = _step_index(region,
+                        lambda ln: "Stage 6 — plan every requirement change (markdown)" in ln)
+    assert checkout != -1, "the plan job lost its AI-branch checkout step"
+    assert step != -1, "the plan job carries no update step"
+    assert stage != -1, "the plan job lost its plan stage step"
+    assert checkout < step < stage, (
+        f"the plan job's update step is not after the checkout and "
+        f"before the plan stage step (checkout line {checkout}, "
+        f"step line {step}, stage line {stage}) — the plan stage's "
+        "stage-baseline recording measures the plan stage's work, and a "
+        "footprint after it would be counted as the plan stage's work "
+        "by the guard")
+    block = _step_block(region, step)
+    assert "stage-baseline.sha" in block, (
+        "the plan job's update step does not record the update "
+        "stage's baseline before the stage")
+    assert "stage-baseline.sha" in _step_block(region, stage), (
+        "the plan job's plan stage step no longer re-records the "
+        "stage-baseline after the update step")
+    # the step runs the stage script from the stash, like every stage
+    # step (the runtime tree the first job fetched at the called ref)
+    assert "update-stage/stage.py" in block, (
+        "the plan job's update step does not run the update stage "
+        "script from the stashed runtime tree")
+
+
+def test_auto_update_undeclared_resolves_to_its_true_default():
+    """(requirements-update "A target that leaves AUTO_UPDATE undeclared
+    runs with the update stage"; reference
+    `requirements/requirements-update.feature::A target that leaves
+    AUTO_UPDATE undeclared runs with the update stage`) the setting
+    rides the documented configuration channel: the reusable workflow
+    declares it on its input surface (a string input, optional — an
+    older consumer's with: block stays schema-valid — default "true");
+    the trigger records the resolved value as a state file in its
+    recorded run state (the file rides the artefact chain to every
+    later stage job, and every stage job's Read trigger state step
+    relays it into the job's env like the other trigger-state keys); the
+    trigger's resolved-config record names it in both branches — the
+    declared value and the true default; the plan job's update step env
+    relays the workflow's own binding through the documented CW_<name>
+    step-env idiom (the dependency-upgrade precedent); and the code
+    chain's end is the true default — a consumer that leaves the input
+    undeclared runs with the update stage, its run unchanged on the
+    default."""
+    factory = _read(".github/workflows/factory.yml")
+    entry = _workflow_input_entry(factory, "auto-update")
+    assert "type: string" in entry, \
+        "the auto-update input is not declared as a string input"
+    assert "required: false" in entry, \
+        "the auto-update input is not optional — an older consumer's " \
+        "with: block must stay schema-valid"
+    assert _workflow_input_default(factory, "auto-update") == "true", (
+        "the auto-update input's default is not its true default — a "
+        "consumer that leaves the input undeclared runs with the update "
+        "stage")
+    trig = _job_region(factory, "trigger", "setup-pi")
+    assert "state/trigger/auto-update.txt" in trig, (
+        "the trigger does not record the resolved AUTO_UPDATE value as "
+        "a state file in its recorded run state")
+    assert "${{ inputs.auto-update }}" in trig, (
+        "the trigger's recorded AUTO_UPDATE value is not the workflow "
+        "input's resolved value")
+    assert "- auto-update: " in trig and "(true by default)" in trig, (
+        "the trigger's resolved-config record does not name the resolved "
+        "AUTO_UPDATE value in both branches")
+    # every stage job's Read trigger state step relays the setting into
+    # the job's env like the other trigger-state keys
+    for job, nxt in (("baseline", "extract"), ("extract", "plan"),
+                     ("plan", "implement"), ("implement", "review"),
+                     ("review", "pr"), ("pr", "gates"),
+                     ("gates", "report")):
+        region = _job_region(factory, job, nxt)
+        assert "no-delta-stop auto-update" in region, (
+            f"the {job} job's Read trigger state step does not relay "
+            f"the AUTO_UPDATE value into the job's env")
+    # the plan job's step env relays the workflow's own binding through
+    # the documented CW_<name> step-env idiom
+    region = _job_region(factory, "plan", "implement")
+    step = _step_index(region, lambda ln: "name:" in ln and "update" in ln)
+    assert "CW_AUTO_UPDATE: ${{ inputs.auto-update }}" in \
+        _step_block(region, step), (
+        "the plan job's update step does not relay the setting through "
+        "the documented CW_<name> step-env idiom")
+    # the code chain's end is the true default
+    src = _read(".github/actions/update-stage/stage.py")
+    assert 'cw_input_opt("auto-update") or "true"' in src, (
+        "the update stage's setting chain does not end at its true "
+        "default — a consumer that leaves the input undeclared must run "
+        "with the update stage")
+
+
+def test_update_stage_updates_requirements_to_the_newest_version():
+    """(requirements-update "The update stage updates all requirements
+    to the newest version"; reference
+    `requirements/requirements-update.feature::The update stage updates
+    all requirements to the newest version`) the stage runs its pi call
+    through the documented shared plumbing — the pi-run primitive, the
+    per-call time cap resolved through the documented chain, the usage
+    ledger, the stage-baseline recording and the shared bounded
+    generation loop — against the update prompt template under
+    pi-prompts/. The template's instructions: a scenario that no longer
+    holds against the project's current state is updated in place (the
+    oracle is the single source of truth — the documented
+    in-place-update idiom), a requirement already at its newest
+    version — including the ones this run's extraction just derived — is
+    left untouched, so the update's footprint never disturbs the run's
+    delta the plan stage covers. The stage's guard runs the shared idiom
+    with the requirements directory as the lane; a changed feature file
+    that no longer parses is a guard violation — the documented
+    extraction validation (the stage's post-check reverts the offending
+    file and re-runs the stage, carrying the parser's complaint back
+    into the next attempt); the stage records its outcome on the
+    stage-summary channel."""
+    src = _read(".github/actions/update-stage/stage.py")
+    assert "stages.run_generation_stage(" in src, \
+        "the update stage does not run through the shared generation loop"
+    assert 'template="update"' in src, \
+        "the update stage does not run against the update prompt template"
+    assert 'allow=[req]' in src and "env_dir(" in src, \
+        "the update stage's guard does not run the shared idiom with " \
+        "the requirements directory as its lane"
+    assert "gherkin-validate.py" in src, \
+        "the update stage does not validate its changed feature files " \
+        "with the official Gherkin parser (the documented extraction " \
+        "validation)"
+    assert "record_stage_outcome" in src, \
+        "the update stage does not record its outcome on the " \
+        "stage-summary channel"
+    flat = re.sub(r"\s+", " ", _read("pi-prompts/update.md")).lower()
+    assert ("a scenario that no longer holds against the project's "
+            "current state is updated in place") in flat, \
+        "the update template does not update a stale scenario in place"
+    assert "the oracle is the single source of truth" in flat, \
+        "the update template does not name the oracle the single source " \
+        "of truth"
+    assert ("a requirement already at its newest version — including "
+            "the ones this run's extraction just derived — is left "
+            "untouched") in flat, \
+        "the update template does not leave a newest-version " \
+        "requirement untouched"
+    # the two-slice context contract on its path-referenced side
+    assert "referenced by path" in flat and "on demand" in flat, \
+        "the update template does not take the path-referenced context " \
+        "slice"
+    assert "the gherkin oracle is the requirements directory" in flat, \
+        "the update template does not name the requirements directory " \
+        "as the oracle's location"
+
+
+def test_update_stage_honours_a_prohibiting_requirement():
+    """(requirements-update "A Gherkin requirement can prohibit the
+    update of a requirement"; reference
+    `requirements/requirements-update.feature::A Gherkin requirement can
+    prohibit the update of a requirement`) where a scenario of the oracle
+    prohibits the update of a requirement, that requirement is left at
+    its current version — not updated, not rewritten, not deleted — and
+    the requirements no Gherkin requirement prohibits are updated to the
+    newest version. The prohibition is a Gherkin requirement of the
+    oracle, not an instruction to the model: the template carries it in
+    its work items and its hard rules."""
+    flat = re.sub(r"\s+", " ", _read("pi-prompts/update.md")).lower()
+    assert ("a gherkin requirement that prohibits a requirement from "
+            "being updated leaves that requirement at its current "
+            "version") in flat, \
+        "the update template does not leave a prohibited requirement " \
+        "at its current version"
+    assert ("the requirements no gherkin requirement prohibits are "
+            "updated to the newest version") in flat, \
+        "the update template does not update the unprohibited " \
+        "requirements"
+
+
+def test_auto_update_setting_is_configurable():
+    """(configuration "The AUTO_UPDATE setting is configurable";
+    reference `requirements/configuration.feature::The AUTO_UPDATE
+    setting is configurable`) the setting's off value turns the stage
+    off: the reusable workflow declares it as an optional string input
+    with its true default, and the plan job's update step no-ops where
+    the setting is off — it guards on the relayed value, logs the off
+    case and exits before touching the workspace (before its
+    stage-baseline recording) — so the run's pipeline runs without the
+    update stage: no other job gains a step, and the run's stages, pull
+    request and final status report are unchanged by the stage's
+    absence (the documented dependency-upgrade off-form). A run whose
+    extraction stopped with the no-delta-stop flag gets the step
+    no-op'ing too — that run's documented clean-stop outcome is
+    undisturbed."""
+    factory = _read(".github/workflows/factory.yml")
+    assert _workflow_input_default(factory, "auto-update") == "true", \
+        "the AUTO_UPDATE setting's default is not true"
+    region = _job_region(factory, "plan", "implement")
+    step = _step_index(region, lambda ln: "name:" in ln and "update" in ln)
+    assert step != -1, "the plan job carries no update step"
+    block = _step_block(region, step)
+    assert 'if [ "${CW_AUTO_UPDATE:-true}" = "off" ]; then' in block, \
+        "the update step does not guard on the relayed setting's off value"
+    off = block.find('= "off"')
+    baseline_rec = block.find("stage-baseline.sha")
+    assert off != -1 and off < baseline_rec, (
+        "the off path does not exit before the step's stage-baseline "
+        "recording — the step must log and exit without touching the "
+        "workspace")
+    assert "exit 0" in block, \
+        "the off path does not exit cleanly"
+    # a run whose extraction stopped with the no-delta-stop flag gets the
+    # step no-op'ing too
+    assert "no-delta-stop.txt" in block, \
+        "the update step does not no-op on the run's no-delta-stop flag"
+    # no workflow-level skip: the step runs in the job and gates in its
+    # body
+    assert not any(ln.strip().startswith("if:")
+                   for ln in block.splitlines()), (
+        "the update step carries a workflow-level skip — it must run "
+        "in the job and gate on the relayed setting")
+    # the unchanged-run half: no other job carries the step
+    for job, nxt in (("baseline", "extract"), ("extract", "plan"),
+                     ("implement", "review"), ("review", "pr"),
+                     ("pr", "gates"), ("gates", "report")):
+        region = _job_region(factory, job, nxt)
+        assert not any("update-stage" in ln
+                       for ln in region.splitlines()
+                       if ln.startswith("      - ")), (
+            f"the {job} job gained an update step — off, no other job "
+            "gains a step")
+    # the in-process half: the stage script's gate
+    src = _read(".github/actions/update-stage/stage.py")
+    assert "_auto_update_on" in src and '"off"' in src, \
+        "the update stage's gate is not the documented dependency-" \
+        "upgrade off-form"

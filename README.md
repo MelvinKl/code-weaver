@@ -59,12 +59,13 @@ this repo's reusable workflow takes over:
 4. **requirement-extraction** — a run for an issue that carries the resolved
    bug label skips the derivation: no pi call is made for the stage, no
    requirement file is written, the requirement check passes with nothing
-   changed, and the run proceeds directly to the plan stage (a bug-labelled
-   issue with an empty body instead stops cleanly there with `no delta
-   requirements` — the stop records its run-level half, the `no-delta-stop`
-   flag in the run's state dir (it rides the artefact chain to every later
-   stage job, and the per-job env relay, like the other trigger-state keys),
-   and the run is not forwarded to the plan stage); otherwise
+   changed, and the run proceeds to the update stage (when the AUTO_UPDATE
+   setting runs it) and then to the plan stage (a bug-labelled issue with an
+   empty body instead stops cleanly there with `no delta requirements` — the
+   stop records its run-level half, the `no-delta-stop` flag in the run's
+   state dir (it rides the artefact chain to every later stage job, and the
+   per-job env relay, like the other trigger-state keys), and the run is not
+   forwarded to the update stage or the plan stage); otherwise
    pi derives the **delta requirements** from the project itself (the arc42
    markdown + the issue + the change-set diff) and writes them as **Gherkin**
    into `requirements/` — the project context is
@@ -90,15 +91,28 @@ this repo's reusable workflow takes over:
    never named after an issue); a change outside the allowed set is a
    guard repair — the guard calls pi to revert the off-limits files in
    place and keeps the stage's own work valid; the stage is not re-run;
-6. **plan** — markdown plan(s) under `plans/`, covering **every** requirement
-   change, grounded in the arc42 documentation (the `docs/` set — the
-   top-level `PLAN.md` where a target has no doc dir); before its prompt
-   assembly the stage checks the run's `no-delta-stop` flag (the extract
-   stage records it when its extraction stops with no delta): set, the
-   stage stops cleanly without a pi call — no plan file, its outcome line
-   the report renders as skipped, never as "stage complete" — and the run
-   is not forwarded to the plan stage (the bug branch's empty-body form is
-   never assembled); the instructions
+6. **plan** — the job first runs the update stage as an inlined step (the
+   AUTO_UPDATE setting — its `true` default — gates it: the step checks the
+   setting and the run's `no-delta-stop` flag, and no-ops where either calls
+   for it — `off` = the pipeline runs without the stage, the run's stages,
+   pull request and final status report unchanged; on, the stage updates
+   every requirement in the oracle to its newest version — a scenario that
+   no longer holds against the project's current state is updated in place —
+   a requirement already at its newest version, including the ones this run's
+   extraction just derived, is left untouched — and a Gherkin requirement
+   that prohibits a requirement from being updated leaves that requirement at
+   its current version — its guard runs the shared idiom with the
+   requirements directory as its lane, and the plan stage's baseline
+   re-records the branch tip after it, so the update's footprint is never
+   counted as the plan stage's work by the guard); markdown plan(s) under
+   `plans/`, covering **every** requirement change, grounded in the arc42
+   documentation (the `docs/` set — the top-level `PLAN.md` where a target
+   has no doc dir); before its prompt assembly the stage checks the run's
+   `no-delta-stop` flag (the extract stage records it when its extraction
+   stops with no delta): set, the run is not forwarded to the plan stage —
+   the stage stops cleanly without a pi call — no plan file, its outcome line
+   the report renders as skipped, never as "stage complete" (the bug branch's
+   empty-body form is never assembled); the instructions
    carry the delta — which requirement files changed and what those files
    changed — the files ride the path-referenced context (read on demand,
    never embedded; the whole oracle is not injected into the planner) — and
@@ -176,8 +190,9 @@ this repo's reusable workflow takes over:
     on the run's usage numbers); the stage outcomes it lists render from the
     stages' recorded summary lines — a done stage is reported "stage
     complete", and a stage whose work was intentionally skipped — the
-    extraction stage on a bug-labelled run, or the plan stage on a run
-    whose extraction stopped with no delta — is listed as skipped, never as
+    extraction stage on a bug-labelled run, the update stage on a run whose
+    extraction stopped with no delta, or the plan stage on a run whose
+    extraction stopped with no delta — is listed as skipped, never as
     "stage complete"; the source issue is commented and closed when the run
     succeeded (a failed run leaves it open), and an AI-activity section lands
     in the arc42 docs (the `docs/` set — a target without a doc dir gets it
@@ -217,6 +232,7 @@ jobs:
       runner: <label of the runner the stage jobs run on — pi is installed & configured for the run by stage 2>
       dependency-install: make install  # the command that installs the target project's dependencies — omit the line where the target needs no such step (the run is unchanged)
       dependency-upgrade: on  # whether the run's pipeline runs the dependency-upgrade stage — the stage upgrades the project's dependencies to newer versions, before the implementation stage; set it to "off" where the target wants the pipeline to run without the stage (the run is unchanged)
+      auto-update: true  # whether the run's pipeline runs the update stage — the stage updates every requirement in the oracle to its newest version, between the requirement-extraction and the planning stages; set it to "off" where the target wants the pipeline to run without the stage (the run is unchanged)
       fastmode-threshold: 5  # the plan's step count below which the implement stage works every open step in a single iteration (a plan at or above it keeps the one-step-at-a-time loop); omit the line where the target runs on the "5" default
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
@@ -300,6 +316,7 @@ never empty for a release that publishes changes.
 | `workflow-name` | `code-weaver` | the target's workflow file name (idempotency query) |
 | `dependency-install` | *(empty)* | the command the run's pipeline runs to install the target project's dependencies — executed in the jobs whose stages consume them (the implementation, the test-and-review's suite run), after each job's checkout and before its stage; empty = no such step, the run is unchanged |
 | `dependency-upgrade` | `on` | whether the run's pipeline runs the dependency-upgrade stage — the stage upgrades the project's dependencies to newer versions, before the implementation stage; set it to `off` in the `with:` block = the pipeline runs without the stage (the run's stages, pull request and final status report are unchanged by the upgrade's absence) |
+| `auto-update` | `true` | whether the run's pipeline runs the update stage — the stage updates every requirement in the oracle to its newest version (a scenario that no longer holds against the project's current state is updated in place — a requirement already at its newest version — including the ones this run's extraction just derived — is left untouched — and a Gherkin requirement that prohibits a requirement from being updated leaves that requirement at its current version), between the requirement-extraction and the planning stages; set it to `off` in the `with:` block = the pipeline runs without the stage (the run's stages, pull request and final status report are unchanged by the stage's absence) |
 | `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is fetched by the first job from the called version — the ref the `uses:` line selected, recovered by the trigger, never relayed — so the ref on the `uses:` line is the only pin a run makes (the factory project's own repo pins the public release line too — a run triggered in it works the code of the repo it was triggered in, and the dogfood exercises the published version its external targets get, chapter 8) |
 
 The **LLM backend is provided for the run** — via a GitHub secret or the
@@ -370,6 +387,30 @@ absence. Like every other resolved input, the setting is recorded in the
 trigger's resolved-config log (the workflow log; never committed to the
 repo).
 
+**The oracle's requirements are updated to the newest version by the run,
+where the update setting is on (its default).** The optional `auto-update`
+setting (the Inputs table; the consumption example above shows it in the
+`with:` block) decides whether the run's pipeline runs the update stage —
+the stage sits between the requirement-extraction and the planning stages
+and updates every requirement in the oracle to its newest version: a
+scenario that no longer holds against the project's current state is updated
+in place (the oracle is the single source of truth), a requirement already
+at its newest version — including the ones this run's extraction just
+derived — is left untouched (the update's footprint never disturbs the run's
+delta the plan stage covers), and a Gherkin requirement that prohibits a
+requirement from being updated leaves that requirement at its current
+version. The stage runs as an inlined step in the planning job — no new job
+is added, and the run's stages, pull request and final status report are
+unchanged by the mechanism's presence. The setting's default is `true`; a
+target turns the stage off through its consumer workflow (an
+`auto-update: off` line in the `with:` block, like `max-loops`). Where the
+setting is off the step is a no-op — it logs and exits without touching the
+workspace: the pipeline runs without the update stage, and the run's
+stages, pull request and final status report are unchanged by the stage's
+absence. Like every other resolved input, the setting is recorded in the
+trigger's resolved-config log (the workflow log; never committed to the
+repo).
+
 The `gh` CLI is the factory's surviving runner pre-requisite (the trigger,
 pr-open and gates stages shell out to it); one hygiene rule keeps it
 working: the runner **user** must own `~/.config` — a root-owned
@@ -396,7 +437,8 @@ factory.
     baseline/          stage 3 — branch ai/code-weaver/<issue> + baseline ref
     guard-check/       THE one shared "only X changed" guard script (the stages call it in-process)
     extract-stage/     stages 4+5 — extraction + requirement check
-    plan-stage/        stages 6+7 — planning + plan check
+    update-stage/      the optional update stage — inlined as a step in the plan job (the AUTO_UPDATE setting gates it)
+    plan-stage/        stages 6+7 — planning + plan check (the job's update step runs the update stage before the plan step)
     implement-stage/   stages 8+9 — implementation + implement check
     review-stage/     stages 10+11 — test oracle + review + fix loop
     pr-open/           stage 12 — push & open the PR (body = report)
@@ -408,8 +450,8 @@ factory.
     gherkin-validate.py  Cucumber-official-parser Gherkin validation
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published; and (`--verify-structure`, the flow's second pre-tag step): the committed file's job/step graph parses to the pinned shape under every standard engine, no step declares keys after its run block, no run block past the giant-body budget, no run block's heredoc terminator indented past the block's base, no `python3` code-heredoc body indented past the block's base, and no block opens a heredoc it never terminates — a file the gate's shape checks fail is never published
-pi-prompts/            the pi prompt templates (requirements, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (16 files, 174 scenarios)
+pi-prompts/            the pi prompt templates (requirements, update, plan, implement, review, pr-body)
+requirements/          the Gherkin oracle for THIS repo (17 files, 179 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -417,7 +459,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **174 Gherkin scenarios** — the oracle this
+`requirements/` holds **179 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

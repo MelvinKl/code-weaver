@@ -140,6 +140,7 @@ CANONICAL_RUNTIME_FILES = (
     ".github/actions/setup-pi/stage.py",
     ".github/actions/baseline/stage.py",
     ".github/actions/extract-stage/stage.py",
+    ".github/actions/update-stage/stage.py",
     ".github/actions/plan-stage/stage.py",
     ".github/actions/implement-stage/stage.py",
     ".github/actions/review-stage/stage.py",
@@ -149,6 +150,7 @@ CANONICAL_RUNTIME_FILES = (
     ".github/actions/report/stage.py",
     ".github/actions/guard-check/guard-check.py",
     "pi-prompts/requirements.md",
+    "pi-prompts/update.md",
     "pi-prompts/plan.md",
     "pi-prompts/implement.md",
     "pi-prompts/review.md",
@@ -274,7 +276,11 @@ EXPECTED_STEP_COUNTS = {
     # pi-calling stage after baseline dies at the pi call it cannot
     # resolve without it; run 42480359617)
     "extract": 9,
-    "plan": 9,
+    "plan": 10,  # re-pinned: +1 — the job's update step (the update
+    # stage, the optional AUTO_UPDATE setting — after the job's checkout
+    # of the AI branch and before the plan stage step and its
+    # stage-baseline recording; the step gates on the setting and the
+    # run's no-delta-stop flag; issue 145)
     "implement": 11,
     "review": 12,  # re-pinned: +2 — the job's egress probe step (a
     # snapshot of the runner's GitHub egress at the run's end, the

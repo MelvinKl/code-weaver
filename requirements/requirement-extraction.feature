@@ -129,7 +129,7 @@ Feature: Requirement extraction
     Then the extraction stage does not run its derivation — no pi call is made for it
     And no requirement file is written
     And the requirement check passes with no requirement file changed
-    And the run proceeds directly to the planning stage
+    And the run proceeds to the update stage and then to the planning stage
 
   @extraction
   Scenario: A run for an issue without the bug label extracts as usual

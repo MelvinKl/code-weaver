@@ -11,16 +11,20 @@
   directory branch: no pi call is made for the stage, no requirement file is
   written, the requirement check passes with no requirement file changed, the
   stage records its skip on the stage-summary channel, and the run proceeds
-  directly to the planning stage (the plan is built from the issue itself);
+  to the update stage (when the AUTO_UPDATE setting runs it) and then to the
+  planning stage (the plan is built from the issue itself);
   a bug-labelled issue with an empty body instead reaches the "no delta
   requirements" clean stop: the stop records its run-level half in the run's
   state dir (the no-delta-stop flag beside the trigger's recorded state — it
   rides the cumulative artefact chain to every later stage job, and the
-  per-job env relay, like the other trigger-state keys), and the plan stage
-  checks that flag before its own pi call — set, the plan stage stops
+  per-job env relay, like the other trigger-state keys), and the update
+  stage (the plan job's inlined step — it checks the same flag in its step
+  and no-ops) and the plan stage check it before their own pi call — set,
+  the plan stage stops
   cleanly without a pi call (no plan file, its own outcome line on the
   stage-summary channel, the report rendering it as skipped, never as
-  "stage complete"): the run is not forwarded to the plan stage. A
+  "stage complete"): the run is not forwarded to the update stage or the
+  plan stage. A
   target without a requirements directory is a first factory run on that
   project: the entry logic takes its first-run branch there (the
   full-derivation prompt — pi derives the full requirement set from the
@@ -29,7 +33,7 @@
   create the directory); the empty-body "no delta requirements" stop applies
   only where a requirements directory exists — the standing stop records
   the same run-level no-delta-stop flag, so a run that stops there is not
-  forwarded to the plan stage either. The guard
+  forwarded to the update stage or the plan stage either. The guard
   (the one shared idiom) then verifies that ONLY the requirements dir changed
   — a leak is repaired in place by the guard's pi call (the off-limits files
   named, told to be reverted, the stage's own work told to stay valid) and a
@@ -252,7 +256,8 @@ def main() -> None:
     # requirements dir is trivially satisfied — no file is touched, so no
     # repair call; the guard machinery is untouched). The stage records its
     # skip on the documented stage-summary channel and the run proceeds
-    # directly to the planning stage (the plan is built from the issue
+    # to the update stage (when the AUTO_UPDATE setting runs it) and then
+    # to the planning stage (the plan is built from the issue
     # itself; the 15-stage / 9-job pipeline count is unchanged — the skip
     # is a recorded outcome inside the existing job, not a new stage or
     # job). The branch's empty-body edge: a bug-labelled issue whose body
@@ -260,19 +265,20 @@ def main() -> None:
     # stop's identical observable outcome (no requirement file written;
     # "no delta requirements" reported; the run stops cleanly) — by the
     # skip instead of by the extraction running and writing nothing — and
-    # the run is NOT forwarded to the plan stage: the stop records its
-    # run-level no-delta-stop flag in the run's state dir (the signal the
-    # plan stage checks before its own pi call), while the skip itself
+    # the run is NOT forwarded to the update stage (its step checks the
+    # same flag and no-ops) or to the plan stage: the stop records its
+    # run-level no-delta-stop flag in the run's state dir (the signal both
+    # check before their own work), while the skip itself
     # records no flag — the bug-labelled run's way through to the plan.
     if _is_bug_run():
         if body_empty:
             common.log("stage 4: the issue is a bug issue and its body is "
                        "empty or describes no change — no delta "
                        "requirements; the stage writes nothing and stops "
-                       "cleanly (the run is not forwarded to the plan "
-                       "stage); the stop records its run-level flag in the "
-                       "run's state dir — the plan stage checks it before "
-                       "its own pi call")
+                       "cleanly (the run is not forwarded to the update "
+                       "stage or the plan stage); the stop records its "
+                       "run-level flag in the run's state dir — the signal "
+                       "both check before their own work")
             with open(common.state_file("stage-summary.txt"), "a",
                       encoding="utf-8") as f:
                 f.write("stage 4-5 requirement extraction: no delta "
@@ -284,9 +290,10 @@ def main() -> None:
                        "the requirement extraction: no pi call is made for "
                        "the stage, no requirement file is written; the "
                        "requirement check passes with no requirement file "
-                       "changed, and the run proceeds directly to the "
-                       "planning stage (the plan is built from the issue "
-                       "itself)")
+                       "changed, and the run proceeds to the update stage "
+                       "(when the AUTO_UPDATE setting runs it) and then to "
+                       "the planning stage (the plan is built from the "
+                       "issue itself)")
             with open(common.state_file("stage-summary.txt"), "a",
                       encoding="utf-8") as f:
                 f.write("stage 4-5 requirement extraction: skipped "
@@ -310,9 +317,10 @@ def main() -> None:
     if not first_run and body_empty:
         common.log("stage 4: issue body is empty — no delta requirements; the "
                    "stage writes nothing and stops cleanly; the stop records "
-                   "its run-level flag in the run's state dir — the plan "
-                   "stage checks it before its own pi call, so the run is "
-                   "not forwarded to the plan stage")
+                   "its run-level flag in the run's state dir — the update "
+                   "stage (its step) and the plan stage check it before "
+                   "their own work, so the run is not forwarded to the "
+                   "update stage or the plan stage")
         with open(common.state_file("stage-summary.txt"), "a", encoding="utf-8") as f:
             f.write("stage 4-5 requirement extraction: no delta requirements "
                     "(empty issue body)\n")

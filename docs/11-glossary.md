@@ -40,8 +40,8 @@
   / what the fix must do", the note on what the tests don't cover — is
   mirrored per iteration into the state dir and fed into the fixer: the
   fix directive names it by path, the fixer reads it on demand
-- **Oracle** — the Gherkin requirements under `requirements/` (16 files,
-  174 scenarios), structured by topic: each file is named after the topic
+- **Oracle** — the Gherkin requirements under `requirements/` (17 files,
+  179 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
@@ -69,6 +69,33 @@
   the pipeline runs without the stage, and the run's stages, pull
   request and final status report are unchanged by the upgrade's
   absence
+- **Update stage** — whether the run's pipeline runs the update stage,
+  decided by the target's optional `auto-update` setting (the consumer
+  workflow's `with:` block; the setting's default is `true` — a target
+  turns it off with an `auto-update: off` line in the `with:` block, like
+  `max-loops`): the stage sits between the requirement-extraction and the
+  planning stages and updates every requirement in the oracle to its
+  newest version — a scenario that no longer holds against the
+  project's current state is updated in place (the oracle is the single
+  source of truth — the documented in-place-update idiom), a requirement
+  already at its newest version — including the ones this run's
+  extraction just derived — is left untouched (the update's footprint
+  never disturbs the run's delta the plan stage covers), and a Gherkin
+  requirement that prohibits a requirement from being updated leaves that
+  requirement at its current version; the stage runs as an inlined step
+  in the `plan` job (after its checkout of the AI branch and before the
+  plan stage step and its stage-baseline recording — the plan stage's
+  baseline re-records the branch tip after it, so the update's footprint
+  is never counted as the plan stage's work by the guard), the step's pi
+  call runs under the plan job's documented job-timeout, and the trigger
+  records the resolved setting in its recorded run state — the state file
+  rides the artefact chain to every later stage job, and the plan job's
+  Read trigger state step relays it into the job's env like the other
+  trigger-state keys; where the setting is off the step is a no-op that
+  logs and exits without touching the workspace — the pipeline runs
+  without the stage, and the run's stages, pull request and final status
+  report are unchanged by the stage's absence (the documented
+  dependency-upgrade off-form)
 - **Guard** — the shared "only X changed" check (one implementation,
   three call sites): collects working-tree changes against the stage
   baseline, compares them against the per-stage set, and repairs a
