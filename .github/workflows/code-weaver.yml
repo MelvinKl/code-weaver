@@ -73,7 +73,7 @@ jobs:
       # dogfood's own runs take their harness solely from the repo-level
       # GitHub secrets set on this repo: runtime secrets, never tree
       # files); never a plain input
-      PI_MODELS: ${{ secrets.PI_MODELS }}
-      PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
-      PI_MCP: ${{ secrets.PI_MCP }}
-      EXTENSION_ENV: ${{ secrets.EXTENSION_ENV }}
+      PI_MODELS: ${{ vars.PI_MODELS }}
+      PI_SETTINGS: ${{ vars.PI_SETTINGS }}
+      PI_MCP: ${{ vars.PI_MCP }}
+      EXTENSION_ENV: ${{ vars.EXTENSION_ENV }}
