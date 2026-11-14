@@ -112,8 +112,9 @@ The pins (one per scenario the fix loop had to fulfil):
   records in the state dir, the cost derived from the recorded usage, the
   run's resolved model, and the run's model configuration itself — the
   rates are the resolved model's `cost` entry in the configuration the
-  setup stage materialises (a non-empty PI_MODELS secret wins over the
-  repo file .pi/agent/models.json, and the report lists the source it
+  setup stage materialises (the models-configuration GitHub secret only —
+  a named repo file is no longer a provider of any harness element — and
+  the report job resolves the same provider, listing the source it
   priced from); a model with no cost entry is listed as unpriced — and a
   failed run's report covers the calls made before the stop (issue-43 "the
   final report lists the input and output tokens used during the run",
@@ -214,7 +215,7 @@ The pins (one per scenario the fix loop had to fulfil):
   totals cover every pi call the run made"), a cap exhausted without
   clearing fails the stage with the failure report listing the violations,
   and the implement stage's old plan loop-back hook is gone (guard-rail
-  "guard repairs are capped", "all three checks share one implementation");
+  "guard repairs are capped", "all four checks share one implementation");
 - the plan stage checks the run's no-delta-stop flag before its prompt
   assembly — where the run's extraction stopped with no delta, the stage
   stops cleanly without a pi call (no plan file, its outcome line the
@@ -2633,15 +2634,6 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
     with open(os.path.join(cw, "stage-summary.txt"), "w", encoding="utf-8") as f:
         f.write(stage_summary if stage_summary is not None
                 else "stage 4 extract: clean — stage complete\n")
-    if models_config is not None:
-        # the run's model configuration as the repo-file provider — the
-        # .pi/agent/models.json the report job resolves in the workspace
-        # (the provider the setup stage falls back to when the secret is
-        # absent)
-        agent = os.path.join(ws, ".pi", "agent")
-        os.makedirs(agent)
-        with open(os.path.join(agent, "models.json"), "w", encoding="utf-8") as f:
-            f.write(models_config)
     fake = tempfile.mkdtemp(prefix="cw-report-fake-")
     binp = os.path.join(fake, "bin")
     os.makedirs(binp)
@@ -2689,10 +2681,13 @@ def _run_report_action(run_result="success", pr_number="7", issue_number="42",
         "CW_RUN_RESULT": run_result,
         "CW_ISSUE_NUMBER": issue_number,
         "CW_PR_NUMBER": pr_number,
-        # the run's model configuration provider relay — set when the test
-        # names pi_models_env (the secret wins over the repo file), empty
-        # otherwise (an empty provider value is an absent provider)
-        "CW_PI_MODELS": pi_models_env or "",
+        # the run's model configuration provider relay — the test's
+        # pi_models_env value where it names one, else the configuration
+        # the models_config parameter supplies through the same provider
+        # (a named repo file is no longer a provider of any harness
+        # element); an empty value is an absent provider
+        "CW_PI_MODELS": (pi_models_env if pi_models_env is not None
+                         else models_config or ""),
     })
     hook, cwd = sys.excepthook, os.getcwd()
     os.chdir(ws)
@@ -3026,19 +3021,22 @@ def test_report_cost_derives_from_usage_and_resolved_model():
     resolved-config state), and priced at the rates the run's model
     configuration declares for that model — the `cost` object of the
     model's models.json entry, read from the configuration's provider the
-    way the setup stage resolves it (here the repo file
-    .pi/agent/models.json, the source the report lists so the cost stays
+    way the setup stage resolves it (the models-configuration GitHub
+    secret only — a named repo file is no longer a provider of any
+    harness element — the source the report lists so the cost stays
     auditable); a model the configuration carries no cost entry for is
     listed as unpriced, and the recorded usage
     totals still land in the report."""
     # 15000 in / 3500 out across the run; the resolved model is priced by
-    # the configuration the sandbox writes as the repo file
+    # the configuration the sandbox supplies through the
+    # models-configuration provider (the CW_PI_MODELS env the job relays
+    # the PI_MODELS secret into)
     ledger = ["10000 2000", "5000 1500"]
     r_in, r_out = 0.10, 0.20
     priced = (f"- **Total cost:** ${(15000 * r_in + 3500 * r_out) / 1e6:.4f} "
               f"(model `Ornith-1.5-35B-A3B` @ ${r_in:.2f}/M input, "
-              f"${r_out:.2f}/M output — rates from the repo file "
-              f".pi/agent/models.json)")
+              f"${r_out:.2f}/M output — rates from the run's model "
+              f"configuration (a GitHub secret))")
     pr_body, comment, _closed = _run_report_action(
         ledger=ledger, models_config=_models_config(r_in, r_out))
     for surface in (pr_body, comment):
@@ -3052,9 +3050,9 @@ def test_report_cost_derives_from_usage_and_resolved_model():
         models_config=_models_config(r_in, r_out))
     unpriced = (f"- **Total cost:** unpriced (model "
                 f"`Some-Other-Runner-Model` has no cost rates in the "
-                f"run's model configuration — put the model's cost rates in "
-                ".pi/agent/models.json (or the models-configuration "
-                f"secret))")
+                f"run's model configuration — put the model's cost rates "
+                f"in the models-configuration GitHub secret the run's "
+                f"environment provides)")
     for surface in (pr_body, comment):
         assert unpriced in surface, \
             f"a model with no cost entry is listed as unpriced: {surface!r}"
@@ -3062,16 +3060,17 @@ def test_report_cost_derives_from_usage_and_resolved_model():
         assert "- **Total output tokens:** 3500" in surface
 
 
-def test_report_cost_prices_at_the_secret_provider_over_the_repo_file():
+def test_report_cost_prices_at_the_secret_provider():
     """(the same issue-43 cost pin — provider resolution; reference
     `requirements/cost-and-token-usage.feature::The final report lists the run's token usage and total cost`) the rates the report prices with are the
-    ones the run's model
-    configuration declares, and the configuration is resolved the way the
-    setup stage resolves it: a non-empty PI_MODELS secret wins over the
-    repo file .pi/agent/models.json. The sandbox carries both providers at
-    different rates — the report must list the secret's rates, name the
-    provider it priced from, and stay consistent with the recorded
-    usage."""
+    ones the run's model configuration declares, and the configuration is
+    resolved the way the setup stage now resolves it: the
+    models-configuration GitHub secret only (the CW_PI_MODELS env the job
+    relays the secret into) — a named repo file is no longer a provider
+    of any harness element, so there is no repo-file provider the secret
+    could win over. The report must price at the run's model
+    configuration's rates and list that source, staying consistent with
+    the recorded usage."""
     ledger = ["10000 2000"]
     r_in, r_out = 0.30, 0.40
     priced = (f"- **Total cost:** ${(10000 * r_in + 2000 * r_out) / 1e6:.4f} "
@@ -3080,12 +3079,11 @@ def test_report_cost_prices_at_the_secret_provider_over_the_repo_file():
               f"configuration (a GitHub secret))")
     pr_body, comment, _closed = _run_report_action(
         ledger=ledger,
-        models_config=_models_config(0.10, 0.20),
         pi_models_env=_models_config(0.30, 0.40))
     for surface in (pr_body, comment):
         assert priced in surface, \
-            ("a non-empty PI_MODELS secret wins over the repo file — "
-             f"the report must price at the secret's rates: {surface!r}")
+            ("the report must price at the run's model configuration's "
+             f"rates and list the secret as the source: {surface!r}")
 
 
 def test_failed_run_report_covers_the_calls_before_the_stop():
@@ -3107,8 +3105,8 @@ def test_failed_run_report_covers_the_calls_before_the_stop():
     r_in, r_out = 0.10, 0.20
     priced = (f"- **Total cost:** ${(3000 * r_in + 400 * r_out) / 1e6:.4f} "
               f"(model `Ornith-1.5-35B-A3B` @ ${r_in:.2f}/M input, "
-              f"${r_out:.2f}/M output — rates from the repo file "
-              f".pi/agent/models.json)")
+              f"${r_out:.2f}/M output — rates from the run's model "
+              f"configuration (a GitHub secret))")
     # a failed run that reached the PR: the comment (and the PR body's
     # final status) carry the pre-stop usage and cost
     pr_body, comment, _closed = _run_report_action(
@@ -3326,7 +3324,8 @@ def test_report_lists_a_skipped_extraction_stage_as_skipped():
                      f"${(15000 * r_in + 3500 * r_out) / 1e6:.4f} "
                      f"(model `Ornith-1.5-35B-A3B` @ "
                      f"${r_in:.2f}/M input, ${r_out:.2f}/M output — "
-                     f"rates from the repo file .pi/agent/models.json)"):
+                     f"rates from the run's model configuration "
+                     f"(a GitHub secret))"):
             assert line in surface, \
                 ("the usage/cost totals assemble as on a run where the "
                  f"skipped stage made no call: {surface!r}")
@@ -4737,11 +4736,11 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
 
 
 def test_guard_fallback_matches_the_canonical_repair():
-    """(guard-rail "All three checks share one implementation" — one
-    script, three call sites, the self-contained fallback included;
+    """(guard-rail "All four checks share one implementation" — one
+    script, four call sites, the self-contained fallback included;
     "A leaking stage is repaired by a pi call, not restarted";
     reference
-    `requirements/guard-rail.feature::All three checks share one
+    `requirements/guard-rail.feature::All four checks share one
     implementation`,
     `requirements/guard-rail.feature::A leaking stage is repaired by a
     pi call, not restarted`,
@@ -4805,14 +4804,14 @@ def test_plan_stage_may_only_touch_its_own_plan_file():
     """(plan "the plan stage may only touch its own plan file"; reference
     `requirements/plan.feature::The plan stage may only touch its own
     plan file`,
-    `requirements/guard-rail.feature::All three checks share one
+    `requirements/guard-rail.feature::All four checks share one
     implementation`,
     `requirements/guard-rail.feature::A leaking stage is repaired by a
     pi call, not restarted`,
     `requirements/guard-rail.feature::A requirement edited during
     implementation is reverted in place`) when the plan stage wrote a
     change outside its one allowed plan file, the plan-check (the shared
-    guard — one implementation, three call sites) reverts it with the
+    guard — one implementation, four call sites) reverts it with the
     shared remedy — the guard's pi call, the off-limits file named, told
     to be reverted, the plan told to stay valid — and the plan stage
     re-runs: the guard records the cleared repair in the state dir
@@ -4821,7 +4820,7 @@ def test_plan_stage_may_only_touch_its_own_plan_file():
     re-run — only the plan file is left changed. A clean plan stage
     writes no record and completes without re-running, and the extract
     and implement checks' machinery never claims the record — their
-    stages complete without re-running, while all three checks share the
+    stages complete without re-running, while all four checks share the
     one guard implementation."""
     # a leak at the plan check: the shared guard repairs it with a pi
     # call and records the cleared repair in the state dir — the record

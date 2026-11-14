@@ -15,20 +15,21 @@ environment: it provides the harness for the run.
       so every later pi invocation in the run resolves that installed
       copy on any runner.
 
-  (b) materialise the harness — for each element resolve its provider (a
-      non-empty GitHub secret wins over the named repo file) and write it
+  (b) materialise the harness — for each element resolve its provider
+      (the run's environment variables only — the CW_<name> relay of the
+      GitHub secret the consumer workflow's secrets block carries; a named
+      repo file is no longer a provider of any harness element) and write it
       into the agent directory (`~/.pi/agent/`, honouring
       PI_CODING_AGENT_DIR) the run's pi invocations resolve:
-        models.json   ← the PI_MODELS secret or the repo file
-                        .pi/agent/models.json — the backend the run uses is
-                        the one in it
-        settings.json ← the PI_SETTINGS secret or the repo file
-                        .pi/settings.json — the additional packages; an empty
-                        or absent provider writes nothing, so the run's pi runs
-                        without additional packages
-        mcp.json      ← the PI_MCP secret or the repo file .pi/mcp.json —
-                        an absent provider means the run's pi runs without MCP
-                        servers
+        models.json   ← the PI_MODELS secret — the backend the run uses is
+                        the one in it; a run whose environment provides no
+                        model configuration fails the setup stage (the run's
+                        pi configuration is incomplete)
+        settings.json ← the PI_SETTINGS secret — the additional packages;
+                        an empty or absent provider writes nothing, so the
+                        run's pi runs without additional packages
+        mcp.json      ← the PI_MCP secret — an absent provider means the
+                        run's pi runs without MCP servers
         extensions/   ← the extension's environment (the .env-style
                         EXTENSION_ENV secret) materialised as a user-level
                         extension that sets the provided variables, so the
@@ -61,10 +62,15 @@ environment: it provides the harness for the run.
 
   (d) the failure modes — an installation or configuration that cannot
       complete fails the stage with an explicit "pi installation or
-      configuration failed" error (no later stage runs); an unreachable
-      backend fails with "backend unreachable". The reason is persisted like
-      every other stage failure (stage-fail-reason.txt in the state dir + the
-      runner's diagnostic log).
+      configuration failed" error (no later stage runs); a run whose
+      environment provides no model configuration fails that same explicit
+      error stating the run's pi configuration is incomplete — the PI_MODELS
+      secret the consumer workflow's secrets block must carry is the missing
+      provider, and the stage's failure is persisted like every other stage
+      failure so no later stage runs; an unreachable backend fails with
+      "backend unreachable". The reason is persisted like every other stage
+      failure (stage-fail-reason.txt in the state dir + the runner's
+      diagnostic log).
 """
 from __future__ import annotations
 
@@ -126,19 +132,18 @@ def provider_value(input_name: str) -> str | None:
     return v
 
 
-def resolve_provider(input_name: str, repo_rel: str) -> tuple[str, str] | None:
-    """Resolve one harness element's provider: a non-empty GitHub secret
-    wins over the named repo file in the checked-out workspace; neither
-    present → the element has no provider. Returns (content, source) — or
-    None for an element without a provider."""
+def resolve_provider(input_name: str) -> tuple[str, str] | None:
+    """Resolve one harness element's provider: the run's environment
+    variable only — the `CW_<name>` relay of the GitHub secret the consumer
+    workflow's `secrets:` block carries. A named repo file is no longer a
+    provider of any harness element (the repo's `.pi` directory is gone):
+    an element whose secret arrives empty or absent has no provider, whatever
+    the workspace tree holds. Returns (content, source) — or None for an
+    element without a provider."""
     v = provider_value(input_name)
-    if v is not None:
-        return v, f"the GitHub secret (the run's {input_name} provider)"
-    p = os.path.join(common.repo(), repo_rel)
-    if os.path.isfile(p):
-        with open(p, encoding="utf-8") as f:
-            return f.read(), f"the repo file {repo_rel}"
-    return None
+    if v is None:
+        return None
+    return v, f"the GitHub secret (the run's {input_name} provider)"
 
 
 def resolve_extension_env() -> str | None:
@@ -217,9 +222,10 @@ def materialize_harness(models, settings, mcp, extension_env,
     """(b) Write the run's harness into the agent directory.
 
     The agent directory carries what the stage wrote — replaced for the run:
-    an element with a provider is written from the resolved provider (a
-    non-empty GitHub secret having won over the named repo file), and an
-    element without one is CLEARED — the runner's pre-existing user-level
+    an element with a provider is written from the resolved provider (the
+    run's environment variable — a named repo file is no longer a provider
+    of any harness element), and an element without one is CLEARED — the
+    runner's pre-existing user-level
     configuration is never used as the run's configuration (an empty or
     absent settings provider leaves pi without additional packages; an
     absent MCP provider means the run's pi runs without MCP servers).
@@ -447,9 +453,11 @@ def check_run_configuration(models, model: str, agent_dir: str,
     and the headless `pi --print` smoke check runs the installed pi against
     the backend the stage configured. Returns the backend URL the run uses."""
     if models is None:
-        fail("pi installation or configuration failed — no provider for the "
-             "model configuration (set the PI_MODELS secret or commit the repo "
-             "file .pi/agent/models.json)")
+        fail("pi installation or configuration failed — the run's pi "
+             "configuration is incomplete: no provider for the model "
+             "configuration (the PI_MODELS secret the consumer workflow's "
+             "secrets block must carry; a named repo file is no longer a "
+             "provider of any harness element)")
     raw = models[0]
     backend = backend_from_config(raw)
     if backend is None:
@@ -524,10 +532,9 @@ def main() -> None:
 
     # (b) materialise the run's provided harness into the agent directory
     # the run's pi invocations resolve
-    models = resolve_provider("pi-models",
-                              os.path.join(".pi", "agent", "models.json"))
-    settings = resolve_provider("pi-settings", os.path.join(".pi", "settings.json"))
-    mcp = resolve_provider("pi-mcp", os.path.join(".pi", "mcp.json"))
+    models = resolve_provider("pi-models")
+    settings = resolve_provider("pi-settings")
+    mcp = resolve_provider("pi-mcp")
     extension_env = resolve_extension_env()
     try:
         written = materialize_harness(models, settings, mcp,

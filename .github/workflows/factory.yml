@@ -214,7 +214,7 @@ on:
         type: string
         default: docs
       llm-model:
-        description: Which configured model pi uses (the backend is the one in the run's provided model configuration — a GitHub secret or the repo file .pi/agent/models.json)
+        description: Which configured model pi uses (the backend is the one in the run's provided model configuration — the run's environment variables, the models-configuration GitHub secret the consumer workflow's secrets block carries)
         type: string
         default: Ornith-1.5-35B-A3B
       max-loops:
@@ -276,20 +276,21 @@ on:
         required: true
       # The run's pi harness providers — all optional: an unset or empty
       # secret arrives empty and the setup stage treats it as an absent
-      # provider (the repo files .pi/agent/models.json, .pi/settings.json
-      # and .pi/mcp.json are the fallbacks the stage resolves from). A
+      # provider (a named repo file is no longer a provider of any harness
+      # element — a run's harness comes solely from the GitHub secrets set
+      # on the consumer's repo: runtime secrets, never tree files). A
       # provider value never appears in a with: input or a committed file.
       PI_MODELS:
-        description: The run's model configuration — the content of .pi/agent/models.json; the backend in it is the run's LLM backend
+        description: The run's model configuration — the content of the models-configuration GitHub secret; the backend in it is the run's LLM backend
         required: false
       PI_SETTINGS:
-        description: The run's additional-packages settings — the content of .pi/settings.json; empty or absent leaves pi without additional packages
+        description: The run's additional-packages settings — the content of the additional-packages GitHub secret; empty or absent leaves pi without additional packages
         required: false
       PI_MCP:
-        description: The run's MCP configuration — the content of .pi/mcp.json; absent means the run's pi runs without MCP servers
+        description: The run's MCP configuration — the content of the MCP-configuration GitHub secret; absent means the run's pi runs without MCP servers
         required: false
       EXTENSION_ENV:
-        description: The pi extension's environment variables in .env style (such as the ones .pi/extensions/pi-jev-config.ts carries)
+        description: The pi extension's environment variables in .env style — the content of the extension-environment GitHub secret
         required: false
 
 permissions:
@@ -665,7 +666,7 @@ jobs:
                 echo "- runner: \`${{ inputs.runner }}\`"
                           echo "- runtime tree: the called version's own — fetched from the called repo at the called ref (stage 1 fetched it into $RUNNER_TEMP/cw/stash before the first checkout — the ref's version carries the file and the tree together); one ref is one version, no second pin"
                 echo "- LLM model (which configured model): \`${{ inputs.llm-model }}\`"
-                echo "- LLM backend: provided for the run (a GitHub secret or the repo file .pi/agent/models.json) — stage 2 writes it for the run"
+                echo "- LLM backend: provided for the run by the run's environment variables (the GitHub secret the consumer workflow's secrets block carries) — stage 2 writes it for the run"
                 echo "- trigger label: \`$AI_REQUIREMENTS_LABEL\`"
                 echo "- bug label: \`$BUG_LABEL\`"
                 echo "- target branch: \`$BASE_REF\` (base sha $BASE_SHA)"
@@ -781,9 +782,9 @@ jobs:
       CW_PI_TIMEOUT: ${{ inputs.pi-timeout }}
       # The run's pi harness providers (the documented with: + CW_<name>
       # env relay idiom): an empty secret value arrives empty and the stage
-      # treats it as an absent provider — the repo file is the fallback for
-      # the three file-carrying elements (the extension's env is
-      # secret-only: its values are never committed to the target's tree).
+      # treats it as an absent provider — a named repo file is no longer a
+      # provider of any harness element (the run's harness is secret-only:
+      # its values are never committed to the target's tree).
       CW_PI_MODELS: ${{ secrets.PI_MODELS }}
       CW_PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
       CW_PI_MCP: ${{ secrets.PI_MCP }}
@@ -2953,9 +2954,10 @@ jobs:
       # factory's with: + CW_<name> env relay idiom — the setup-pi job's
       # env carries the same relay): the report stage prices the run's
       # cost from the same model configuration the setup stage
-      # materialised — a non-empty models-configuration secret wins over
-      # the repo file .pi/agent/models.json, and the rates the report lists are
-      # the ones that configuration declares for the run's resolved model
+      # materialised — the models-configuration GitHub secret the
+      # consumer workflow's secrets block carries, and the rates the
+      # report lists are the ones that configuration declares for the
+      # run's resolved model
       CW_PI_MODELS: ${{ secrets.PI_MODELS }}
       # (no ternary in this job's env — a `?` in a reusable workflow's
       # expressions makes the file invalid; the parenthesized &&/|| chain with

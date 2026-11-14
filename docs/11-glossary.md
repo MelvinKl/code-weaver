@@ -41,7 +41,7 @@
   mirrored per iteration into the state dir and fed into the fixer: the
   fix directive names it by path, the fixer reads it on demand
 - **Oracle** — the Gherkin requirements under `requirements/` (17 files,
-  179 scenarios), structured by topic: each file is named after the topic
+  182 scenarios), structured by topic: each file is named after the topic
   it covers, so a search for a topic targets that file instead of sweeping
   the whole oracle; the acceptance tests stage 10 runs, and the set the
   review stage judges — scoped to the feature files each run changed
@@ -97,7 +97,8 @@
   report are unchanged by the stage's absence (the documented
   dependency-upgrade off-form)
 - **Guard** — the shared "only X changed" check (one implementation,
-  three call sites): collects working-tree changes against the stage
+  four call sites — requirement-check, update-check, plan-check,
+  implement-check): collects working-tree changes against the stage
   baseline, compares them against the per-stage set, and repairs a
   violation with a pi call — the off-limits files named, told to be
   reverted, the stage's own work told to stay valid against the task its

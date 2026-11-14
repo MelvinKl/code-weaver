@@ -21,8 +21,9 @@ workflow run from the run's provided harness.
 Key mechanisms:
 
 - **The guard idiom** — one shared "only X changed" check
-  (`.github/scripts/guard-check.py` / `common.guard`) with three call
-  sites (requirement-check, plan-check, implement-check), each with its
+  (`.github/scripts/guard-check.py` / `common.guard`) with four call
+  sites (requirement-check, update-check, plan-check,
+  implement-check), each with its
   own file set: the two earlier checks run the guard as a whitelist (only
   their dir may change), the implement-check runs it INVERTED — the
   implementation's lane is everything EXCEPT the protected set (requirements

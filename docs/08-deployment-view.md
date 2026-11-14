@@ -112,19 +112,24 @@ run's provided harness. The surviving runner pre-requisites are the `gh`
 CLI and a runner user that owns `~/.config` (a root-owned one makes every
 token-bearing `gh` call die with permission-denied).
 
-**The harness providers.** The run's pi harness is provided per run; each
-element resolves to a GitHub secret in the consumer workflow's `secrets:`
-block winning over the named repo file, and an element without a provider
+**The harness providers.** The run's pi harness is provided per run. The
+providers are the GitHub secrets for the model configuration, the
+additional packages, the MCP configuration and the extension's environment
+variables, all set by env vars — each element resolves to the GitHub
+secret in the consumer workflow's `secrets:` block (relayed to the setup
+stage through its `CW_<name>` job env), and a named repo file is no longer
+a provider of any harness element — the stage never reads one as a
+provider, whatever the target's tree holds. An element without a provider
 is cleared from the agent directory — the runner's pre-existing
 user-level configuration is replaced for the run, never what the
 invocation resolves:
 
-| element | GitHub secret | repo file |
-|---|---|---|
-| the model configuration — the run's LLM backend (e.g. the keyless internal swap) is defined in it, and the `llm-model` input selects from its model set | `PI_MODELS` | `.pi/agent/models.json` |
-| the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` | `.pi/settings.json` |
-| the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` | `.pi/mcp.json` |
-| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys — the `CW_*`/state-file relay, and applied at every stage job's entry) | `EXTENSION_ENV` | — (the secret is the provider) |
+| element | provider — the GitHub secret set by env vars |
+|---|---|
+| the model configuration — the run's LLM backend (e.g. the keyless internal swap) is defined in it, and the `llm-model` input selects from its model set; a run whose environment provides no provider for it fails the setup stage (the run's pi configuration is incomplete, no later stage runs) | `PI_MODELS` |
+| the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` |
+| the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` |
+| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys — the `CW_*`/state-file relay, and applied at every stage job's entry) | `EXTENSION_ENV` |
 
 The stage writes each resolved element into the agent directory the run's
 pi invocations resolve (`~/.pi/agent/`, honouring `PI_CODING_AGENT_DIR`):
@@ -149,15 +154,18 @@ provider's variables in the git process environment — git's
 environment-over-configuration precedence makes the provider's account
 the commit's author — with the sanitised push idiom's GIT_CONFIG
 hygiene (chapter 7) standing as the fallback the provider's variables
-override. The repo's `.pi/` files are the repo-file half of the
-providers — a target that commits them steers the run's harness without
-any secret. The checks the stage then runs read only what it
-wrote: a provided model configuration that carries no OpenAI-compatible
-backend URL is not a usable configuration (the stage fails "no backend in
-the provided configuration" — it never falls back to the runner's
-user-level configuration), the backend must answer its reachability
-probe, the selected model must be listed in the written model set, and
-the headless smoke check runs the installed pi.
+override. A named repo file is no longer a provider of any harness
+element — the factory repo's tree carries no `.pi/` directory (the models,
+settings, MCP and extension files the run's harness used to read from it),
+and a target's own committed files are never read as providers either: a
+run's harness comes solely from the GitHub secrets set on the consumer's
+repo — runtime secrets, never tree files. The checks the stage then runs
+read only what it wrote: a provided model configuration that carries no
+OpenAI-compatible backend URL is not a usable configuration (the stage
+fails "no backend in the provided configuration" — it never falls back to
+the runner's user-level configuration), the backend must answer its
+reachability probe, the selected model must be listed in the written model
+set, and the headless smoke check runs the installed pi.
 
 **House CI.** This repo's own gate (`house-ci.yml`, ubuntu-latest,
 uv-managed python) mirrors the shape a target's pull requests run against

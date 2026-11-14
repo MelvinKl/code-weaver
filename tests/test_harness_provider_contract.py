@@ -90,8 +90,9 @@ def test_factory_declares_the_providers_as_optional_secrets():
     `requirements/configuration.feature::Secrets are never plain inputs`) the factory's workflow_call
     secrets: block carries the four provider entries — each declared
     `required: false` (an unset provider arrives empty and the setup
-    stage treats it as an absent provider, the repo file is the
-    fallback) — and GH_TOKEN is the only entry marked `required: true`."""
+    stage treats it as an absent provider — a named repo file is no
+    longer a provider of any harness element) — and GH_TOKEN is the only
+    entry marked `required: true`."""
     block = _workflow_call_secrets_block(_read(FACTORY))
     for name, _input_name in PROVIDERS:
         entry = _secrets_entry(block, name)

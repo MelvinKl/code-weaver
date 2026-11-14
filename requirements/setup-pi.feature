@@ -1,12 +1,13 @@
 # requirements/setup-pi.feature
 # Factory stage 2 — the setup-pi stage installs pi and configures it for
-# this workflow run. The run's pi harness is provided per run: the model
-# configuration via a GitHub secret or the repo file ".pi/agent/models.json",
-# the additional packages via a GitHub secret or ".pi/settings.json" (an
-# empty or absent provider leaves pi without additional packages), the MCP
-# configuration via an optional GitHub secret, and the extension's
-# environment variables (such as the ones ".pi/extensions/pi-jev-config.ts"
-# carries) via a .env-style GitHub secret.
+# this workflow run. The run's pi harness is provided per run — all pi
+# configurations are set by env vars: the model configuration, the
+# additional packages (an empty or absent provider leaves pi without
+# additional packages), the MCP configuration and the extension's
+# environment variables, each via the GitHub secret the consumer
+# workflow's secrets block carries as the element's provider (issue 147
+# removed the repo's .pi directory — a named repo file is no longer a
+# provider of any harness element).
 
 Feature: The setup-pi stage installs and configures pi for the run
   As a maintainer of a target project
@@ -23,7 +24,7 @@ Feature: The setup-pi stage installs and configures pi for the run
 
   @setup
   Scenario: The LLM backend configuration is provided for the run, not a pre-requisite of the environment
-    Given the run's model configuration (the models file) is provided via a GitHub secret or the repo file ".pi/agent/models.json"
+    Given the run's model configuration (the models file) is provided by the run's environment variables (the GitHub secret the consumer workflow's secrets block carries)
     When the setup stage configures pi for the run
     Then the pi LLM backend the run uses is the one in that provided model configuration
     And the stage writes that configuration into the pi agent directory the run's pi invocations resolve
@@ -82,18 +83,18 @@ Feature: The setup-pi stage installs and configures pi for the run
 
   @setup
   Scenario: A provided file without a backend is not a usable configuration
-    Given the provided model configuration (a GitHub secret or the repo file) carries no OpenAI-compatible backend URL
+    Given the provided model configuration (the GitHub secret that provides it) carries no OpenAI-compatible backend URL
     When the setup stage configures pi for the run
     Then the stage fails with an explicit "no backend in the provided configuration" error
     And the runner's pre-existing user-level configuration is never used as the run's configuration
 
   @setup
-  Scenario: The additional packages are provided by a GitHub secret or a repo file
+  Scenario: The additional packages are provided by a GitHub secret
     Given the additional-packages configuration (the settings content) for the run is provided
     When the setup stage configures pi for the run
-    Then the provider is a GitHub secret or the repo file ".pi/settings.json"
+    Then the provider is the run's environment variables (the GitHub secret the consumer workflow's secrets block carries)
     And the run's pi runs with the additional packages the provided settings name
-    And an empty or absent settings provider — with no ".pi/settings.json" in the repo — leaves pi without additional packages
+    And an empty or absent settings provider leaves pi without additional packages
 
   @setup
   Scenario: The MCP configuration is optional
@@ -101,11 +102,11 @@ Feature: The setup-pi stage installs and configures pi for the run
     When the setup stage configures pi for the run
     Then the run proceeds
     And the run's pi runs without MCP servers
-    And where the MCP configuration (the ".pi/mcp.json" content) is provided via a GitHub secret, the stage writes it into the pi agent directory for the run
+    And where the MCP configuration is provided via a GitHub secret, the stage writes it into the pi agent directory for the run
 
   @setup
   Scenario: The additional environment variables are provided via a .env-style GitHub secret
-    Given the pi extension's environment variables (such as the ones ".pi/extensions/pi-jev-config.ts" carries) are provided as a GitHub secret in ".env" style
+    Given the pi extension's environment variables are provided as a GitHub secret in ".env" style
     When the setup stage configures pi for the run
     Then the provided variables are materialised as the extension's environment for the run
     And the run's pi invocations run the extension with those variables
@@ -132,5 +133,26 @@ Feature: The setup-pi stage installs and configures pi for the run
   Scenario: The documentation lists the harness providers
     Given the README and the arc42 deployment chapter describe how the run's pi harness is provided
     When those descriptions are read
-    Then they list the providers — the GitHub secrets and the repo files ".pi/agent/models.json", ".pi/settings.json" and ".pi/mcp.json", plus the ".env"-style secret for the extension's environment variables
+    Then they list the providers — the GitHub secrets for the model configuration, the additional packages, the MCP configuration and the extension's environment variables, all set by env vars
+    And they state a named repo file is no longer a provider of any harness element
     And they state an empty or absent settings provider leaves pi without additional packages
+
+  @setup
+  Scenario: The .pi directory is removed from the factory repo
+    Given the code-weaver repo's committed tree
+    Then the tree contains no .pi directory
+    And no file of the run's pi harness (a models file, a settings file, an mcp file, an extension) is committed in the repo
+
+  @setup
+  Scenario: The run's pi configuration is set by environment variables
+    Given the run's pi harness elements (the model configuration, the additional packages, the MCP configuration, the extension's environment variables)
+    When the setup stage resolves the harness for the run
+    Then each element's provider is the run's environment variables — the GitHub secrets the consumer workflow's secrets block carries
+    And a named repo file is no longer a provider of any harness element
+
+  @setup @safety
+  Scenario: A run whose environment provides no model configuration fails the setup stage clearly
+    Given the run's environment carries no provider for the model configuration
+    When the setup stage runs
+    Then the stage fails with an explicit error that the run's pi configuration is incomplete
+    And no later stage runs

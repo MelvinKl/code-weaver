@@ -459,14 +459,15 @@ try:
     # documented adjustable LLM setting; its resolved value rides the
     # trigger's resolved-config state, which the report job downloads
     # first. The rates come from the run's model configuration itself
-    # — the provider the setup stage materialised (a non-empty
-    # models-configuration secret wins over the repo file
-    # .pi/agent/models.json, which this job resolves the same way): the per-model `cost`
-    # object in its models.json entry carries the USD-per-1M-tokens
-    # rates, and the report lists the rates used with the source it
-    # read them from, so the listed cost is auditable and consistent
-    # with the recorded usage; a model the configuration carries no
-    # cost entry for is listed as unpriced
+    # — the provider the setup stage materialised (the
+    # models-configuration GitHub secret only — a named repo file is
+    # no longer a provider of any harness element — which this job
+    # resolves the same way): the per-model `cost` object in its
+    # models.json entry carries the USD-per-1M-tokens rates, and the
+    # report lists the rates used with the source it read them from, so
+    # the listed cost is auditable and consistent with the recorded
+    # usage; a model the configuration carries no cost entry for is
+    # listed as unpriced
     model = ""
     cfg = state_file("resolved-config.txt")
     if os.path.isfile(cfg):
@@ -477,22 +478,13 @@ try:
                     model = p[1].strip()
                 break
     # the run's model configuration — resolved the way the setup
-    # stage resolves it: a non-empty models-configuration secret
-    # (the CW_ relay this job's env carries) wins over the repo
-    # file .pi/agent/models.json in the workspace
+    # stage resolves it: the models-configuration GitHub secret only
+    # (the CW_ relay this job's env carries) — a named repo file is
+    # no longer a provider of any harness element, so there is no repo
+    # file the configuration could resolve to instead; a run whose
+    # environment carries no provider prices nothing (unpriced)
     models_raw = _cw_in_opt("pi-models")
-    models_source = ("the run's model configuration (a GitHub secret)"
-                      if models_raw
-                      else "the repo file .pi/agent/models.json")
-    if not models_raw:
-        fp = os.path.join(os.environ.get("GITHUB_WORKSPACE") or ".",
-                          ".pi", "agent", "models.json")
-        if os.path.isfile(fp):
-            try:
-                with open(fp, encoding="utf-8") as f:
-                    models_raw = f.read()
-            except OSError:
-                models_raw = None
+    models_source = "the run's model configuration (a GitHub secret)"
     # USD per 1M tokens for the resolved model — the `cost`
     # object of its models.json entry (input, output,
     # cacheRead, cacheWrite). The usage ledger records input and
@@ -537,8 +529,8 @@ try:
                        f"- **Total cost:** unpriced (model `{model}` "
                        "has no cost rates in the run's model "
                        "configuration — put the model's cost rates "
-                       "in .pi/agent/models.json (or the models-"
-                       "configuration secret))")
+                       "in the models-configuration GitHub secret "
+                       "the run's environment provides)")
     else:
         usage_lines = (f"- **Total input tokens:** {tot_in}\n"
                        f"- **Total output tokens:** {tot_out}\n"

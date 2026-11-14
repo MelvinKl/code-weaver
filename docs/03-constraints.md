@@ -3,14 +3,19 @@
 - **No pre-installed or pre-configured pi is a pre-requisite of the runner
   environment.** The factory's setup stage (stage 2) installs pi for the
   run and configures it for the workflow run from the run's provided
-  harness — a GitHub secret or the named repo file per element, written
-  into the agent directory the run's pi invocations resolve — and fails
-  with an explicit message where it cannot install or configure. The `gh`
-  CLI is a runner pre-requisite (trigger / pr-open / gates shell out to
-  it), as is a runner user that owns `~/.config`. The only adjustable LLM
-  setting is which configured model the run uses; the backend is provided
-  for the run (a GitHub secret or the repo file `.pi/agent/models.json`),
-  not a property of the runner.
+  harness — all set by env vars: each element's provider is the run's
+  environment variables, the GitHub secret the consumer workflow's secrets
+  block carries (a named repo file is no longer a provider of any harness
+  element), written into the agent directory the run's pi invocations
+  resolve — and fails with an explicit message where it cannot install or
+  configure (a run whose environment provides no model configuration
+  fails the stage clearly: the run's pi configuration is incomplete). The
+  `gh` CLI is a runner pre-requisite (trigger / pr-open / gates shell out
+  to it), as is a runner user that owns `~/.config`. The only adjustable
+  LLM setting is which configured model the run uses; the backend is
+  provided for the run via the models-configuration GitHub secret (the
+  run's environment variables — a named repo file is no longer a provider
+  of any harness element), not a property of the runner.
 - **Secrets are never plain inputs.** `GH_TOKEN` (repo-scoped, with
   `issues:write` + `pull-requests:write` + `contents:write`) rides the
   reusable workflow's `secrets:` block only; no secret value ever appears

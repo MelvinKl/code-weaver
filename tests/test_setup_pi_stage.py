@@ -7,9 +7,13 @@ the agent directory the run's pi invocations resolve (`~/.pi/agent/`, or
 the action's stage code (loaded the way the implement-guard test loads the
 implement stage's) and run it against a sandbox:
 
-- a non-empty secret provider wins over the named repo file (setup-pi
-  "The model configuration is provided by a GitHub secret or a repo file" —
-  the secret half of the provider pair, for every harness element);
+- the run's environment variables are the only providers — a named repo
+  file is no longer a provider of any harness element, so a repo file
+  placed in the workspace beside an empty or absent secret is never read
+  (setup-pi "The run's pi configuration is set by environment variables",
+  "The additional packages are provided by a GitHub secret" — each
+  element's provider is the run's environment variables, the GitHub secret
+  the consumer workflow's secrets block carries);
 - an empty or absent settings provider yields no additional packages — no
   `settings.json` written, and the runner's pre-existing user-level one
   cleared, never inherited (setup-pi "An empty or absent settings provider
@@ -29,6 +33,10 @@ implement stage's) and run it against a sandbox:
   trigger state relay carries them into each job's env; applied to the
   stage's process environment) — a run without the provider sets no
   variables and is unchanged.
+- the factory repo's tree carries no `.pi` directory — no committed file of
+  the run's pi harness (a models file, a settings file, an mcp file, an
+  extension) is a repo file (setup-pi "The .pi directory is removed from the
+  factory repo");
 
 Plain-stdlib by design (no third-party imports): no-argument `test_`
 functions are auto-discovered by both runners (`tests/run.py` imports every
@@ -131,19 +139,20 @@ class _sandbox:
 
 
 def test_secret_provider_wins_over_repo_file():
-    """(setup-pi "The model configuration is provided by a GitHub secret or
-    a repo file", "The additional packages are provided by a GitHub secret
-    or a repo file", "The MCP configuration is provided via a GitHub secret"
-    — the GitHub-secret half of each provider pair; reference
-    `requirements/setup-pi.feature::The LLM backend configuration is provided for the run, not a
-    pre-requisite of the environment`,
+    """(setup-pi "The additional packages are provided by a GitHub secret",
+    "The LLM backend configuration is provided for the run, not a
+    pre-requisite of the environment", "The MCP configuration is optional"
+    — reference
     `requirements/setup-pi.feature::The additional packages are provided
-    by a GitHub secret or a repo file`,
-    `requirements/setup-pi.feature::The MCP configuration is optional`) a non-empty GitHub
-    secret provider wins over the named repo file: the resolved content is
-    the secret's, for every harness element that carries both a secret and
-    a repo-file provider. A secret value that arrives empty is an absent
-    provider — the repo file is the fallback."""
+    by a GitHub secret`,
+    `requirements/setup-pi.feature::The LLM backend configuration is provided
+    for the run, not a pre-requisite of the environment`,
+    `requirements/setup-pi.feature::The MCP configuration is optional`)
+    a non-empty GitHub secret is the element's provider: the resolved
+    content is the secret's, for every harness element. A named repo file is
+    no longer a provider of any harness element: a repo file placed in the
+    workspace beside an empty or absent secret is never read — the element
+    has no provider, whatever the workspace tree holds."""
     mod = _load_stage()
     with _sandbox() as sb:
         sb.write_repo(".pi/agent/models.json",
@@ -155,35 +164,38 @@ def test_secret_provider_wins_over_repo_file():
                                       '{"baseUrl": "http://secret.example/v1"}}}')
         os.environ["CW_PI_SETTINGS"] = '{"packages": ["npm:from-secret"]}'
         os.environ["CW_PI_MCP"] = '{"mcpServers": {"secret-server": {}}}'
-        for input_name, repo_rel, secret_mark, repo_mark in (
-                ("pi-models", ".pi/agent/models.json",
-                 "secret.example", "repo-file.example"),
-                ("pi-settings", ".pi/settings.json",
-                 "from-secret", "from-repo-file"),
-                ("pi-mcp", ".pi/mcp.json",
-                 "secret-server", "repo-server")):
-            content, source = mod.resolve_provider(input_name, repo_rel)
+        for input_name, secret_mark, repo_mark in (
+                ("pi-models", "secret.example", "repo-file.example"),
+                ("pi-settings", "from-secret", "from-repo-file"),
+                ("pi-mcp", "secret-server", "repo-server")):
+            content, source = mod.resolve_provider(input_name)
             assert content is not None, f"{input_name} has a non-empty secret"
             assert secret_mark in content, \
-                f"the non-empty {input_name} secret must win over the repo file"
+                f"{input_name} resolves the secret's content — the secret " \
+                f"is the element's provider"
             assert repo_mark not in content, \
-                f"the {input_name} repo file must not be read when the secret is set"
+                f"the {input_name} repo file is never read — it is no " \
+                f"longer a provider of any harness element"
         # a secret value that arrives empty (an unset secret) is an absent
-        # provider — the repo file is the fallback
+        # provider — the repo file beside it is never read
         os.environ["CW_PI_MODELS"] = "   "
-        content, source = mod.resolve_provider(
-            "pi-models", ".pi/agent/models.json")
-        assert content is not None and "repo-file.example" in content, \
-            "an empty secret value must fall back to the repo file"
+        assert mod.resolve_provider("pi-models") is None, \
+            "an empty secret is an absent provider — the repo file in the " \
+            "workspace is never read, whatever the tree holds"
+        # an absent secret is the same: the element has no provider
+        os.environ.pop("CW_PI_MODELS", None)
+        assert mod.resolve_provider("pi-models") is None, \
+            "an absent secret is an absent provider — the repo file in the " \
+            "workspace is never read, whatever the tree holds"
 
 
 def test_empty_or_absent_settings_provider_leaves_no_additional_packages():
     """(setup-pi "An empty or absent settings provider leaves pi without
     additional packages"; reference
-    `requirements/setup-pi.feature::The additional packages are provided by a GitHub secret or a
-    repo file`) the harness materialisation writes a
+    `requirements/setup-pi.feature::The additional packages are provided
+    by a GitHub secret`) the harness materialisation writes a
     `settings.json` only for a present provider: with the provider empty or
-    absent (both halves), it CLEARS the agent directory's `settings.json`
+    absent, it CLEARS the agent directory's `settings.json`
     instead — the runner's pre-existing user-level settings (which declare
     packages) is replaced for the run, never inherited, so the run's pi runs
     without any additional packages."""
@@ -197,7 +209,7 @@ def test_empty_or_absent_settings_provider_leaves_no_additional_packages():
             for k, v in provider_env.items():
                 os.environ[k] = v
             agent = os.path.join(sb.home, ".pi", "agent")
-            settings = mod.resolve_provider("pi-settings", ".pi/settings.json")
+            settings = mod.resolve_provider("pi-settings")
             assert settings is None, \
                 f"an empty or absent provider is an absent provider, got {settings!r}"
             written = mod.materialize_harness(
@@ -217,7 +229,7 @@ def test_provided_config_without_backend_fails_and_never_falls_back():
     configuration"; reference
     `requirements/setup-pi.feature::A provided file without a backend is
     not a usable configuration`)
-    a provided model configuration (a GitHub secret or the repo file)
+    a provided model configuration (the GitHub secret that provides it)
     carrying no OpenAI-compatible backend URL triggers the explicit "no
     backend in the provided configuration" failure — and the code path
     never reads the runner's user-level configuration as the run's
@@ -259,6 +271,65 @@ def test_provided_config_without_backend_fails_and_never_falls_back():
              f"runner's user-level one was never read as the run's: {reason!r}")
         assert "backend unreachable" not in reason, \
             "a configuration without a backend fails before any reachability probe"
+
+
+def test_environment_providing_no_model_configuration_fails_the_stage_clearly():
+    """(setup-pi "A run whose environment provides no model configuration
+    fails the setup stage clearly"; reference
+    `requirements/setup-pi.feature::A run whose environment provides no model
+    configuration fails the setup stage clearly`) a run whose environment
+    carries no provider for the model configuration fails the setup stage —
+    a non-zero exit, the stage's failure record stating the run's pi
+    configuration is incomplete (naming the missing provider, the
+    PI_MODELS secret the consumer workflow's secrets block must carry,
+    beside the standing "pi installation or configuration failed" wording),
+    and the reachability / smoke checks never running — the no-later-stage
+    half rides the stage job's failure propagating through the job gates the
+    stage contract already pins. A repo file placed in the workspace beside
+    the absent provider is never read — a named repo file is no longer a
+    provider of any harness element (the tree no longer holds one to
+    consult)."""
+    mod = _load_stage()
+    with _sandbox() as sb:
+        # a repo file in the workspace tree — the stage must never read it
+        sb.write_repo(".pi/agent/models.json",
+                      '{"providers": {"repo": '
+                      '{"baseUrl": "http://repo-file.example/v1"}}}')
+        # a stand-in installed pi — the check's smoke half would run this
+        fake_pi = os.path.join(sb.rt, "fake-pi")
+        with open(fake_pi, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\nprint('OK')\n")
+        os.chmod(fake_pi, 0o755)
+        agent = os.path.join(sb.home, ".pi", "agent")
+        # the sandbox's environment carries no model-configuration provider
+        assert mod.resolve_provider("pi-models") is None, \
+            "no provider in the environment — a repo file in the workspace " \
+            "is never read, whatever the tree holds"
+        code = None
+        try:
+            mod.check_run_configuration(None, "any-model", agent, fake_pi)
+        except SystemExit as e:
+            code = e.code
+        assert code == 1, \
+            f"the stage must exit non-zero where the environment provides " \
+            f"no model configuration, exit code {code!r}"
+        reason = open(os.path.join(sb.rt, "cw", "stage-fail-reason.txt"),
+                      encoding="utf-8").read()
+        assert "pi installation or configuration failed" in reason, \
+            f"the failure keeps the standing explicit wording: {reason!r}"
+        assert "the run's pi configuration is incomplete" in reason, \
+            f"the failure must state the run's pi configuration is " \
+            f"incomplete: {reason!r}"
+        assert "PI_MODELS" in reason, \
+            f"the failure must name the missing provider (the PI_MODELS " \
+            f"secret): {reason!r}"
+        assert "repo-file.example" not in reason, \
+            "a repo file in the workspace was never read as the run's " \
+            "configuration"
+        assert "backend unreachable" not in reason, \
+            "an absent provider fails before any reachability probe"
+        assert "smoke" not in reason, \
+            "an absent provider fails before the smoke check runs"
 
 
 def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir():
@@ -306,11 +377,9 @@ def test_harness_write_targets_the_agent_directory_honoring_pi_coding_agent_dir(
             "PI_JEV_THINKING=1\n"
             "PI_JEV_BASE_URL=http://laya.example/\n"
             "# a comment line carries no variable\n")
-        models = mod.resolve_provider("pi-models",
-                                      os.path.join(".pi", "agent", "models.json"))
-        settings = mod.resolve_provider("pi-settings",
-                                        os.path.join(".pi", "settings.json"))
-        mcp = mod.resolve_provider("pi-mcp", os.path.join(".pi", "mcp.json"))
+        models = mod.resolve_provider("pi-models")
+        settings = mod.resolve_provider("pi-settings")
+        mcp = mod.resolve_provider("pi-mcp")
         ext = mod.resolve_extension_env()
         assert ext is not None and "PI_JEV_THINKING=1" in ext
         written = mod.materialize_harness(models, settings, mcp, ext, custom)
@@ -483,4 +552,29 @@ def test_pi_calls_need_no_path_help_where_pi_is_already_resolved():
             os.environ["PATH"] = base_path
         assert os.environ["PATH"] == base_path, \
             "a runner whose PATH already resolves pi is modified"
+
+
+def test_repo_tree_contains_no_dot_pi_directory():
+    """(setup-pi "The .pi directory is removed from the factory repo"; reference
+    `requirements/setup-pi.feature::The .pi directory is removed from the factory repo`)
+    the factory repo's tree contains no `.pi` directory: no `.pi`-prefixed
+    path is committed — no file of the run's pi harness (a models file, a
+    settings file, an mcp file, an extension) is a repo file, so nothing in
+    the tree still names a repo-file provider. The scenario's committed
+    tree is read as the repo tree: the suite's tests never invoke the real
+    git binary, so the check walks the checkout (its `.git` directory is
+    git's own bookkeeping, not the tree) and finds no `.pi` entry at any
+    depth."""
+    dot_pi = []
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        if ".git" in dirnames:
+            dirnames.remove(".git")
+        rel = os.path.relpath(dirpath, ROOT)
+        for name in dirnames + filenames:
+            entry = name if rel == "." else os.path.join(rel, name)
+            if entry == ".pi" or entry.startswith(".pi" + os.sep):
+                dot_pi.append(entry)
+    assert dot_pi == [], (
+        "the factory repo's tree contains no `.pi` directory — no "
+        f"`.pi`-prefixed path may be committed, found {sorted(dot_pi)!r}")
 

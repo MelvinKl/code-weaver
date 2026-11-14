@@ -96,8 +96,14 @@
   run's extraction delta supersedes the scenario (the extraction stage
   updates a superseded standing scenario in place and reports it; the
   review stage judges it), or the owner makes the rename + When edit in
-  `requirements/trigger.feature` directly (a follow-up issue). Until
-  then the oracle stands as #20 reported it.
+  `requirements/trigger.feature` directly (a follow-up issue) — and that
+  is the path the edit took: the issue-147 delta made the rewording land in
+  place, `trigger.feature`'s opening scenario now reads "An opened issue
+  starts the factory once the label is added" and its When step is "the
+  label `ai-requirements` is added to the issue" (the Then steps — the
+  factory runs and records the issue number and the issue body —
+  unchanged; the outcome rides the `labeled` event, the form chapter 7's
+  runtime view already describes). The open item is closed.
 - **Four standing scenarios superseded by #43 — landed by the issue-69
   run** — the issue-43 delta's header
   (`cost-and-token-usage.feature`) declares four standing
@@ -142,14 +148,16 @@
   LLM setting; its resolved value rides the trigger's resolved-config state
   the report job downloads), at the rates the run's model configuration
   declares for that model — the `cost` object of the model's entry in the
-  configuration the setup stage materialises (a non-empty `PI_MODELS`
-  secret wins over the repo file `.pi/agent/models.json`; the report job
-  resolves the same provider and lists the source it read the rates from,
-  so the cost is auditable against the run's own configuration). A
+  configuration the setup stage materialises (the models-configuration
+  GitHub secret only — a named repo file is no longer a provider of any
+  harness element; the report job resolves the same provider and lists the
+  source it read the rates from, so the cost is auditable against the
+  run's own configuration). A
   target's model configuration with no `cost` entry for its model is listed
   as *unpriced* in the report (the usage totals are listed regardless) —
-  the owner adds the model's cost rates to the target's `models.json` (or
-  the `PI_MODELS` secret) when a new model joins its configured set.
+  the owner adds the model's cost rates to the `PI_MODELS` secret (the
+  models-configuration GitHub secret the run's environment provides) when
+  a new model joins its configured set.
 - **arc42 structure varies per target** — the extraction prompt
   tolerates the structural difference: extraction proceeds on the
   readable parts; a missing, renamed or reordered chapter is never a

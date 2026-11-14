@@ -38,9 +38,11 @@ this repo's reusable workflow takes over:
    workflow run: every later pi invocation in the run uses that installed
    copy, and the stage materialises the run's provided harness — the model
    configuration, the additional packages, the MCP configuration, the
-   extension's environment variables — resolving each element's provider
-   (a non-empty GitHub secret wins over the named repo file) into the agent
-   directory the run's pi invocations resolve (`~/.pi/agent/`, or
+   extension's environment variables, all set by env vars — resolving each
+   element's provider (the run's environment variables — the GitHub secret
+   the consumer workflow's `secrets:` block carries; a named repo file is
+   no longer a provider of any harness element) into the agent directory
+   the run's pi invocations resolve (`~/.pi/agent/`, or
    `PI_CODING_AGENT_DIR`). A non-empty `EXTENSION_ENV` is, in
    addition to that materialisation, set as environment variables in the
    environment of every pi invocation of the run — every stage job
@@ -237,10 +239,11 @@ jobs:
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
       # the run's pi harness providers — optional: an unset secret arrives
-      # empty and stage 2 treats it as an absent provider (the repo's
-      # .pi/agent/models.json, .pi/settings.json and .pi/mcp.json are the
-      # fallbacks — the extension's env is secret-only: it has no repo-file
-      # fallback, and it is the one provider a correct run must set); never a plain input
+      # empty and stage 2 treats it as an absent provider (a named repo
+      # file is no longer a provider of any harness element — the run's
+      # harness comes solely from the GitHub secrets set on the consumer's
+      # repo: runtime secrets, never tree files — and the extension's env
+      # is the one provider a correct run must set); never a plain input
       PI_MODELS: ${{ secrets.PI_MODELS }}
       PI_SETTINGS: ${{ secrets.PI_SETTINGS }}
       PI_MCP: ${{ secrets.PI_MCP }}
@@ -319,27 +322,37 @@ never empty for a release that publishes changes.
 | `auto-update` | `true` | whether the run's pipeline runs the update stage — the stage updates every requirement in the oracle to its newest version (a scenario that no longer holds against the project's current state is updated in place — a requirement already at its newest version — including the ones this run's extraction just derived — is left untouched — and a Gherkin requirement that prohibits a requirement from being updated leaves that requirement at its current version), between the requirement-extraction and the planning stages; set it to `off` in the `with:` block = the pipeline runs without the stage (the run's stages, pull request and final status report are unchanged by the stage's absence) |
 | `factory-ref` | *(empty)* | **legacy no-op** — still declared so a `with:` block written for an older version of this file stays schema-valid; no stage reads it anymore: the runtime tree is fetched by the first job from the called version — the ref the `uses:` line selected, recovered by the trigger, never relayed — so the ref on the `uses:` line is the only pin a run makes (the factory project's own repo pins the public release line too — a run triggered in it works the code of the repo it was triggered in, and the dogfood exercises the published version its external targets get, chapter 8) |
 
-The **LLM backend is provided for the run** — via a GitHub secret or the
-repo file `.pi/agent/models.json`. The runner's pre-existing user-level
-configuration is replaced for the run, never what the invocation
-resolves. Stage 2 installs pi for the run, resolves the harness providers
-(a non-empty GitHub secret wins over the named repo file), writes the
-harness into the agent directory the invocation resolves, then verifies —
-backend reachability → the model in the set the stage wrote → a headless
-smoke check of the installed pi — and fails with an explicit message if
-any of that is missing.
+The **LLM backend is provided for the run** — via the
+models-configuration GitHub secret (the run's environment variables; a
+named repo file is no longer a provider of any harness element). The
+runner's pre-existing user-level configuration is replaced for the run,
+never what the invocation resolves. Stage 2 installs pi for the run,
+resolves the harness providers (each element's provider is the run's
+environment variables — the GitHub secret the consumer workflow's
+`secrets:` block carries), writes the harness into the agent directory the
+invocation resolves, then verifies — backend reachability → the model in
+the set the stage wrote → a headless smoke check of the installed pi — and
+fails with an explicit message if any of that is missing (a run whose
+environment provides no model configuration fails the stage clearly: the
+run's pi configuration is incomplete, and no later stage runs).
 
-**The run's pi harness is provided per run.** Each element rides a GitHub
-secret in the consumer workflow's `secrets:` block (the four optional
-provider secrets of the example above; `GH_TOKEN` stays the only required
-one), a non-empty secret winning over the named repo file:
+**The run's pi harness is provided per run.** The providers are the
+GitHub secrets for the model configuration, the additional packages, the
+MCP configuration and the extension's environment variables, all set by
+env vars — each element rides the GitHub secret in the consumer
+workflow's `secrets:` block (the four optional provider secrets of the
+example above; `GH_TOKEN` stays the only required one) — and a named repo
+file is no longer a provider of any harness element, so a run's harness
+comes solely from those secrets (an element without a provider is cleared
+from the agent directory, never read from a file or inherited from the
+runner's user-level configuration).
 
-| harness element | GitHub secret | repo file |
-|---|---|---|
-| the model configuration — the run's LLM backend is defined in it | `PI_MODELS` | `.pi/agent/models.json` |
-| the additional-packages settings | `PI_SETTINGS` | `.pi/settings.json` |
-| the MCP configuration | `PI_MCP` | `.pi/mcp.json` |
-| the extension's environment variables — a `.env`-style secret, such as the ones `.pi/extensions/pi-jev-config.ts` carries; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys, and applied at every stage job's entry) | `EXTENSION_ENV` | — (the secret is the provider) |
+| harness element | provider — the GitHub secret set by env vars |
+|---|---|
+| the model configuration — the run's LLM backend is defined in it; a run whose environment provides no provider for it fails the setup stage (the run's pi configuration is incomplete, no later stage runs) | `PI_MODELS` |
+| the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` |
+| the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` |
+| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys, and applied at every stage job's entry) | `EXTENSION_ENV` |
 
 The extension's environment is the run's commit-identity provider, and
 the only one: the factory writes no git identity of its own, so the
@@ -451,7 +464,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published; and (`--verify-structure`, the flow's second pre-tag step): the committed file's job/step graph parses to the pinned shape under every standard engine, no step declares keys after its run block, no run block past the giant-body budget, no run block's heredoc terminator indented past the block's base, no `python3` code-heredoc body indented past the block's base, and no block opens a heredoc it never terminates — a file the gate's shape checks fail is never published
 pi-prompts/            the pi prompt templates (requirements, update, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (17 files, 179 scenarios)
+requirements/          the Gherkin oracle for THIS repo (17 files, 182 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -459,7 +472,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **179 Gherkin scenarios** — the oracle this
+`requirements/` holds **182 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

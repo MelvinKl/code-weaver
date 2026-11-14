@@ -1,5 +1,6 @@
 # requirements/guard-rail.feature
-# Factory stages 5, 7, 9 — the shared "only X changed" check:
+# Factory stages 5, 7, 9 — plus the update stage's check — the shared
+# "only X changed" check:
 # collect working-tree changes since the baseline, compare them against the
 # per-stage file set, and repair a violation with a pi call — the off-limits
 # files named, told to be reverted, the stage's own work told to stay valid —
@@ -19,7 +20,7 @@ Feature: Only-X-changed guard-rail
     Given the requirement-extraction stage only touched files under requirements/
     When the requirement-check stage compares the working tree against the baseline
     Then the check reports OK
-    And the pipeline proceeds to the plan stage
+    And the pipeline proceeds to the update stage and then to the plan stage
 
   @guard
   Scenario: A leaking stage is repaired by a pi call, not restarted
@@ -30,12 +31,13 @@ Feature: Only-X-changed guard-rail
     And the call instructs pi to revert the changes to the named files
     And the call instructs pi to keep the stage's own work valid against the task its initial instructions gave it
     And the allowed changes under requirements/ stay intact
-    And a clean re-check lets the pipeline proceed to the plan stage without re-running the extraction stage
+    And a clean re-check lets the pipeline proceed to the update stage and then to the plan stage without re-running the extraction stage
 
   @guard
   Scenario: The allowed file set is per-stage
     Given the pipeline defines an allowed file set per check stage
     Then the requirement-check allows only requirements/
+    And the update-check allows only requirements/
     And the plan-check allows only plans/
     And the implement-check allows everything except requirements/ and the other issues' plans
     And the implement-check does not allow requirements/
@@ -55,8 +57,8 @@ Feature: Only-X-changed guard-rail
     Then the pipeline stops with a failure report listing the violations
 
   @guard
-  Scenario: All three checks share one implementation
-    Given the checks are implemented as one shared guard (one script, three call sites)
+  Scenario: All four checks share one implementation
+    Given the checks are implemented as one shared guard (one script, four call sites)
     Then each check collects the files changed against its own baseline
     And compares them against its per-stage allowed set
     And repairs a violation with a pi call — the off-limits files named, told to be reverted, the stage's own work told to stay valid

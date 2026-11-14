@@ -12,9 +12,9 @@ Feature: Factory trigger
     And the factory is configured with the default label "ai-requirements"
 
   @trigger
-  Scenario: Issue opened with the label starts the factory
+  Scenario: An opened issue starts the factory once the label is added
     Given an issue is opened in the target repo
-    When the issue carries the label "ai-requirements"
+    When the label "ai-requirements" is added to the issue
     Then the factory workflow runs
     And the factory records the issue number and the issue body
 

@@ -15,11 +15,12 @@ scenarios of `requirements/setup-pi.feature`:
   pre-installed or pre-configured pi is a pre-requisite of the runner
   environment;
 - "The documentation lists the harness providers" — the README and the
-  deployment chapter list the providers (the GitHub secrets and the repo
-  files `.pi/agent/models.json`, `.pi/settings.json` and
-  `.pi/mcp.json`, plus the `.env`-style secret for the extension's
-  environment variables) and state that an empty or absent settings
-  provider leaves pi without additional packages;
+  deployment chapter list the providers as the GitHub secrets for the
+  model configuration, the additional packages, the MCP configuration and
+  the extension's environment variables, all set by env vars, state that
+  a named repo file is no longer a provider of any harness element, and
+  keep stating that an empty or absent settings provider leaves pi without
+  additional packages;
 - negative — no surface still states the retired verify-only mechanism.
 
 The readers follow the release-contract module's `_doc_surfaces` /
@@ -111,17 +112,15 @@ RETIRED_MARKERS = (
 )
 
 # The provider list the README and the deployment chapter must carry
-# (setup-pi "The documentation lists the harness providers"): the
-# repo-file half under `.pi/`, the `.env`-style secret for the
-# extension's environment variables, the GitHub-secret form, and the
+# (setup-pi "The documentation lists the harness providers"): the GitHub
+# secrets for the four harness elements — all set by env vars — the
+# "a named repo file is no longer a provider of any harness element"
+# statement (issue 147 removed the repo's `.pi` directory — a named repo
+# file is no longer a provider of any harness element), and the
 # empty-settings consequence.
 PROVIDER_MARKERS = (
-    ".pi/agent/models.json",
-    ".pi/settings.json",
-    ".pi/mcp.json",
-    ".env",
-    "extension's environment",
-    "github secret",
+    "the github secrets for the model configuration, the additional packages, the mcp configuration and the extension's environment variables, all set by env vars",
+    "a named repo file is no longer a provider of any harness element",
     "an empty or absent settings provider leaves pi without additional packages",
 )
 
@@ -181,14 +180,18 @@ def test_documented_surfaces_state_no_pi_prerequisite():
 
 
 def test_documentation_lists_the_harness_providers():
-    """(setup-pi "The documentation lists the harness providers" — new,
-    @docs; reference
+    """(setup-pi "The documentation lists the harness providers" —
+    adjusted: the Then outcomes now require the secrets-all-set-by-
+    env-vars listing and the "a named repo file is no longer a provider"
+    statement; reference
     `requirements/setup-pi.feature::The documentation lists the harness
-    providers`) the README and the arc42 deployment chapter list the providers
-    — the GitHub secrets and the repo files `.pi/agent/models.json`,
-    `.pi/settings.json` and `.pi/mcp.json`, plus the `.env`-style secret
-    for the extension's environment variables — and state that an empty
-    or absent settings provider leaves pi without additional packages."""
+    providers`) the README and the arc42 deployment chapter list the
+    providers — the GitHub secrets for the model configuration, the
+    additional packages, the MCP configuration and the extension's
+    environment variables, all set by env vars — and state that a named
+    repo file is no longer a provider of any harness element, and that an
+    empty or absent settings provider leaves pi without additional
+    packages."""
     for relpath in ("README.md", "docs/08-deployment-view.md"):
         low = _by_relpath()[relpath].lower()
         for marker in PROVIDER_MARKERS:

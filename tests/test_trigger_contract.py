@@ -132,6 +132,8 @@ def test_factory_trigger_gate_unchanged():
     """(scenarios "Adding the trigger label still starts the factory and
     records the issue" and "Adding a label that is not the trigger label
     leaves the factory idle"; reference
+    `requirements/trigger.feature::An opened issue starts the factory once
+    the label is added`,
     `requirements/trigger.feature::Editing an issue to add the label starts
     the factory`,
     `requirements/labeled-only-trigger.feature::Adding a label that is not
