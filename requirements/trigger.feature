@@ -72,3 +72,12 @@ Feature: Factory trigger
     When the trigger stage records a run for an issue that carries both labels
     Then the run's recorded state carries that the issue is a bug issue
     And every later stage job receives that state through the trigger's artifact
+
+  @trigger
+  Scenario: The trigger records whether the consumer declares the extension-env provider
+    Given the trigger's resolve-the-called-version step fetches and parses the consumer's workflow at the run's base ref
+    When the trigger stage records the run's state for a consumer whose secrets block does (or does not) declare the extension-env provider
+    Then the recorded state carries the provider-declaration flag — presence only, true where the block declares the provider
+    And the flag rides the trigger's artefact to every later stage job
+    And the per-job Read trigger state relay exports the flag into the job's environment like the other trigger-state keys
+    And no value of the provider appears in the recorded state — the workflow's text carries the secret's expression, never its content

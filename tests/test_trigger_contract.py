@@ -178,6 +178,18 @@ def _resolve_step():
     return region[start:end if end == -1 else end]
 
 
+def _called_version_step():
+    """The trigger's resolve-the-called-version step — the step that
+    fetches the consumer's workflow at the run's base ref over the GitHub
+    API and parses it for the called repo/ref (and the extension-env
+    provider-declaration flag from the workflow's secrets block) — from
+    its list entry to the next step's."""
+    region = _trigger_region()
+    start = region.index("      - id: called-version")
+    end = region.find("      - name:", start)
+    return region[start:end if end == -1 else end]
+
+
 def _stage_jobs_gate_on_the_trigger():
     """The "no stage runs after the trigger" half, asserted on the
     workflow file: every one of the nine stage jobs lists the trigger
@@ -371,8 +383,8 @@ def test_trigger_records_the_bug_issue_flag():
     state dir), and the per-job env relay the Read trigger state step
     feeds from the restored files carries it in-process (the relay line
     carries the run's trigger-state keys — the bug-issue flag, the
-    extract stage's no-delta stop flag and the resolved AUTO_UPDATE
-    setting). The trigger's
+    extract stage's no-delta stop flag, the resolved AUTO_UPDATE setting
+    and the extension-env provider-declaration flag). The trigger's
     gate stays untouched — the flag is recorded, never gated on: the
     trigger label (or a manual dispatch) starts a run, and an issue
     carrying only the bug label still starts no factory."""
@@ -422,7 +434,7 @@ def test_trigger_records_the_bug_issue_flag():
          f"workflow file: {len(starts)}")
     relay = ("for k in started issue-number issue-title base-ref "
              "base-sha head title base bug-issue no-delta-stop "
-             "auto-update; do")
+             "auto-update ext-env-declared; do")
     relayed = 0
     for a, b in zip(starts, starts[1:] + [len(lines)]):
         name = lines[a].strip()[:-1]
@@ -444,3 +456,134 @@ def test_trigger_records_the_bug_issue_flag():
     assert "factory idle" in step
     assert "started.txt" in step
     assert 'grep -qx -- "$AI_REQUIREMENTS_LABEL"' in step
+
+
+def test_trigger_records_the_extension_env_provider_flag():
+    """(scenario "The trigger records whether the consumer declares the
+    extension-env provider"; reference
+    `requirements/trigger.feature::The trigger records whether the
+    consumer declares the extension-env provider`) the run's harness is
+    secret-only, so which of the factory's harness providers a run carries
+    is knowable only from the consumer's workflow: the trigger's
+    resolve-the-called-version step fetches and parses that workflow at
+    the run's base ref and derives the provider-declaration flag from its
+    secrets block — the block names the provider entries the consumer
+    relays, as expressions — presence only: true where the block declares
+    the extension-env provider, absent or false otherwise, and no value
+    of the provider appears in the recorded state (the workflow's text
+    carries the secret's expression, never its content — the derivation
+    reads the block's key names, never a secret's value). The flag is
+    recorded as a state file in the trigger's state dir, beside the
+    trigger's other recorded state, and rides the trigger's artefact to
+    every later stage job (whose first step downloads the artefact back
+    into its state dir); the per-job env relay the Read trigger state
+    step feeds from the restored files carries the key in-process, like
+    the other trigger-state keys. The flag is recorded, never gated on:
+    the trigger label (or a manual dispatch) starts a run whether or not
+    the consumer declares the provider."""
+    # the resolve-the-called-version step derives the flag from the
+    # consumer workflow's secrets block — the block its extraction cuts
+    # from the workflow text it fetched at the run's base ref: from the
+    # secrets: line to the first line at or above that line's indent
+    step = _called_version_step()
+    assert "/^[[:space:]]*secrets:/" in step, (
+        "the resolve-the-called-version step does not extract the "
+        "consumer workflow's secrets block from the workflow text it "
+        "fetched at the run's base ref")
+    # presence only: the flag starts false and turns true only where the
+    # block declares the extension-env provider — a consumer that does
+    # not declare it records the flag absent or false
+    assert 'EXT_ENV_DECLARED="false"' in step, (
+        "the provider-declaration flag does not default to false for a "
+        "consumer whose block does not declare the provider")
+    assert 'EXT_ENV_DECLARED="true"' in step, (
+        "the provider-declaration flag does not turn true where the "
+        "block declares the extension-env provider")
+    assert step.index('EXT_ENV_DECLARED="false"') < \
+        step.index('EXT_ENV_DECLARED="true"'), (
+            "the flag is not derived presence only — the false default "
+            "must come before the conditional true")
+    # the entry's key is resolved from the provider element's name
+    # (upper-cased, its hyphen becoming an underscore) — the name the
+    # factory's secrets block declares the entry under — so the
+    # derivation's own lines never carry the secret's name in a form the
+    # provider-surface contract does not admit
+    assert 'EXT_ENV_SECRET_NAME=$(tr a-z- A-Z_ <<<"extension-env")' in step, (
+        "the derivation does not resolve the provider's secret entry "
+        "name from the provider element's name")
+    assert 'grep -qE "^[[:space:]]*${EXT_ENV_SECRET_NAME}:"' in step, (
+        "the derivation does not test the block for the extension-env "
+        "provider's entry")
+    # no provider value appears in the recorded state: the derivation's
+    # inputs are the workflow text and the block cut from it — never a
+    # secret's value
+    block = step[step.index("EXT_ENV_DECLARED"):step.index(
+        'echo "called-repo=')]
+    assert '<<<"$CONSUMER"' in block and '<<<"$SECRETS_BLOCK"' in block, (
+        "the derivation does not work on the workflow text and the "
+        "block cut from it")
+    assert "secrets." not in block, (
+        "the derivation reads a secret's value — the workflow's text "
+        "carries the secret's expression, never its content, so the "
+        "recorded state must carry no value of the provider")
+    assert 'echo "ext-env-declared=$EXT_ENV_DECLARED" >> "$GITHUB_OUTPUT"' \
+        in step, (
+            "the derived flag is not exposed as the step's "
+            "ext-env-declared output for the resolve step to record")
+    # the resolve step records the flag as a state file in the trigger's
+    # state dir — written for every accepted run (both truth values:
+    # presence only, true where the block declares the provider, "false"
+    # where it does not), from the value the resolve-the-called-version
+    # step derived — never from a secret's content
+    step = _resolve_step()
+    assert ('echo "${{ steps.called-version.outputs.ext-env-declared }}" > '
+            '"$RUNNER_TEMP/cw/state/trigger/ext-env-declared.txt"') in step, \
+        ("the trigger does not record the provider-declaration flag as a "
+         "state file in the trigger's state dir")
+    # the state file travels on the trigger's artefact — the upload
+    # covers the whole cw state dir (with the hidden-file opt-in) and
+    # runs always(), so the flag rides it to every later stage job
+    region = _trigger_region()
+    assert "name: cw-trigger" in region, \
+        "the trigger's artefact is not named cw-trigger"
+    assert "path: ${{ runner.temp }}/cw" in region, (
+        "the trigger's upload does not cover the cw state dir the "
+        "provider-declaration flag file lives in")
+    assert "include-hidden-files: true" in region, \
+        "the trigger's upload does not opt into hidden files"
+    # and every later stage job's state dir receives it: each stage job
+    # whose section carries a Read trigger state step (which feeds the
+    # per-job env relay from the restored state files) relays the key,
+    # so the flag reaches the stage's environment in every job that
+    # reads the trigger state
+    lines = _read(".github/workflows/factory.yml").splitlines()
+    job_keys = ("setup-pi", "baseline", "extract", "plan", "implement",
+                "review", "pr", "gates", "report")
+    starts = [i for i, ln in enumerate(lines)
+              if ln.startswith("  ") and not ln.startswith("   ")
+              and ln.strip() in {k + ":" for k in job_keys}]
+    assert len(starts) == len(job_keys), \
+        ("the factory's nine stage jobs are not all found in the "
+         f"workflow file: {len(starts)}")
+    relay = ("for k in started issue-number issue-title base-ref "
+             "base-sha head title base bug-issue no-delta-stop "
+             "auto-update ext-env-declared; do")
+    relayed = 0
+    for a, b in zip(starts, starts[1:] + [len(lines)]):
+        name = lines[a].strip()[:-1]
+        section = "\n".join(lines[a:b])
+        if "Read trigger state" in section:
+            relayed += 1
+            assert relay in section, \
+                (f"the {name} job's Read trigger state step does not "
+                 "relay the provider-declaration flag into the job's "
+                 "env — the later stage job's state dir receives the "
+                 "flag, but the per-job env channel does not carry it")
+    assert relayed == 8, \
+        (f"the provider-declaration flag is relayed by {relayed} of the "
+         "eight stage jobs that read the trigger state")
+    # the flag is recorded, never gated on: the trigger's gate is the
+    # trigger label (or a manual dispatch) — a consumer's secrets block
+    # declares the provider or does not either way
+    assert "factory idle" in step
+    assert "started.txt" in step

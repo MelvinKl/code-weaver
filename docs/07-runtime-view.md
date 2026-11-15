@@ -8,12 +8,18 @@ name), validates it before the run is recorded or accepted, records it
 as state files — the recorded state carries, beside them, the
 bug-issue flag: the issue's labels compared against the resolved bug
 label (the `bug-label` input's value, its `bug` default where the
-consumer leaves the input undeclared); the flag is recorded, never
-gated on — the trigger label, or a manual dispatch, starts the run, and
-an issue carrying only the bug label starts no factory — and it rides
-the state channel like every other trigger value (every value a file;
+consumer leaves the input undeclared), and the provider-declaration
+flag: presence only, true where the consumer workflow's `secrets:`
+block declares the extension-env provider — the resolve-the-called-
+version step derives it from that block (the workflow's text carries
+the secret's expression, never its content, so no value of the
+provider is recorded) — and the flags are recorded, never gated on —
+the trigger label, or a manual dispatch, starts the run, and an issue
+carrying only the bug label starts no factory — and they ride the
+state channel like every other trigger value (every value a file;
 the files travel on the trigger's artifact to every later stage job,
-whose Read trigger state step relays them into the job's env) — and
+whose Read trigger state step relays them into the job's env like the
+other trigger-state keys) — and
 lists the run's resolved fastmode threshold — the target's
 declared `fastmode-threshold` value, or the `5`-step default where the
 consumer leaves the input undeclared — beside the run's resolved job
@@ -55,7 +61,37 @@ the state dir (`$RUNNER_TEMP/cw/`), where every value is a file — the
 artifact is the stage-results channel (a job-outputs relay was observed
 dropping a value for one downstream job while the next job received it;
 `GITHUB_ENV`, fed by the trigger artifact's state files, is the per-job
-in-process channel). The stage records its stage baseline (the branch
+in-process channel). Every stage job then runs the shared stage-entry
+delivery check before any stage work or pi call of the stage: for each
+of the run's four harness providers (the model configuration, the
+additional packages, the MCP configuration, the extension's
+environment), the ones declared for the run must have their recorded
+values restored into the job — both relay halves: the state files
+present in the restored state dir (the writer stage's recorded values
+ride the cumulative artefact chain there — the extension env's values
+one value a file, the value-carrying providers' declaration and recorded
+value one file each) and the values carried in the job's env by the
+per-job Read trigger state relay (a declaration and a single-line
+delivery marker per value-carrying provider, and the `CW_EXT_ENV_KEYS`
+marker for the extension env's values). A declared provider whose
+recorded values did not arrive — neither half delivered — fails the stage
+at its entry before any pi call of the stage is spent: the check logs
+which relay half delivered what — the job's environment and the state
+dir — the stage's artefact carries the one-line reason, and the run's
+artefact log names the relay loss as the failure's cause; a harness that
+would otherwise fall back silently (an element that would run absent
+when its provider is absent) is treated as the same class of loss —
+declared-but-lost fails the entry check instead of degrading quietly. A
+provider that is not declared passes the check — the run is unchanged:
+no files, no flag, no spurious failure. The stage that records the
+providers' values is the writer: its own entry check verifies no prior
+delivery and passes (a vacuous pass); the other stage jobs' entry checks
+verify that stage's delivery. Each stage records its delivery check's
+outcome as a line on the stage-summary channel — one line per stage:
+"extension env: delivered (N values)", "extension env: missing
+(provider declared)", or "extension env: n/a (no provider)" — the full
+delivery picture the final status report and the run's artefact log
+render from those lines. The stage records its stage baseline (the branch
 tip as the stage started) so its guard judges only that stage's work;
 earlier stages' committed outputs are never off-limits. The no-delta
 stop's run-level signal rides the same state channel: where the extract
@@ -111,8 +147,9 @@ the upgrade's absence. The report job's
 inlined status-report step draws its plumbing names across the same stash
 boundary (chapter 6: the runtime tree in `$RUNNER_TEMP`): where the shared
 module resolves from the stashed tree the step's `import common` binds the
-body's five bare-name plumbing calls (the state dir, the state file, the
-log, the gh api, the branch push) to the shared module's definitions; where
+body's six bare-name plumbing calls (the state dir, the state file, the
+log, the gh api, the branch push, the stage-entry delivery check) to the
+shared module's definitions; where
 the module does not resolve on that runner, the step's `ImportError`
 branch binds the same names to local fallback definitions in the step —
 the body's calls are unchanged on both paths, and the reports the two
@@ -204,7 +241,11 @@ is listed as skipped, never as "stage complete" (a stage that did no work
 is not a done stage; a completion line it recorded alongside stays out of
 the outcome), and a stage that will re-run — the implement stage's
 per-step "step <k>/<n> done" lines recorded without a completion line —
-is reported per step for each of its finished steps. The report stage
+is reported per step for each of its finished steps. Beside each
+stage's outcome lines, the stage's delivery line (the stage-entry
+delivery check's outcome on the same channel) renders — the final
+status report and the run's artefact log carry the full delivery
+picture, one line per stage that ran. The report stage
 re-reads the PR after editing its body and keeps the pointer comment
 ("final status is in the PR body") only where that completion verified; where it could not
 be applied — the PR was already merged, or the edit was refused on both

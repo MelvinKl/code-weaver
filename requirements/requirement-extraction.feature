@@ -10,7 +10,7 @@ Feature: Requirement extraction
   so that the requirements are grounded in the project's current state instead of being invented
 
   Background:
-    Given pi is pre-installed and pre-configured in the runner environment
+    Given pi is installed and configured for the run by the setup-pi stage
     And the factory works on an AI branch cut from the issue's base branch
     And a run for an issue whose AI branch already exists reuses that branch instead of re-cutting it
     And the issue body is available to the factory

@@ -42,7 +42,7 @@ Feature: Implementation
     Given the plan file still has open steps after a step is marked done
     When the implement stage is called again
     Then it works the next open step and marks it done
-    And it keeps doing this until every step is done or the time/token limit (a loop cap) is reached
+    And it keeps doing this until every step is done or the loop cap is reached
 
   @implement
   Scenario: Every completed implementation step is committed and pushed

@@ -34,7 +34,7 @@ try:
     if os.path.isdir(scripts):
         sys.path.insert(0, scripts)
     try:
-        from common import state_dir, state_file, log, apply_extension_env
+        from common import state_dir, state_file, log, apply_extension_env, delivery_check
     except ImportError:
         def state_dir():
             d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
@@ -70,6 +70,113 @@ try:
                 v = v.strip()
                 if v and not os.environ.get(k):
                     os.environ[k] = v
+        def delivery_check(stage):
+            # local fallback — the shared stage-entry delivery check,
+            # self-contained like the local apply fallback above: every
+            # stage job runs it at its entry before any stage work or pi
+            # call; a declared harness provider whose recorded values
+            # were not restored into the job (neither relay half — the
+            # state dir and the job's env) fails the stage at its entry
+            # before any pi call is spent; the stage's artefact carries
+            # the one-line reason naming the relay loss as the failure's
+            # cause
+            trig = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp",
+                                 "cw", "state", "trigger")
+            try:
+                present = set(os.listdir(trig))
+            except OSError:
+                present = set()
+
+            def declared(flag, env_key):
+                v = ""
+                for sub in ("trigger", "pr"):
+                    p = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp",
+                                      "cw", "state", sub, flag + ".txt")
+                    try:
+                        v = open(p, encoding="utf-8").read().strip()
+                    except OSError:
+                        pass
+                    if v:
+                        break
+                return (v or os.environ.get(env_key) or "").strip() == "true"
+
+            lost = []
+            if declared("ext-env-declared", "CW_EXT_ENV_DECLARED") and \
+                    not any(f.startswith("extension-env-")
+                            and f.endswith(".txt") for f in present) and \
+                    not (os.environ.get("CW_EXT_ENV_KEYS") or "").strip():
+                lost.append("extension-env")
+            for provider, flag, value_file, marker in (
+                    ("models", "harness-models-declared",
+                     "harness-models", "CW_HARNESS_MODELS_DELIVERED"),
+                    ("settings", "harness-settings-declared",
+                     "harness-settings", "CW_HARNESS_SETTINGS_DELIVERED"),
+                    ("mcp", "harness-mcp-declared",
+                     "harness-mcp", "CW_HARNESS_MCP_DELIVERED")):
+                if not declared(flag,
+                                 "CW_" + flag.replace("-", "_").upper()):
+                    continue
+                if value_file not in present and \
+                        not (os.environ.get(marker) or "").strip():
+                    lost.append(provider)
+            # the stage's delivery line on the stage-summary channel —
+            # the same line the shared check records on the import path:
+            # one line per stage that ran the check ("extension env:
+            # delivered (N values)", "extension env: missing (provider
+            # declared)", "extension env: n/a (no provider)") — written
+            # before the check's verdict, so a declared-but-lost
+            # provider's line rides the artefact the failed job uploads
+            # even where the stage dies at its entry, and both import
+            # paths render the report identically
+            ext_outcome = "n/a (no provider)"
+            ext_files = sorted(f for f in present
+                                if f.startswith("extension-env-")
+                                and f.endswith(".txt"))
+            if declared("ext-env-declared", "CW_EXT_ENV_DECLARED"):
+                if ext_files or \
+                        (os.environ.get("CW_EXT_ENV_KEYS") or "").strip():
+                    ext_outcome = "delivered ({n} values)".format(
+                        n=len(ext_files) if ext_files
+                        else len([k for k in
+                                  (os.environ.get("CW_EXT_ENV_KEYS")
+                                   or "").split(",") if k]))
+                else:
+                    ext_outcome = "missing (provider declared)"
+            line = f"{stage}: extension env: {ext_outcome}"
+            try:
+                s = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(s, exist_ok=True)
+                with open(os.path.join(s, "stage-summary.txt"), "a",
+                          encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except OSError:
+                pass  # the job-visible line survives
+            print(line, flush=True)
+            if not lost:
+                return
+            reason = ("the delivery check at the stage's entry found the "
+                      "declared provider(s) %s recorded values not "
+                      "restored into the job — the relay loss is the "
+                      "failure's cause" % " ".join(lost))
+            print(f"::error::{stage} — {reason}", flush=True)
+            try:
+                s = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw")
+                os.makedirs(s, exist_ok=True)
+                with open(os.path.join(s, "stage-fail-reason.txt"), "w") as f:
+                    f.write(f"{stage}: FAILED — {reason}\n")
+            except OSError:
+                pass  # the job-visible line survives
+            sys.exit(1)
+    # the shared stage-entry delivery check — the stage runs it at its
+    # entry, before any stage work or pi call of the stage: for each of
+    # the run's four harness providers, the ones declared for the run must
+    # have their recorded values restored into the job (both relay halves
+    # — the state files present in the restored state dir, the values
+    # carried in the job's env by the per-job Read trigger state relay); a
+    # declared provider whose recorded values did not arrive fails the
+    # stage at its entry — the check exits before any pi call of the stage
+    # is spent
+    delivery_check("stage 3 baseline")
     apply_extension_env()
 
     # a crashed stage must leave a persistent diagnosis (the job log dies
@@ -218,6 +325,62 @@ try:
                 env["GIT_CONFIG_KEY_%d" % i] = k
                 env["GIT_CONFIG_VALUE_%d" % i] = v
             kw["env"] = env
+            # the factory-level no-identity diagnosis — a commit whose
+            # identity cannot be resolved: the extension-env provider is
+            # declared for the run, its values never arrived in this job
+            # (the identity variables are absent from the child's
+            # environment), and the runner's own git configuration
+            # (probed read-only, on an env sanitised of any leaked
+            # GIT_CONFIG_* entries) carries no commit identity — the
+            # commit fails with the diagnosis that names the lost
+            # provider; the commit child never spawns (the raw git
+            # "tell me who you are" fatal is not the outermost failure
+            # signal of the run), and the factory writes no identity of
+            # its own (no GIT_AUTHOR_* composed, an undeclared provider
+            # keeps the documented runner-configuration fallback)
+            if argv and argv[0] == "commit" and not (
+                    (env.get("GIT_AUTHOR_NAME") or "").strip()
+                    and (env.get("GIT_AUTHOR_EMAIL") or "").strip()):
+                has_identity = False
+                try:
+                    probe_env = {k: v for k, v in env.items()
+                                 if not k.startswith("GIT_CONFIG_")}
+                    for key in ("user.name", "user.email"):
+                        probe = ["config", "--global", key]
+                        r = subprocess.run(["git"] + probe,
+                                            capture_output=True,
+                                            text=True, env=probe_env,
+                                            timeout=30)
+                        if r.returncode == 0 and (r.stdout or "").strip():
+                            has_identity = True
+                            break
+                except Exception:
+                    pass  # a probe that cannot answer: the diagnosis's
+                           # conservative direction
+                if not has_identity:
+                    declared = ""
+                    for sub in ("trigger", "pr"):
+                        p = os.path.join(os.environ.get("RUNNER_TEMP")
+                                          or "/tmp", "cw", "state", sub,
+                                          "ext-env-declared.txt")
+                        try:
+                            declared = open(p, encoding="utf-8").read().strip()
+                        except OSError:
+                            pass
+                        if declared:
+                            break
+                    if declared == "true" or \
+                            (os.environ.get("CW_EXT_ENV_DECLARED")
+                             or "").strip() == "true":
+                        raise RuntimeError(
+                            "git commit cannot resolve a commit identity: the "
+                            "extension-env provider was declared for the run "
+                            "and its values never arrived in this job (the "
+                            "entry delivery check's relay loss), and the "
+                            "runner's own git configuration carries no commit "
+                            "identity — the declared provider is the run's "
+                            "commit identity's source; the factory writes no "
+                            "identity of its own")
             return subprocess.run(["git"] + list(argv), **kw)
 
     def g(*args, check=True):

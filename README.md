@@ -30,9 +30,16 @@ this repo's reusable workflow takes over:
    an issue number) starts a run — the run's recorded state additionally
    carries the bug-issue flag: the issue's labels compared against the
    resolved bug label (the `bug-label` input's value, its `bug` default
-   where a consumer leaves it undeclared); the flag is recorded, never
-   gated on (an issue carrying only the bug label starts no factory), and it
-   rides the trigger's artifact to every later stage job; re-entrant
+   where a consumer leaves it undeclared), and the provider-declaration
+   flag: presence only, true where the consumer workflow's `secrets:`
+   block declares the extension-env provider (the run's harness is
+   secret-only, so the consumer's block is where the run's provider set
+   is known; the block's text carries the secret's expression, never its
+   content, so no value of the provider is recorded); the flags are
+   recorded, never gated on (an issue carrying only the bug label starts
+   no factory), and they ride the trigger's artifact to every later
+   stage job (whose Read trigger state step relays them into the job's
+   env like the other trigger-state keys); re-entrant
    triggers on the same issue are idempotent;
 2. **setup-pi** — installs pi for the run and configures it for the
    workflow run: every later pi invocation in the run uses that installed
@@ -195,7 +202,10 @@ this repo's reusable workflow takes over:
     extraction stage on a bug-labelled run, the update stage on a run whose
     extraction stopped with no delta, or the plan stage on a run whose
     extraction stopped with no delta — is listed as skipped, never as
-    "stage complete"; the source issue is commented and closed when the run
+    "stage complete"; each stage's delivery line (its stage-entry
+    delivery check's outcome on the stage-summary channel) renders beside
+    its outcome lines — the final status carries the full delivery
+    picture, one line per stage that ran; the source issue is commented and closed when the run
     succeeded (a failed run leaves it open), and an AI-activity section lands
     in the arc42 docs (the `docs/` set — a target without a doc dir gets it
     in its top-level arc42 markdown).
@@ -352,15 +362,20 @@ runner's user-level configuration).
 | the model configuration — the run's LLM backend is defined in it; a run whose environment provides no provider for it fails the setup stage (the run's pi configuration is incomplete, no later stage runs) | `PI_MODELS` |
 | the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` |
 | the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` |
-| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys, and applied at every stage job's entry) | `EXTENSION_ENV` |
+| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys, and delivery-checked and applied at every stage job's entry) | `EXTENSION_ENV` |
 
 The extension's environment is the run's commit-identity provider, and
 the only one: the factory writes no git identity of its own, so the
 secret must set **both `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL`** — git's
 environment-over-configuration precedence makes them the author of every
 commit the run makes. Without them it won't work: a runner whose own git
-configuration carries no identity fails the run's commit with git's
-explicit "please tell me who you are" error, and a runner that carries
+configuration carries no identity fails the run's commit — where the
+provider was declared for the run and its values did not arrive into the
+job, the factory's single git entry point fails the commit with a
+factory-level diagnosis naming the cause (the declared provider whose
+values never arrived): the raw git "please tell me who you are" fatal is
+not the outermost failure signal of the run, and the factory writes no
+identity of its own — and a runner that carries
 one sends the run's commits out under that runner's account instead of
 yours.
 
@@ -369,6 +384,27 @@ packages, and an absent MCP provider means the run's pi runs without MCP
 servers; the stage clears an element without a provider from the agent
 directory rather than inheriting the runner's pre-existing user-level
 configuration.
+
+**Every stage job delivery-checks the declared providers at its entry.**
+The setup stage records each declared harness provider's values as state
+files in the run's state dir (the extension env's values one value a
+file; the value-carrying providers' declaration and recorded value one
+file each), on the same state-dir artefact channel that relays them to
+every later stage job. Every stage job then runs the shared stage-entry
+delivery check before any stage work or pi call of the stage: a declared
+provider's recorded values must have been restored into the job — both
+relay halves, the state files present in the restored state dir and the
+values carried in the job's env. A declared provider whose recorded
+values did not arrive fails the stage at its entry before any pi call is
+spent — a harness that would otherwise fall back silently is the same
+class of loss — and the run's artefact log names the relay loss as the
+failure's cause; a run whose provider is absent is unchanged (no files,
+no flag, no spurious failure). Each stage records its delivery check's
+outcome as a line on the cumulative stage-summary channel — one line per
+stage: "extension env: delivered (N values)", "extension env: missing
+(provider declared)", or "extension env: n/a (no provider)" — and the
+final status report and the run's artefact log carry the full delivery
+picture, rendered from the stages' recorded lines.
 
 **The target's dependencies are installed by the run, where the target
 declares it.** The optional `dependency-install` input (the consumption
@@ -464,7 +500,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published; and (`--verify-structure`, the flow's second pre-tag step): the committed file's job/step graph parses to the pinned shape under every standard engine, no step declares keys after its run block, no run block past the giant-body budget, no run block's heredoc terminator indented past the block's base, no `python3` code-heredoc body indented past the block's base, and no block opens a heredoc it never terminates — a file the gate's shape checks fail is never published
 pi-prompts/            the pi prompt templates (requirements, update, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (17 files, 182 scenarios)
+requirements/          the Gherkin oracle for THIS repo (17 files, 188 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -472,7 +508,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **182 Gherkin scenarios** — the oracle this
+`requirements/` holds **188 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

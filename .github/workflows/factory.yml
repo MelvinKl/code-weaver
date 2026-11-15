@@ -438,9 +438,46 @@ jobs:
                   CALLED_REF="$GITHUB_REF"
                   ;;
               esac
+              # The provider-declaration flag — presence only. The run's
+              # harness is secret-only, so which of the factory's harness
+              # providers a run carries is knowable only from the
+              # consumer's workflow: its secrets block names the provider
+              # entries the consumer relays, as expressions. The block's
+              # text carries the expression, never its content, so the
+              # flag derived from it is presence only — true where the
+              # block declares the extension-env provider (the factory's
+              # extension-environment secret entry — the provider
+              # element's name, upper-cased, its hyphen becoming an
+              # underscore), absent or false otherwise — and no value of
+              # the provider enters the recorded state. The flag is
+              # recorded as a trigger state file (in the resolve step,
+              # beside the trigger's other recorded state) and rides the
+              # trigger's artefact to every later stage job, whose Read
+              # trigger state step relays it into the job's env like the
+              # other trigger-state keys.
+              EXT_ENV_DECLARED="false"
+              EXT_ENV_SECRET_NAME=$(tr a-z- A-Z_ <<<"extension-env")
+              SECRETS_BLOCK=$(awk '
+                  /^[[:space:]]*secrets:/ {
+                      base = match($0, /[^[:space:]]/) - 1
+                      insec = 1
+                      next
+                  }
+                  insec && $0 ~ /^[[:space:]]*$/ { next }
+                  insec {
+                      ind = match($0, /[^[:space:]]/) - 1
+                      if (ind <= base) exit
+                      print
+                  }
+              ' <<<"$CONSUMER")
+              if grep -qE "^[[:space:]]*${EXT_ENV_SECRET_NAME}:" <<<"$SECRETS_BLOCK"; then
+                EXT_ENV_DECLARED="true"
+              fi
               echo "called-repo=$CALLED_REPO" >> "$GITHUB_OUTPUT"
               echo "called-ref=$CALLED_REF" >> "$GITHUB_OUTPUT"
+              echo "ext-env-declared=$EXT_ENV_DECLARED" >> "$GITHUB_OUTPUT"
               echo "called version resolved: $CALLED_REPO at $CALLED_REF — the ref's published version carries the file GitHub fetched and the runtime tree the next step fetches together (recovered from the consumer workflow at ${GITHUB_REF}; the consumer relays nothing)"
+              echo "extension-env provider declaration: $EXT_ENV_DECLARED — the consumer workflow's secrets block $([ "$EXT_ENV_DECLARED" = "true" ] && echo declares || echo "does not declare") the extension-env provider (presence only; no provider value is recorded)"
           ) 2>&1 | tee -a "$RUNNER_TEMP/cw/stage-console.log"
       - name: Stash the factory runtime tree (fetched at the called ref, before any checkout replaces the workspace)
         # The file stores no binary content — the runtime tree its stage
@@ -748,6 +785,17 @@ jobs:
               # resolved-configuration record names it in both branches
               echo "${{ inputs.auto-update }}" > "$RUNNER_TEMP/cw/state/trigger/auto-update.txt"
               echo "trigger state: auto-update=${{ inputs.auto-update }} — the resolved AUTO_UPDATE setting (the run's pipeline runs the update stage unless the target turned the setting off)"
+              # The provider-declaration flag — presence only: true where
+              # the consumer workflow's secrets block declares the
+              # extension-env provider (the called-version step derived it
+              # from that block — the workflow's text carries the
+              # secret's expression, never its content, so no value of the
+              # provider is recorded). Beside the trigger's other recorded
+              # run state: it rides the trigger's artefact to every later
+              # stage job, whose Read trigger state step relays it into the
+              # job's env like the other trigger-state keys.
+              echo "${{ steps.called-version.outputs.ext-env-declared }}" > "$RUNNER_TEMP/cw/state/trigger/ext-env-declared.txt"
+              echo "trigger state: ext-env-declared=${{ steps.called-version.outputs.ext-env-declared }} (the consumer workflow's secrets block declares the extension-env provider — presence only, no provider value is recorded)"
               # the trigger's completion marker — the report stage cross-checks
               # the markers (the state dir rides the artefact chain) to tell
               # "a stage ran" from "a stage never ran" (a job the runner's parser
@@ -992,7 +1040,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1007,11 +1055,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -1201,7 +1276,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1216,11 +1291,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -1388,7 +1490,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1403,11 +1505,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -1648,7 +1777,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1663,11 +1792,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -1977,7 +2133,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -1992,11 +2148,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -2278,7 +2461,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -2293,11 +2476,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -2746,7 +2956,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -2761,11 +2971,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
@@ -3014,7 +3251,7 @@ jobs:
               V_BASE_REF=$(cat "$T/base-ref.txt" 2>/dev/null)
               V_BASE_SHA=$(cat "$T/base-sha.txt" 2>/dev/null)
               { [ -n "$V_ISSUE" ] && [ -n "$V_BASE_SHA" ]; } || { echo "::error::trigger state incomplete (issue=[$V_ISSUE] base_sha=[$V_BASE_SHA])"; exit 1; }
-              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update; do
+              for k in started issue-number issue-title base-ref base-sha head title base bug-issue no-delta-stop auto-update ext-env-declared; do
                 v=$(cat "$T/$k.txt" 2>/dev/null || true)
                 [ -n "$v" ] && printf '%s=%s\n' "CW_$(tr a-z A-Z <<<"$k")" "$v" >> "$GITHUB_ENV"
               done
@@ -3029,11 +3266,38 @@ jobs:
               # applies: a value already present in the job's env wins
               # over the run's provided one. A run without the provider
               # records no file and relays nothing — its env is unchanged.
+              EXT_ENV_KEYS=""
               for f in "$T"/extension-env-*.txt; do
                 [ -e "$f" ] || continue
                 k=$(basename "$f" .txt | sed 's/^extension-env-//')
                 v=$(cat "$f")
                 [ -n "$v" ] && [ -z "${!k:-}" ] && printf '%s=%s\n' "$k" "$v" >> "$GITHUB_ENV"
+                EXT_ENV_KEYS="${EXT_ENV_KEYS:+$EXT_ENV_KEYS,}$k"
+              done
+              # the marker the stage's entry delivery check reads as the env
+              # half of the extension-env relay: non-empty where the relay
+              # exported at least one recorded value
+              [ -n "$EXT_ENV_KEYS" ] && printf 'CW_EXT_ENV_KEYS=%s\n' "$EXT_ENV_KEYS" >> "$GITHUB_ENV"
+              # the value-carrying harness providers the setup stage declared
+              # for the run (the model configuration, the additional packages,
+              # the MCP configuration): the setup stage records each declared
+              # provider's declaration and its recorded value as state files
+              # beside the trigger's recorded state, on the same state-dir
+              # artefact channel the extension-env values ride. Export the
+              # declaration (the check's declared test reads the state file
+              # first — the documented authoritative source — this export is
+              # the in-process twin) and a single-line delivery marker (the
+              # marker's value is the recorded value file's size, never the
+              # content — the content is multi-line JSON, and the relay's
+              # GITHUB_ENV format is line-based): every later stage job's
+              # entry delivery check reads them as the env half of that
+              # provider's relay
+              for p in models settings mcp; do
+                [ -e "$T/harness-$p-declared.txt" ] \
+                  && printf 'CW_HARNESS_%s_DECLARED=true\n' "$(tr a-z A-Z <<<"$p")" >> "$GITHUB_ENV"
+                if [ -e "$T/harness-$p.txt" ]; then
+                  printf 'CW_HARNESS_%s_DELIVERED=%s\n' "$(tr a-z A-Z <<<"$p")" "$(wc -c < "$T/harness-$p.txt")" >> "$GITHUB_ENV"
+                fi
               done
               echo "AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"
               echo "CW_AI_BRANCH=ai/code-weaver/$V_ISSUE" >> "$GITHUB_ENV"

@@ -51,6 +51,17 @@
   crash hook: a stage that crashes persists its full traceback to the
   runner's durable diagnostic log and a one-line reason into the stage's
   artifact, so a human can read why a stage failed without the job log.
+- **Stage-entry delivery check.** Every stage job runs the shared
+  stage-entry delivery check at its entry, before any stage work or pi
+  call of the stage: a declared harness provider whose recorded values
+  did not arrive into the job (both relay halves inspected — the state
+  dir and the job's environment) fails the stage at its entry, before
+  any pi call of the stage is spent — a harness that would otherwise
+  fall back silently is the same class of loss — and a provider that is
+  not declared passes the check, the run unchanged. The check's outcome
+  is recorded as a line on the stage-summary channel (one line per
+  stage), the full delivery picture the final status report and the
+  run's artefact log carry.
 - **Executable oracle.** Every `.feature` under `requirements/` must parse
   with Cucumber's official Gherkin parser and carry at least one Scenario
   (a requirement-free feature is not executable); the trigger-contract

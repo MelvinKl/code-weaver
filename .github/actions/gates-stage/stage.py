@@ -131,6 +131,16 @@ def _cw_in(name: str) -> str:
 
 def main() -> None:
     common.install_crash_diagnostics("stage 13-14 PR gates")
+    # the shared stage-entry delivery check — the stage runs it at its
+    # entry, before any stage work or pi call of the stage: for each of
+    # the run's four harness providers, the ones declared for the run must
+    # have their recorded values restored into the job (both relay halves
+    # — the state files present in the restored state dir, the values
+    # carried in the job's env by the per-job Read trigger state relay); a
+    # declared provider whose recorded values did not arrive fails the
+    # stage at its entry — the check exits before any pi call of the stage
+    # is spent
+    common.delivery_check("stage 13-14 PR gates")
     # the run's resolved extension env applied to this stage's process
     # environment at entry (the artefact-channel half of the relay that
     # keeps the every-step contract whole on a runner build whose

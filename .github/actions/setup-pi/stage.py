@@ -307,6 +307,44 @@ def record_extension_env(extension_env: str | None) -> list[tuple[str, str]]:
     return pairs
 
 
+def record_harness_providers(models, settings, mcp) -> list[str]:
+    """(b, the value-carrying providers' effective half) — the declared
+    providers' declarations and recorded values join the extension-env
+    values on the same state-dir artefact channel: one state file each,
+    beside the trigger's recorded state (`harness-<provider>-declared.txt`
+    — the provider's declaration, written only where the provider is
+    declared; `harness-<provider>.txt` — the provider's recorded value,
+    the secret content the run's harness materialises from). The
+    cumulative artefact chain carries the files to every later stage job,
+    whose per-job Read trigger state relay exports the declaration and a
+    single-line delivery marker into the job's env like the other
+    trigger-state keys — and whose entry delivery check verifies each
+    declared provider's recorded values were restored into the job (both
+    relay halves): a declared provider whose recorded values did not
+    arrive fails that stage at its entry, before any pi call of the stage
+    is spent, instead of the harness falling back silently (an element
+    that would run absent — no additional packages, no MCP servers). An
+    element whose provider is empty or absent records no file: its
+    documented fall-through is unchanged, and the check passes it as
+    undeclared."""
+    d = os.path.join(common.state_dir(), "state", "trigger")
+    os.makedirs(d, exist_ok=True)
+    out = []
+    for element, provider in (("models", models), ("settings", settings),
+                              ("mcp", mcp)):
+        if provider is None:
+            continue
+        with open(os.path.join(d, f"harness-{element}-declared.txt"), "w",
+                  encoding="utf-8") as f:
+            f.write("true\n")
+        content = provider[0]
+        with open(os.path.join(d, f"harness-{element}.txt"), "w",
+                  encoding="utf-8") as f:
+            f.write(content if content.endswith("\n") else content + "\n")
+        out.append(element)
+    return out
+
+
 def backend_from_config(raw: str) -> str | None:
     """The OpenAI-compatible backend URL in the provided model
     configuration — the only configuration the run's checks read.
@@ -510,6 +548,11 @@ def main() -> None:
     # writer: it records the values later in main, where they are applied
     # to this stage's process environment as well; the entry call keeps
     # the every-stage entry-apply uniform)
+    # the shared stage-entry delivery check — it gates the entry apply
+    # below: at its entry this stage is the harness writer, so the check
+    # verifies no prior delivery and passes; the other stage jobs' entry
+    # checks verify the recorded values this stage writes
+    common.delivery_check(STAGE)
     common.apply_extension_env()
     agent = agent_dir()
     model = (os.environ.get("LLM_MODEL")
@@ -551,6 +594,7 @@ def main() -> None:
     # relay carries them into the job's env) and applied to this stage's
     # process environment (the stage's own pi invocations run with them).
     # A run without the provider sets no variables — the run is unchanged.
+    recorded = []
     if extension_env is not None:
         try:
             recorded = record_extension_env(extension_env)
@@ -566,6 +610,43 @@ def main() -> None:
                 "files (one value a file; every later stage job's Read "
                 "trigger state relay carries them into the job's env) and "
                 "applied to this stage's process environment")
+
+    # (b, the value-carrying providers' effective half) — the declared
+    # providers' declarations and recorded values join the extension-env
+    # values on the same state-dir artefact channel: every later stage
+    # job's entry delivery check verifies each declared provider's
+    # recorded values were restored into the job (both relay halves) — a
+    # declared provider whose values did not arrive fails that stage at
+    # its entry instead of the harness falling back silently
+    try:
+        recorded_providers = record_harness_providers(models, settings, mcp)
+    except OSError as e:
+        fail(f"pi installation or configuration failed — the declared "
+             f"harness providers' state files could not be written to the "
+             f"run's state dir {common.state_dir()}: {e}")
+    if recorded_providers:
+        common.log(
+            f"setup-pi: the declared value-carrying harness providers "
+            f"({', '.join(recorded_providers)}) — their declarations and "
+            "recorded values join the extension-env values on the same "
+            "state-dir artefact channel; every later stage job's entry "
+            "delivery check verifies their delivery")
+
+    # the stage's delivery line on the stage-summary channel — this stage
+    # is the stage that delivers the extension env, so its line reflects
+    # the stage's own delivery (its entry delivery check is the writer's
+    # half: a vacuous pass, the values it records during its work do not
+    # yet exist at its entry) — the values the stage recorded for the run
+    # (delivered), or the provider's absence (a run without the provider
+    # is unchanged): one line per stage on the cumulative channel, which
+    # the final status report and the run's artefact log carry as the
+    # full delivery picture
+    if recorded:
+        common.record_stage_outcome(
+            f"{STAGE}: extension env: delivered ({len(recorded)} values)")
+    else:
+        common.record_stage_outcome(
+            f"{STAGE}: extension env: n/a (no provider)")
 
     # (c) the checks, re-pointed at what the stage installed and wrote
     backend = check_run_configuration(models, model, agent, installed)

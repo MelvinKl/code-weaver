@@ -67,11 +67,11 @@ jobs:
       # persists.
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}   # repo-scoped; never a plain input
-      # the run's pi harness providers — optional: an unset secret arrives
+      # the run's pi harness providers — optional: an unset entry arrives
       # empty and stage 2 treats it as an absent provider (a named repo
       # file is no longer a provider of any harness element — this
       # dogfood's own runs take their harness solely from the repo-level
-      # GitHub secrets set on this repo: runtime secrets, never tree
+      # GitHub variables set on this repo: runtime variables, never tree
       # files); never a plain input
       PI_MODELS: ${{ vars.PI_MODELS }}
       PI_SETTINGS: ${{ vars.PI_SETTINGS }}

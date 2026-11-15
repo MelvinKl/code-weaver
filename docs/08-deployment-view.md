@@ -129,7 +129,7 @@ invocation resolves:
 | the model configuration — the run's LLM backend (e.g. the keyless internal swap) is defined in it, and the `llm-model` input selects from its model set; a run whose environment provides no provider for it fails the setup stage (the run's pi configuration is incomplete, no later stage runs) | `PI_MODELS` |
 | the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` |
 | the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` |
-| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys — the `CW_*`/state-file relay, and applied at every stage job's entry) | `EXTENSION_ENV` |
+| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys — the `CW_*`/state-file relay, and delivery-checked and applied at every stage job's entry) | `EXTENSION_ENV` |
 
 The stage writes each resolved element into the agent directory the run's
 pi invocations resolve (`~/.pi/agent/`, honouring `PI_CODING_AGENT_DIR`):
@@ -144,17 +144,36 @@ chain carries the values to every later stage job, and the per-job Read
 trigger state relay feeds them into the job's environment like the other
 trigger-state keys (the `CW_*`/state-file relay — the documented
 containment for the runner's GITHUB_ENV ghost-binding risk), and every
-stage job applies the recorded values to its process environment at the
-stage's entry — so every CLI the stage spawns (its pi invocations, its
-git children) runs with them; a run
-without the provider sets no variable and is unchanged. The consequence
+stage job runs the entry delivery check and then applies the recorded
+values to its process environment at the stage's entry — so every CLI
+the stage spawns (its pi invocations, its git children) runs with them:
+the declared provider's recorded values must have been restored into the
+job — both relay halves — before any stage work or pi call of the stage
+begins, and a declared provider whose recorded values did not arrive
+fails the stage at its entry instead of the harness falling back
+silently. The stage's recording extends to the other providers on the
+same channel: each declared value-carrying provider (the model
+configuration, the additional packages, the MCP configuration) is
+recorded as a declaration state file and a recorded-value state file
+beside the trigger's recorded state, and every later stage job's entry
+delivery check verifies their delivery. A run without the provider sets
+no variable, records no declaration, and is unchanged. The consequence
 for the run's git operations: where the provider carries
 `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`, the run's commits run with the
 provider's variables in the git process environment — git's
 environment-over-configuration precedence makes the provider's account
 the commit's author — with the sanitised push idiom's GIT_CONFIG
 hygiene (chapter 7) standing as the fallback the provider's variables
-override. A named repo file is no longer a provider of any harness
+override. Where the provider was declared for the run, its values did
+not arrive in a later job, and the runner's own git configuration
+carries no commit identity either, the factory's single git entry
+point fails the commit with a factory-level diagnosis naming the cause
+— the declared provider whose values never arrived: the raw git "tell
+me who you are" fatal is not the outermost failure signal of the run
+(the diagnosis rides the crash-diagnostics channel — the one-line
+reason the stage's artefact persists), and the factory writes no
+identity of its own (where the provider is empty or absent, the run's
+commit identity is the runner's own git configuration's). A named repo file is no longer a provider of any harness
 element — the factory repo's tree carries no `.pi/` directory (the models,
 settings, MCP and extension files the run's harness used to read from it),
 and a target's own committed files are never read as providers either: a

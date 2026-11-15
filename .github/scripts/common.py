@@ -476,6 +476,196 @@ def apply_extension_env() -> None:
             os.environ[name] = value
 
 
+# provider → (declaration flag, recorded-value file, job-env relay marker):
+# the setup-pi stage records each declared value-carrying harness provider's
+# declaration and its recorded value as state files in the run's state dir,
+# on the same state-dir artefact channel the extension-env values ride
+# (beside the trigger's recorded state; the cumulative artefact chain
+# carries them to every later stage job, whose per-job Read trigger state
+# relay exports the declaration and a single-line delivery marker into the
+# job's env — the marker, never the value's content: the content is
+# multi-line JSON, and the relay's GITHUB_ENV format is line-based).
+HARNESS_PROVIDER_STATE = {
+    "models": ("harness-models-declared", "harness-models",
+               "CW_HARNESS_MODELS_DELIVERED"),
+    "settings": ("harness-settings-declared", "harness-settings",
+                 "CW_HARNESS_SETTINGS_DELIVERED"),
+    "mcp": ("harness-mcp-declared", "harness-mcp",
+            "CW_HARNESS_MCP_DELIVERED"),
+}
+
+
+def delivery_check(stage: str) -> None:
+    """The shared stage-entry delivery check — every stage job runs it at
+    its entry, before any stage work or pi call of the stage: for each of
+    the run's four harness providers (the model configuration, the
+    additional packages, the MCP configuration, the extension's
+    environment), the ones **declared** for the run must have their
+    recorded values **restored into the job** — both relay halves: the
+    state files present in the restored state dir (the artefact-channel
+    half; the setup stage's recorded values ride the cumulative artefact
+    chain there), and the values carried in the job's env (the per-job
+    Read trigger state relay's in-process half).
+
+    A declared provider whose recorded values did not arrive — neither
+    half delivered — **fails the stage at its entry**, before any pi call
+    of the stage is spent: the explicit error names the provider and
+    reports each relay half — the job's environment and the state dir —
+    and the run's artefact log names the relay loss as the failure's
+    cause (the stage's artefact carries the one-line reason). A provider
+    that is **not** declared (flag absent or false, no state file
+    expected) passes the check: the run is unchanged — no files, no
+    flag, no spurious failure. A harness that would otherwise **fall back
+    silently** (an element that would run absent when its provider is
+    absent — the additional packages, the MCP servers, the extension's
+    environment) is treated as the same class of loss: a declared-but-
+    lost provider fails the entry check instead of degrading quietly.
+
+    The setup-pi stage is the **writer** of the harness providers' recorded
+    state: at its entry the values it records during its work do not yet
+    exist in the run's state dir, so its own entry check verifies no prior
+    delivery and passes — the every-stage entry uniformity keeps the gate
+    at the writer's entry too, and the check has its teeth on the other
+    stage jobs, whose entry checks verify the setup stage's delivery.
+
+    The check also records the stage's delivery line on the stage-summary
+    channel — one line per stage that ran the check, in the three forms the
+    delivery contract names ("extension env: delivered (N values)",
+    "extension env: missing (provider declared)",
+    "extension env: n/a (no provider)"): the line is written on both the
+    pass and the fail path — a declared provider whose recorded values did
+    not arrive fails the stage at its entry, and its line must still ride
+    the artefact the failed job uploads — and the cumulative channel rides
+    the run's state artefacts, so the report stage's final status and the
+    run's artefact log carry the full delivery picture, the line of every
+    stage that ran. The writer's own line it records at its completion
+    point (its entry check is the vacuous pass): the writer's line
+    reflects the values the stage recorded for the run —
+    "delivered (N values)", or "n/a (no provider)" where the provider is
+    absent.
+    """
+    if "setup-pi" in stage:
+        log(f"{stage}: entry delivery check — the setup-pi stage is the "
+            f"harness writer: the providers' recorded values it writes "
+            f"during its work do not yet exist at its own entry, so its "
+            f"entry check verifies no prior delivery (a vacuous pass); "
+            f"the other stage jobs' entry checks verify this stage's "
+            f"recorded values arrived")
+        return
+    root = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "state",
+                        "trigger")
+    try:
+        present = set(os.listdir(root))
+    except OSError:
+        present = set()
+
+    def declared(flag: str, env_key: str) -> bool:
+        # the declaration itself rides both relay halves: the trigger's
+        # state file is the authoritative source, the per-job env relay
+        # its in-process twin
+        return (cw_state(flag) or os.environ.get(env_key) or "") \
+            .strip() == "true"
+
+    lost = []
+    # the extension's environment — its declaration is the trigger's
+    # presence-only provider-declaration flag; its recorded values are
+    # the extension-env-*.txt state files the setup stage wrote
+    ext_outcome = "n/a (no provider)"
+    if declared("ext-env-declared", "CW_EXT_ENV_DECLARED"):
+        ext_files = sorted(f for f in present
+                           if f.startswith("extension-env-")
+                           and f.endswith(".txt"))
+        state_half = bool(ext_files)
+        env_half = bool((os.environ.get("CW_EXT_ENV_KEYS") or "").strip())
+        if state_half or env_half:
+            # the delivered value count — the value files the restored
+            # state dir holds, or the keys the per-job relay exported
+            # into the job's env where the state-file half is the one
+            # that was lost
+            n = (len(ext_files) if state_half
+                 else len([k for k in
+                           (os.environ.get("CW_EXT_ENV_KEYS") or "")
+                           .split(",") if k]))
+            ext_outcome = f"delivered ({n} values)"
+            state_desc = (f"delivered ({len(ext_files)} value file(s))"
+                          if state_half else "lost")
+            log(f"{stage}: entry delivery check — extension-env declared, "
+                f"the recorded values arrived (state-dir half: {state_desc}; "
+                f"job-env half: {'delivered' if env_half else 'lost'})")
+        else:
+            ext_outcome = "missing (provider declared)"
+            lost.append(
+                ("extension-env",
+                 "declared for the run, but its recorded values were not "
+                 "restored into the job — state-dir half lost (no "
+                 f"extension-env-*.txt state file in the restored state "
+                 f"dir {root}); job-env half lost (CW_EXT_ENV_KEYS unset — "
+                 "the per-job Read trigger state relay exported no recorded "
+                 "value)"))
+    # the stage's delivery line on the stage-summary channel — written
+    # before the check's verdict (a declared-but-lost provider fails the
+    # stage at its entry, and its line must still ride the artefact the
+    # failed job uploads); the report's stage-outcome table renders it
+    # beside the stage's outcome lines
+    record_stage_outcome(f"{stage}: extension env: {ext_outcome}")
+    # the value-carrying providers — each declared by a state file the
+    # setup stage recorded on the same channel; a harness that would fall
+    # back silently when its provider is absent is the same class of loss
+    for provider, (flag, value_file, marker) in HARNESS_PROVIDER_STATE.items():
+        if not declared(flag, "CW_" + flag.replace("-", "_").upper()):
+            log(f"{stage}: entry delivery check — {provider} not declared "
+                f"for the run (no provider) — the check passes it, the "
+                f"run's documented fall-through for the element is "
+                f"unchanged (no files, no flag, no spurious failure)")
+            continue
+        state_half = value_file in present
+        env_half = bool((os.environ.get(marker) or "").strip())
+        if state_half or env_half:
+            log(f"{stage}: entry delivery check — {provider} declared, "
+                f"the recorded values arrived (state-dir half: "
+                f"{'delivered' if state_half else 'lost'}; job-env half: "
+                f"{'delivered' if env_half else 'lost'})")
+        else:
+            lost.append(
+                (provider,
+                 "declared for the run, but its recorded values were not "
+                 "restored into the job — state-dir half lost (the recorded "
+                 f"state file {value_file} is absent from the restored "
+                 f"state dir {root}); job-env half lost ({marker} unset — "
+                 "the per-job Read trigger state relay exported no delivery "
+                 "marker)"))
+    if lost:
+        # the failure rides the documented crash-diagnostics channel — the
+        # stage's artefact carries the one-line reason (chapter 9), and a
+        # controlled sys.exit is not a crash (the crash hook's diagnosis
+        # is for uncaught exceptions; this is the check's verdict)
+        detail = "\n".join(f"  - {name}: {why}" for name, why in lost)
+        names = " ".join(name for name, _ in lost)
+        report = (f"the delivery check at the stage's entry found the "
+                  f"declared provider(s) {names} recorded values not "
+                  f"restored into the job — the relay loss is the "
+                  f"failure's cause")
+        log(f"::error::{stage} — the delivery check at the stage's entry: "
+            f"the declared harness provider(s) {names} were not restored "
+            f"into this job. The check logs which relay half delivered "
+            f"what (the job's environment and the state dir):\n{detail}\n"
+            f"The stage fails at its entry, before any pi call of the "
+            f"stage is spent; a harness that would otherwise fall back "
+            f"silently is treated as the same class of loss.")
+        d = state_dir()
+        os.makedirs(d, exist_ok=True)
+        try:
+            with open(os.path.join(d, "stage-fail-reason.txt"), "w") as f:
+                f.write(f"{stage}: FAILED — {report}\n")
+        except OSError:
+            pass  # the job-visible line survives
+        sys.exit(1)
+    log(f"{stage}: entry delivery check — passed: every declared harness "
+        f"provider's recorded values are restored into the job; a run "
+        f"whose extension-env provider is absent is unchanged by the "
+        f"check (no files, no flag, no spurious failure)")
+
+
 def pi_invoke(
     model: str,
     system_prompt_file: str,
@@ -1097,6 +1287,27 @@ def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     empty/absent no values are applied and the child's environment is
     exactly as before — the sanitised push idiom's GIT_CONFIG hygiene
     identity stands as the fallback the provider's variables override.
+
+    The entry point also guards the commit's identity: a commit whose
+    identity cannot be resolved is a factory-level failure, not the raw
+    git "please tell me who you are" fatal. Where the extension-env
+    provider WAS declared for the run and its values did not arrive in
+    the job (neither relay half delivered the identity variables the
+    run's commits resolve from — GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL are
+    absent from the child's environment), and the runner's own git
+    configuration (the user-global configuration the fallback the
+    provider's variables override — probed read-only with a sanitised
+    env) carries no commit identity either, the entry point fails the
+    commit with the factory-level diagnosis that names the declared
+    provider whose values never arrived — the commit child never spawns,
+    so the raw git fatal is not the outermost failure signal of the run,
+    and the diagnosis rides the stage's crash-diagnostics channel (the
+    stage's artefact carries the one-line reason). The factory writes no
+    identity of its own: no GIT_AUTHOR_* is composed into a child's
+    environment by the diagnosis, and a provider that is not declared
+    keeps the documented commit-identity behaviour exactly (where the
+    provider is empty or absent the run's commit identity is whatever
+    the runner's own git configuration provides).
     """
     env = dict(kwargs.pop("env", None) or os.environ)
     try:
@@ -1130,7 +1341,85 @@ def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
         env["GIT_CONFIG_KEY_%d" % i] = k
         env["GIT_CONFIG_VALUE_%d" % i] = v
     kwargs["env"] = env
+    # the factory-level no-identity diagnosis — a commit whose identity
+    # cannot be resolved fails with the diagnosis that names the lost
+    # provider, before the commit child is handed to subprocess.run
+    # (the raw git "tell me who you are" fatal is not the outermost
+    # failure signal of the run; the factory writes no identity of its
+    # own — see the docstring)
+    if argv and argv[0] == "commit":
+        _diagnose_unresolvable_commit_identity(env)
     return subprocess.run(["git"] + list(argv), **kwargs)
+
+
+def _diagnose_unresolvable_commit_identity(env: dict) -> None:
+    """The factory-level diagnosis for a commit whose identity cannot be
+    resolved — the guard the git entry point applies to a commit call:
+    where the extension-env provider was declared for the run and its
+    values did not arrive in the job, and the runner's own git
+    configuration carries no commit identity either, the commit fails
+    with the diagnosis that names the declared provider whose values
+    never arrived (the run's commit identity is the provider's, and a
+    declared provider whose values never arrived is the cause).
+
+    The probe the diagnosis runs: the commit's identity resolves in the
+    child's environment (the provider's values applied by the entry
+    point, either relay half, or a value the runner's environment
+    already carries) before any probe runs — the diagnosis needs no
+    probe where the identity resolves in env. Where it does not, the
+    runner's own git configuration is probed read-only — a config query
+    on the user-global scope (the configuration the scenario names as
+    the fallback the provider's variables override), on an env
+    sanitised of any leaked GIT_CONFIG_* entries (a dangling key the
+    count never fills would make git die on the missing key before the
+    answer). A probe that cannot answer (no git, a config that hangs)
+    is treated as "no identity in the runner's configuration" — the
+    diagnosis's conservative direction: where the provider was
+    declared, a commit that cannot resolve an identity is a relay loss
+    the factory names, never a silent degradation onto an identity the
+    run did not provide.
+
+    The diagnosis fires only where the provider was DECLARED for the
+    run: an undeclared provider keeps the documented commit-identity
+    behaviour exactly — where the provider is empty or absent the run's
+    commit identity is whatever the runner's own git configuration
+    provides, and a runner whose configuration carries none meets git's
+    own fatal as the run's own misconfiguration. The factory writes no
+    identity of its own: the diagnosis raises — it composes no
+    GIT_AUTHOR_* of its own into any child's environment — and the
+    raise rides the stage's crash-diagnostics channel, which persists
+    the one-line reason to the stage's artefact.
+    """
+    if ((env.get("GIT_AUTHOR_NAME") or "").strip()
+            and (env.get("GIT_AUTHOR_EMAIL") or "").strip()):
+        return  # the identity resolves in the child's environment
+    probe_env = {k: v for k, v in env.items()
+                 if not k.startswith("GIT_CONFIG_")}
+    has_identity = False
+    try:
+        for key in ("user.name", "user.email"):
+            probe = ["config", "--global", key]
+            r = subprocess.run(["git"] + probe, capture_output=True,
+                               text=True, env=probe_env, timeout=30)
+            if r.returncode == 0 and (r.stdout or "").strip():
+                has_identity = True
+                break
+    except (OSError, subprocess.SubprocessError):
+        pass  # a probe that cannot answer: the diagnosis's direction
+    if has_identity:
+        return  # the runner's own configuration resolves the identity
+    if not ((cw_state("ext-env-declared")
+             or os.environ.get("CW_EXT_ENV_DECLARED") or "").strip()
+            == "true"):
+        return  # an undeclared provider keeps the documented behaviour
+    raise RuntimeError(
+        "git commit cannot resolve a commit identity: the extension-env "
+        "provider was declared for the run and its values never arrived "
+        "in this job (the entry delivery check's relay loss — neither "
+        "the recorded state files nor the per-job env relay delivered "
+        "them), and the runner's own git configuration carries no commit "
+        "identity — the declared provider is the run's commit identity's "
+        "source; the factory writes no identity of its own")
 
 
 def git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:

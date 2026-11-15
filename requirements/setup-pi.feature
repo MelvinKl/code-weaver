@@ -12,7 +12,7 @@
 Feature: The setup-pi stage installs and configures pi for the run
   As a maintainer of a target project
   I want the setup-pi stage to install pi and configure it for each workflow run
-  so that the run's pi harness — models, packages, MCP, the extension's environment — is provided per run via a GitHub secret or a repo file
+  so that the run's pi harness — models, packages, MCP, the extension's environment — is provided per run via a GitHub secret
 
   @setup
   Scenario: The setup stage installs pi for the run
@@ -47,7 +47,7 @@ Feature: The setup-pi stage installs and configures pi for the run
   @setup
   Scenario: pi reads the project files as context
     Given pi is configured
-    When a stage invokes pi with @file arguments for requirements/, README.md and docs/
+    When a stage invokes pi with @file arguments for the arc42 markdown files, the README and the baseline diff
     Then pi reads the named files as context before answering
 
   @setup
@@ -76,7 +76,7 @@ Feature: The setup-pi stage installs and configures pi for the run
 
   @setup
   Scenario: A verify step only runs under a runner-accepted shell form
-    Given a composite action step that carries an interpreter program
+    Given a workflow step that carries an interpreter program
     When the runner validates the step's shell declaration before executing it
     Then the declaration is a built-in shell or a format string naming the interpreter and the script placeholder
     And the step's program actually executes and the stage sees its result
@@ -156,3 +156,47 @@ Feature: The setup-pi stage installs and configures pi for the run
     When the setup stage runs
     Then the stage fails with an explicit error that the run's pi configuration is incomplete
     And no later stage runs
+
+  @setup @safety
+  Scenario: A declared extension-env provider whose values did not arrive fails the stage at its entry
+    Given the consumer workflow declares the extension-env provider
+    And the setup stage recorded the provider's values as state files in the run's state dir
+    And the later stage job's restoration of the recorded state lost the extension-env files
+    When the stage's entry checks the delivery of the recorded provider values, before any pi call of the stage
+    Then the check finds the provider declared and its state files absent from the state dir
+    And the stage fails immediately with an explicit error that the declared provider's values were not restored into the job
+    And no pi call is spent by the stage
+    And the check logs which relay half delivered what — the job's environment and the state dir
+    And the run's artefact log names the relay loss as the failure's cause
+
+  @setup @safety
+  Scenario: The delivery check applies to every declared harness provider
+    Given the stage's entry check verifies that a declared provider's recorded values were restored into the job
+    When the check runs for the run's other harness providers — the model configuration, the additional packages, the MCP configuration
+    Then each is subject to the same check — a declared provider whose recorded values did not arrive fails the stage at its entry
+    And a harness that would otherwise fall back silently is treated as the same class of loss
+
+  @setup
+  Scenario: A run whose extension-env provider is absent is unchanged by the delivery check
+    Given the consumer workflow declares no extension-env provider
+    When a stage job starts and its entry runs the delivery check
+    Then the provider-declaration flag is absent or false and no extension-env state file is expected
+    And the check passes without failure
+    And the run is unchanged — no files, no flag, no spurious failure
+
+  @setup @safety
+  Scenario: A commit with no resolvable identity fails with a factory-level diagnosis
+    Given the extension-env provider was declared for the run
+    And the provider's values did not arrive in the job
+    And the runner's own git configuration carries no commit identity
+    When a stage commits its work on the AI branch
+    Then the commit fails with a factory-level error that names the cause — the declared provider whose values never arrived
+    And the raw git "tell me who you are" fatal is not the outermost failure signal of the run
+    And the factory writes no identity of its own
+
+  @setup
+  Scenario: Every stage records its extension-env delivery on the stage-summary channel
+    Given a stage job has checked the delivery of the extension env at its entry
+    When the stage appends its outcome lines
+    Then the cumulative stage-summary channel carries one line per stage — "extension env: delivered (N values)", "missing (provider declared)", or "n/a (no provider)"
+    And the final status report and the run's artefact log carry the full delivery picture

@@ -645,10 +645,16 @@ def _write_baseline_snapshot(fake, rt):
 
 
 def test_extract_stage_uses_file_argument_context():
-    """(setup-pi "pi reads the project files as context"; reference
+    """(setup-pi "pi reads the project files as context" — the delta
+    rewords the scenario's When line to "a stage invokes pi with
+    @file arguments for the arc42 markdown files, the README and the
+    baseline diff": the documented `@`-file context slice, whose three
+    files the extract stage's call hands to pi as @-file arguments
+    (the oracle's directory is named in the instructions, never an
+    @-argument); reference
     `requirements/setup-pi.feature::pi reads the project files as
     context`) the extract
-    stage's pi call hands its context to pi as @-file arguments — the
+    stage's pi call hands that context to pi as @-file arguments — the
     arc42 markdown, README.md and the baseline diff: the oracle is NOT
     expanded into those arguments (the call's instructions name the
     requirements directory instead, and pi reads the files it judges
@@ -2020,9 +2026,15 @@ def test_consumer_workflow_pins_owner_and_version_tag():
     own (one ref selects the whole version), while the factory keeps the
     input declared as a legacy no-op. The expected outcome extends to
     the run's pi harness providers (configuration "The pi harness secrets
-    ride the reusable workflow's secrets block"): the same three surfaces —
-    the factory's secrets: block, the deployed consumer workflow, the README
-    example — carry the four provider secret entries in the same form, while
+    ride the reusable workflow's secrets block"): all three surfaces
+    wire the four providers in a secrets: block — the factory declares
+    the entries in its workflow_call secrets: block, the deployed dogfood
+    workflow keeps them in its own secrets: block (the only form the
+    reusable workflow accepts for a non-plain provider value) and sources
+    the values from the repo-level GitHub variables set on this repo
+    (runtime state, never tree files, never a plain input), and the
+    README example shows the general wiring — the consumer's own secrets —
+    while
     the uses: shape stays within its pattern (the README's example is
     documentation, not a pinned surface: the suite does not compare its ref
     against the deployed workflow, so a release ref bump on one surface
@@ -2070,19 +2082,23 @@ def test_consumer_workflow_pins_owner_and_version_tag():
             "stage jobs run the repo's own runtime tree, never a clone of "
             "the factory repo at a pinned ref")
     readme = _read("README.md")
-    # the extension: all three consumer surfaces carry the four harness
-    # provider secret entries in the same form — the factory declares them
-    # in its workflow_call secrets: block, the deployed workflow and the
-    # README example wire them in their own secrets: blocks
+    # the extension: all three consumer surfaces wire the four harness
+    # providers in a secrets: block — the factory declares the entries in
+    # its workflow_call secrets: block, the deployed dogfood workflow keeps
+    # them in its own secrets: block and sources the values from the
+    # repo-level GitHub variables set on this repo, and the README example
+    # shows the general wiring (the consumer's own secrets)
     factory = _read(".github/workflows/factory.yml")
     for name in ("PI_MODELS", "PI_SETTINGS", "PI_MCP", "EXTENSION_ENV"):
         assert f"      {name}:" in factory, \
             f"the factory's secrets: block must declare {name} as an optional entry"
-        line = f"      {name}: ${{{{ secrets.{name} }}}}"
-        assert line in text, \
-            f"the deployed consumer workflow must wire {name} in its secrets: block"
-        assert line in readme, \
-            f"the README example must wire {name} in its secrets: block — same form as the deployed workflow"
+        assert f"      {name}: ${{{{ vars.{name} }}}}" in text, \
+            (f"the deployed consumer workflow must wire {name} in its secrets: "
+             f"block — the deployed dogfood sources the values from the "
+             f"repo-level variables")
+        assert f"      {name}: ${{{{ secrets.{name} }}}}" in readme, \
+            (f"the README example must wire {name} in its secrets: block — "
+             f"the general form an external target's own secrets provide")
 
 
 def test_factory_upload_steps_opt_into_hidden_files():
@@ -2142,7 +2158,15 @@ def test_factory_workflow_is_self_contained():
     scripts from the called version's runtime tree stashed into
     $RUNNER_TEMP (stage 1 fetches it at the called ref; every later
     job's first step restores it from the trigger's artifact before its
-    checkout), and no stage job is without that stash step."""
+    checkout), and no stage job is without that stash step. The delta's
+    reworded scenario (setup-pi "A verify step only runs under a
+    runner-accepted shell form") renames its Given — "a composite action
+    step that carries an interpreter program" becomes "a workflow step
+    that carries an interpreter program": the rewording stops naming a
+    construct this pin already excludes — the self-contained workflow
+    has no composite actions to reference, no own-action ref (reference
+    `requirements/setup-pi.feature::A verify step only runs under a
+    runner-accepted shell form`)."""
     text = _read(".github/workflows/factory.yml")
     own_refs = [ln.strip() for ln in text.splitlines()
                 if re.search(r"\buses:\s*MelvinKl/code-weaver/\.github/actions/",
@@ -3213,13 +3237,24 @@ def test_report_renders_stage_outcomes_per_step_and_stage_complete():
     in the self-contained form, the issue comment — "step <k>/<n> done"
     for each of its finished steps; a stage that is done (its summary
     carries a completion line) is reported "stage complete", its per-step
-    lines staying out of the outcome."""
+    lines staying out of the outcome. Each stage's entry delivery check
+    records its delivery line on the same channel — a new kind of line on
+    the stage-summary channel ("extension env: …") that stays beside,
+    never instead of, the stage's outcome lines; the stage-outcome list
+    this test asserts carries one delivery line per stage, the full
+    delivery picture the final status carries (reference
+    `requirements/setup-pi.feature::Every stage records its extension-env
+    delivery on the stage-summary channel`)."""
     # the implement stage will re-run: its per-step lines are recorded and
     # no completion line (its plan left steps open, so the per-step loop
     # never exited fully tracked) — while the extract stage's summary
-    # carries its completion line (a stage that is done)
+    # carries its completion line (a stage that is done); beside the
+    # outcome lines, each stage's delivery line on the same channel
+    # (the stage-entry delivery check's outcome for that stage)
     pr_body, comment, _closed = _run_report_action(stage_summary=(
+        "stage 4 extract: extension env: n/a (no provider)\n"
         "stage 4 extract: clean — stage complete\n"
+        "stage 8 implementation: extension env: n/a (no provider)\n"
         "stage 8 implementation: step 1/3 done\n"
         "stage 8 implementation: step 2/3 done\n"))
     for surface in (pr_body, comment):
@@ -3235,12 +3270,24 @@ def test_report_renders_stage_outcomes_per_step_and_stage_complete():
         assert "stage 8 implementation: stage complete" not in surface, \
             (f"a stage that will re-run carries no completion line: "
              f"{surface!r}")
+        # each stage's delivery line sits beside its outcome lines — the
+        # final status carries the delivery picture the stages recorded
+        assert ("stage 4 extract: extension env: n/a (no provider)"
+                in surface), \
+            f"the stage's delivery line rides the stage-summary channel: " \
+            f"{surface!r}"
+        assert ("stage 8 implementation: extension env: n/a (no provider)"
+                in surface), \
+            f"the stage's delivery line rides the stage-summary channel: " \
+            f"{surface!r}"
     # …and the complement: the implement stage fully tracked its plan —
     # its summary carries the per-step lines AND its completion line — so
     # it is a stage that is done, reported "stage complete": the
     # per-step lines stay out of the outcome
     pr_body, comment, _closed = _run_report_action(stage_summary=(
+        "stage 4 extract: extension env: n/a (no provider)\n"
         "stage 4 extract: clean — stage complete\n"
+        "stage 8 implementation: extension env: n/a (no provider)\n"
         "stage 8 implementation: step 1/3 done\n"
         "stage 8 implementation: step 2/3 done\n"
         "stage 8 implementation: step 3/3 done\n"
@@ -3254,6 +3301,202 @@ def test_report_renders_stage_outcomes_per_step_and_stage_complete():
                 (f"a done stage's per-step lines stay out of the outcome: "
                  f"{surface!r}")
         assert "stage 4 extract: clean — stage complete" in surface, surface
+        # the delivery lines stay beside the outcome lines of a done
+        # stage too — rendered, never dropped with the per-step lines
+        assert ("stage 8 implementation: extension env: n/a (no provider)"
+                in surface), \
+            f"a done stage's delivery line is rendered beside its outcome: " \
+            f"{surface!r}"
+        assert ("stage 4 extract: extension env: n/a (no provider)"
+                in surface), surface
+
+
+def test_every_stage_records_its_extension_env_delivery_on_the_stage_summary_channel():
+    """(setup-pi "Every stage records its extension-env delivery on the
+    stage-summary channel" — new; reference
+    `requirements/setup-pi.feature::Every stage records its extension-env
+    delivery on the stage-summary channel`) each stage job's entry
+    delivery check records its delivery outcome as a line on the
+    cumulative stage-summary channel — one line per stage that ran, in
+    the three forms the scenario names: "extension env: delivered (N
+    values)" (a declared provider whose recorded values were restored
+    into the job — the values the stage's work and pi calls run with),
+    "missing (provider declared)" (a declared provider whose recorded
+    values did not arrive — the line is recorded before the check's
+    verdict, so it rides the artefact the failed job uploads), and
+    "n/a (no provider)" (the provider undeclared — the check passes the
+    element, the run's documented fall-through unchanged). The sandbox
+    runs the real shared check (the import path's definition) against
+    each of the three delivery states and reads the line back from the
+    stage-summary channel the state dir holds (the channel that rides
+    the run's state artefacts — and mirrors into the run's artefact
+    log). The final status carries the full delivery picture — the line
+    of every stage that ran, one line per stage, in stage order: both
+    report surfaces the report completes (the PR body's stage-outcomes
+    table and the issue comment) render it from the stage-summary lines
+    the report job downloads.
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_delivery_lines",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_delivery_lines"] = mod
+    spec.loader.exec_module(mod)
+    keys = ("RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_EXT_ENV_DECLARED",
+            "CW_EXT_ENV_KEYS",
+            "CW_HARNESS_MODELS_DECLARED", "CW_HARNESS_MODELS_DELIVERED",
+            "CW_HARNESS_SETTINGS_DECLARED", "CW_HARNESS_SETTINGS_DELIVERED",
+            "CW_HARNESS_MCP_DECLARED", "CW_HARNESS_MCP_DELIVERED",
+            "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in saved:
+        os.environ.pop(k, None)
+    try:
+        def one_sandbox():
+            rt = tempfile.mkdtemp(prefix="cw-delivery-line-rt-")
+            os.makedirs(os.path.join(rt, "cw", "state", "trigger"))
+            os.environ["RUNNER_TEMP"] = rt
+            os.environ["GITHUB_WORKSPACE"] = rt
+            return rt
+        # ── form one: a declared provider whose recorded values were
+        # restored into the job — the check passes, and the stage's
+        # line on the stage-summary channel is the delivery form
+        rt = one_sandbox()
+        trig = os.path.join(rt, "cw", "state", "trigger")
+        with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+            f.write("true\n")
+        for name in ("PI_JEV_BASE_URL", "PI_JEV_THINKING"):
+            with open(os.path.join(trig, f"extension-env-{name}.txt"),
+                      "w") as f:
+                f.write(f"a value of {name}\n")
+        try:
+            mod.delivery_check("stage 3 baseline")
+        except SystemExit as e:
+            raise AssertionError(
+                f"a delivered provider passes the check: {e.code!r}")
+        summary = open(os.path.join(rt, "cw", "stage-summary.txt"),
+                       encoding="utf-8").read()
+        assert ("stage 3 baseline: extension env: delivered (2 values)"
+                in summary), \
+            (f"the delivered form is recorded on the stage-summary "
+             f"channel: {summary!r}")
+        # the run's artefact log mirrors the line (the stage console is
+        # the artefact's copy of the stage's own narrative)
+        console = open(os.path.join(rt, "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        assert ("stage 3 baseline: extension env: delivered (2 values)"
+                in console), \
+            f"the artefact log carries the delivery line: {console!r}"
+        shutil.rmtree(rt, ignore_errors=True)
+        # ── form two: a declared provider whose recorded values did not
+        # arrive — the check fails the stage at its entry, and its line
+        # is the missing form, recorded before the verdict so it rides
+        # the artefact the failed job uploads
+        rt = one_sandbox()
+        trig = os.path.join(rt, "cw", "state", "trigger")
+        with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+            f.write("true\n")
+        try:
+            try:
+                mod.delivery_check("stage 3 baseline")
+                raise AssertionError(
+                    "a declared provider whose values did not arrive "
+                    "fails the check")
+            except SystemExit:
+                pass  # the controlled failure — the stage exits 1
+            summary = open(os.path.join(rt, "cw", "stage-summary.txt"),
+                           encoding="utf-8").read()
+            assert ("stage 3 baseline: extension env: missing "
+                    "(provider declared)" in summary), \
+                (f"the missing form is recorded on the stage-summary "
+                 f"channel before the check's verdict: {summary!r}")
+        finally:
+            shutil.rmtree(rt, ignore_errors=True)
+        # ── form three: a run whose provider is absent — the flag is
+        # absent, no state file is expected, the check passes, and the
+        # stage's line is the n/a form: the run is unchanged
+        rt = one_sandbox()
+        trig = os.path.join(rt, "cw", "state", "trigger")
+        with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+            f.write("148\n")
+        try:
+            mod.delivery_check("stage 3 baseline")
+            summary = open(os.path.join(rt, "cw", "stage-summary.txt"),
+                           encoding="utf-8").read()
+            assert ("stage 3 baseline: extension env: n/a (no provider)"
+                    in summary), \
+                (f"the n/a form is recorded on the stage-summary channel: "
+                 f"{summary!r}")
+            assert "stage-fail-reason" not in \
+                " ".join(os.listdir(os.path.join(rt, "cw"))), \
+                "an absent provider fails nothing"
+        finally:
+            shutil.rmtree(rt, ignore_errors=True)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        sys.modules.pop("cw_delivery_lines", None)
+    # ── the final status carries the full delivery picture: one line
+    # per stage that ran, in stage order. The run's merged stage summary
+    # carries each stage's delivery line (all three forms across the
+    # run's stages: the stages whose provider delivered, the update
+    # stage on a run whose provider is absent, and a stage whose relay
+    # lost the provider's values) — the report renders the table from
+    # those lines, on both surfaces it completes
+    stage_summary = (
+        "stage 2 setup-pi: extension env: delivered (2 values)\n"
+        "stage 3 baseline: extension env: delivered (2 values)\n"
+        "stage 4 requirements-extraction: extension env: delivered "
+        "(2 values)\n"
+        "update stage: extension env: n/a (no provider)\n"
+        "stage 6 planning: extension env: delivered (2 values)\n"
+        "stage 8 implementation: extension env: delivered (2 values)\n"
+        "stage 10-11 test & review: extension env: delivered "
+        "(2 values)\n"
+        "stage 12 pr: extension env: missing (provider declared)\n"
+        "stage 13-14 PR gates: extension env: missing "
+        "(provider declared)\n"
+        "15 report: extension env: n/a (no provider)\n")
+    delivery_lines = [l for l in stage_summary.splitlines() if l.strip()]
+    relay_keys = ("CW_EXT_ENV_DECLARED", "CW_EXT_ENV_KEYS",
+                  "CW_HARNESS_MODELS_DECLARED",
+                  "CW_HARNESS_MODELS_DELIVERED",
+                  "CW_HARNESS_SETTINGS_DECLARED",
+                  "CW_HARNESS_SETTINGS_DELIVERED",
+                  "CW_HARNESS_MCP_DECLARED", "CW_HARNESS_MCP_DELIVERED")
+    saved = {k: os.environ.get(k) for k in relay_keys}
+    for k in saved:
+        os.environ.pop(k, None)
+    try:
+        pr_body, comment, _closed = _run_report_action(
+            stage_summary=stage_summary)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    for surface in (pr_body, comment):
+        assert "### Stage outcomes" in surface, surface
+        # the full delivery picture — the line of every stage that ran
+        for line in delivery_lines:
+            assert line in surface, \
+                (f"the final status carries {line!r} — the full delivery "
+                 f"picture is one line per stage: {surface!r}")
+        # all three forms are carried
+        assert "delivered (2 values)" in surface, surface
+        assert "missing (provider declared)" in surface, surface
+        assert "n/a (no provider)" in surface, surface
+        # in stage order: the table renders the lines in the order the
+        # stages recorded them
+        idxs = [surface.index(l) for l in delivery_lines]
+        assert all(a < b for a, b in zip(idxs, idxs[1:])), \
+            (f"the delivery picture is one line per stage, in stage "
+             f"order: {idxs!r}")
 
 
 def test_report_lists_a_skipped_extraction_stage_as_skipped():
@@ -3587,7 +3830,16 @@ def test_loop_cap_defaults_match_oracle():
     delta's adjusted configuration/cost/safety scenarios carry lands on
     these surfaces: the quality chapter's "Loop caps" bullet and the README
     state the loop name as "guard repair", and "guard re-run" appears on
-    neither."""
+    neither. The implement scenario the delta rewords in place ("The
+    implementation loops until every step is done or a cap is reached"
+    — its last Then line now reads "it keeps doing this until every step
+    is done or the loop cap is reached", the "time/token limit"
+    parenthetical gone; reference
+    `requirements/implement.feature::The implementation loops until
+    every step is done or a cap is reached`) aligns with this pin's
+    documentation side: the quality chapter's "Loop caps" bullet and the
+    README state the iteration cap alone as the stopping condition, and
+    no token budget is one of the loops' stopping conditions."""
     factory = _read(".github/workflows/factory.yml")
     assert _workflow_input_default(factory, "max-loops") == "5", \
         "the oracle pins the MAX_LOOPS default as 5"
@@ -6473,6 +6725,173 @@ def test_run_git_operations_honour_the_provider_identity():
         shutil.rmtree(ws, ignore_errors=True)
         shutil.rmtree(rt, ignore_errors=True)
 
+def test_commit_with_no_resolvable_identity_fails_with_the_factory_diagnosis():
+    """(setup-pi "A commit with no resolvable identity fails with a
+    factory-level diagnosis" — new; reference
+    `requirements/setup-pi.feature::A commit with no resolvable identity
+    fails with a factory-level diagnosis`) the extension-env provider was
+    declared for the run, and its values did not arrive in the job — the
+    recorded state files are missing from the restored state dir, and the
+    per-job Read trigger state relay exported nothing into the job's env,
+    so neither relay half delivered the identity variables the run's
+    commits resolve from — and the runner's own git configuration (the
+    fallback the provider's variables override) carries no commit
+    identity either: a commit whose identity cannot be resolved. The
+    factory's single git entry point fails the commit with the
+    factory-level diagnosis that names the cause — the declared provider
+    whose values never arrived: the commit child never reaches the
+    subprocess boundary, so the raw git "tell me who you are" fatal is
+    not the outermost failure signal of the run (the diagnosis rides the
+    stage's crash-diagnostics channel, which persists the one-line reason
+    to the stage's artefact), and the factory writes no identity of its
+    own — no GIT_AUTHOR_* is composed into any child's environment. The
+    boundary is pinned both ways: a declared provider whose values DID
+    arrive keeps the unchanged scenario holding beside this one (the
+    run's commits carry the provider's identity — the control half runs
+    the same entry point with the recorded values restored, and the
+    commit proceeds with the provider's variables in the child's
+    environment). The sandbox models the runner's configuration the
+    scenario names: a HOME with no git configuration — the runner's own
+    git configuration carries no commit identity. As in the adjacent
+    test, the production entry point runs its real logic to the
+    subprocess boundary with a recording stand-in — no process is ever
+    spawned, and no test in the suite invokes the real git binary.
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_common_commit_diag",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    # registered under its own name before exec: the module's dataclass
+    # resolves its field types through sys.modules at class-creation
+    sys.modules["cw_common_commit_diag"] = mod
+    spec.loader.exec_module(mod)
+    ws = tempfile.mkdtemp(prefix="cw-commit-diag-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-commit-diag-rt-")
+    home = tempfile.mkdtemp(prefix="cw-commit-diag-home-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # the provider was declared for the run — the trigger's
+    # provider-declaration flag survived the restoration — but the
+    # provider's recorded state files are missing from the restored
+    # state dir, and the job's env is clean of the relay's exports
+    # (the per-job relay read the same missing files — it exported
+    # nothing)
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("true\n")
+    with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+        f.write("148\n")
+    provider = {"GIT_AUTHOR_NAME": "the provider's account",
+                "GIT_AUTHOR_EMAIL": "provider@example.invalid"}
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "HOME", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL", "CW_EXT_ENV_DECLARED", "CW_EXT_ENV_KEYS")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        # the runner's own git configuration carries no commit identity
+        # — the user-global configuration the fallback is: a HOME with
+        # no git configuration
+        "HOME": home,
+    })
+    calls = []
+    orig_run = subprocess.run
+
+    def recording_run(args, **kw):
+        calls.append((list(args), dict(kw)))
+        # the stand-in's answers model the runner's configuration: no
+        # commit identity in the user-global configuration (a git
+        # config query for an absent key exits 1 with no value — the
+        # stand-in's empty answer is the same absence)
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+
+    try:
+        # subprocess.run stands in at the boundary the entry point
+        # hands the child to: the real env composition runs, no
+        # process is spawned
+        subprocess.run = recording_run
+        # ── the diagnosis: the declared provider's values never
+        # arrived, the runner's own git configuration carries no
+        # commit identity — the commit fails with the factory-level
+        # diagnosis that names the lost provider
+        try:
+            mod.git_exec(["commit", "-q", "-m", "the stage's work"],
+                         cwd=ws, check=True)
+            raise AssertionError(
+                "a commit with no resolvable identity must fail — the "
+                "declared provider's values never arrived and the "
+                "runner's own git configuration carries no identity")
+        except RuntimeError as e:
+            # the diagnosis names the cause — the declared provider
+            # whose values never arrived
+            assert "extension-env provider" in str(e), \
+                f"the diagnosis names the lost provider: {e!s}"
+            assert "declared" in str(e) and "never arrived" in str(e), \
+                f"the diagnosis names the declared provider whose values " \
+                f"never arrived: {e!s}"
+            # the outermost failure is the diagnosis, not the raw git
+            # fatal: no commit child reached the subprocess boundary
+            assert not any(a[0] == "git" and len(a) > 1
+                           and a[1] == "commit" for a, _ in calls), \
+                (f"the commit child never spawns — the raw git 'tell me "
+                 f"who you are' fatal is not the outermost failure "
+                 f"signal: {calls!r}")
+            # every call the entry point made at the boundary is the
+            # read-only identity probe on the runner's own
+            # (user-global) git configuration
+            assert calls, \
+                "the entry point probes the runner's own git configuration"
+            for a, _ in calls:
+                assert a[0] == "git" and a[1:3] == ["config", "--global"], \
+                    f"the probe is a read-only config query: {a!r}"
+            # the factory writes no identity of its own — no
+            # GIT_AUTHOR_* is composed into any child's environment
+            for _, kw in calls:
+                env = kw.get("env") or {}
+                assert "GIT_AUTHOR_NAME" not in env, \
+                    (f"the entry point composes no identity of its own: "
+                     f"{sorted(env)!r}")
+                assert "GIT_AUTHOR_EMAIL" not in env, \
+                    (f"the entry point composes no identity of its own: "
+                     f"{sorted(env)!r}")
+            # …and the job's environment is untouched by it
+            assert os.environ.get("GIT_AUTHOR_NAME") is None, \
+                "the factory sets no variable in the job's environment"
+            assert os.environ.get("GIT_AUTHOR_EMAIL") is None, \
+                "the factory sets no variable in the job's environment"
+        # ── the boundary: a declared provider whose values DID arrive
+        # keeps the unchanged scenario holding — the run's commits
+        # carry the provider's identity, and the commit proceeds
+        for name, value in provider.items():
+            with open(os.path.join(trig, f"extension-env-{name}.txt"),
+                      "w", encoding="utf-8") as f:
+                f.write(value + "\n")
+        calls.clear()
+        mod.git_exec(["commit", "-q", "-m", "the stage's work"],
+                     cwd=ws, check=True)
+        assert calls, "the git call must reach the subprocess boundary"
+        args, kw = calls[-1]
+        assert args and args[0] == "git" and args[1] == "commit", args
+        env = kw.get("env")
+        for name, value in provider.items():
+            assert env.get(name) == value, \
+                (f"a delivered provider's {name} rides the git child's "
+                 f"environment — the commit proceeds with the provider's "
+                 f"identity: {env.get(name)!r}")
+    finally:
+        sys.modules.pop("cw_common_commit_diag", None)
+        subprocess.run = orig_run
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(home, ignore_errors=True)
+
 def test_pr_gate_reads_the_review_stage_completion():
     """(pr-and-gates "a pull request is opened against the target
     branch" — the PR opens once the review is clean; the cleanliness is
@@ -6706,19 +7125,20 @@ def test_every_stage_applies_the_recorded_extension_env_at_entry():
     """(setup-pi "The additional environment variables are provided via a
     .env-style GitHub secret" — the every-stage clause; reference
     `requirements/setup-pi.feature::The additional environment variables
-    are provided via a .env-style GitHub secret`) every stage script
-    applies the run's recorded extension env to its process environment
-    at the stage's entry — every CLI the stage then spawns (its pi
-    invocations, its git children, any subprocess) inherits the
-    provider's values in its process environment: the artefact-channel
-    half of the relay that keeps the every-step contract whole on a
-    runner build whose GITHUB_ENV write ghosts. The stage scripts that
-    carry their own git entry point copy (baseline, pr-open, report,
-    guard-check — the test suite mocks that one function, so no test
-    spawns the real git binary) apply the values to that copy's child
-    environment as well; pi-run rides the shared pi-call plumbing,
-    which applies the recorded values to the invocation's process
-    environment itself."""
+    are provided via a .env-style GitHub secret`) every stage script runs
+    the shared stage-entry delivery check at the stage's entry, and only
+    then applies the run's recorded extension env to its process
+    environment — the check gates the application: every CLI the stage
+    then spawns (its pi invocations, its git children, any subprocess)
+    inherits the provider's values in its process environment: the
+    artefact-channel half of the relay that keeps the every-step
+    contract whole on a runner build whose GITHUB_ENV write ghosts. The
+    stage scripts that carry their own git entry point copy (baseline,
+    pr-open, report, guard-check — the test suite mocks that one
+    function, so no test spawns the real git binary) apply the values to
+    that copy's child environment as well; pi-run rides the shared
+    pi-call plumbing, which applies the recorded values to the
+    invocation's process environment itself."""
     acts = os.path.join(ROOT, ".github", "actions")
     for d in sorted(os.listdir(acts)):
         sp = os.path.join(acts, d, "stage.py")
@@ -6729,8 +7149,26 @@ def test_every_stage_applies_the_recorded_extension_env_at_entry():
             assert "pi_invoke" in text, \
                 "pi-run rides the shared pi-call plumbing (which applies the recorded values)"
             continue
-        assert "apply_extension_env" in text, \
+        # call sites only — the import line and the local fallback defs
+        # of the baseline/report dual-path import do not count: the stage
+        # script runs the delivery check at its entry and only then
+        # applies
+        def first_call(pattern):
+            for m in re.finditer(pattern, text):
+                line = text[:m.start()].rsplit("\n", 1)[-1]
+                if "def " not in line and "import " not in line:
+                    return m.start()
+            return -1
+        chk = first_call(r"(?:common\.)?delivery_check\(")
+        app = first_call(r"(?:common\.)?apply_extension_env\(\)")
+        assert chk != -1, \
+            f"{d}'s stage script must run the delivery check at its entry"
+        assert app != -1, \
             f"{d}'s stage script must apply the recorded extension env to its process environment at entry"
+        assert chk < app, \
+            (f"{d}'s stage script must run the delivery check at its "
+             f"entry and only then apply (check at offset {chk}, apply "
+             f"at offset {app})")
     for name in ("baseline", "pr-open", "report"):
         text = open(os.path.join(acts, name, "stage.py"), encoding="utf-8").read()
         assert 'extension-env-' in text, \
@@ -6740,6 +7178,267 @@ def test_every_stage_applies_the_recorded_extension_env_at_entry():
                 encoding="utf-8").read()
     assert "extension-env-" in text, \
         "guard-check's inline git fallback must apply the recorded extension env"
+
+
+def test_delivery_check_fails_the_stage_entry_for_a_lost_declared_extension_env():
+    """(setup-pi "A declared extension-env provider whose values did
+    not arrive fails the stage at its entry" — new; reference
+    `requirements/setup-pi.feature::A declared extension-env provider
+    whose values did not arrive fails the stage at its entry`) the
+    consumer workflow declares the extension-env provider (the trigger's
+    provider-declaration flag names it), and the setup stage recorded
+    the provider's values as state files in the run's state dir — but
+    the later stage job's restoration of the recorded state lost the
+    extension-env files. The stage's entry delivery check — which runs
+    in the stage job before any stage work or pi call of the stage —
+    finds the provider declared and its state files absent from the
+    state dir, and fails the stage immediately with an explicit error
+    that the declared provider's values were not restored into the job;
+    the check logs which relay half delivered what — the job's
+    environment and the state dir — and the run's artefact log names
+    the relay loss as the failure's cause (the stage's artefact carries
+    the one-line reason). The sandbox runs the real check to the stage's
+    entry: the trigger's flag file survived the restoration, the value
+    files did not, and the job's env is clean of the relay's exports
+    (the per-job Read trigger state relay read the same missing files —
+    it exported nothing). A recording stand-in on pi_invoke proves no pi
+    call is spent: the check exits at entry, before the stage spends a
+    pi call.
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_delivery_check",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    # registered under its own name before exec: the module's dataclass
+    # resolves its field types through sys.modules at class-creation
+    sys.modules["cw_delivery_check"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-delivery-lost-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # the trigger's recorded state survived the restoration — its
+    # provider-declaration flag names the provider; the setup stage's
+    # recording is what the later stage job's restoration lost: no
+    # extension-env-*.txt state file, and the per-job relay that feeds
+    # the job's env read the same missing files — it exported nothing
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("true\n")
+    with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+        f.write("148\n")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_EXT_ENV_DECLARED",
+              "CW_EXT_ENV_KEYS", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    calls = []
+    orig_invoke = mod.pi_invoke
+    mod.pi_invoke = lambda *a, **kw: calls.append((a, kw))
+    try:
+        try:
+            mod.delivery_check("stage 3 baseline")
+            raise AssertionError(
+                "the check must fail the stage at its entry — the "
+                "declared provider's recorded values did not arrive")
+        except SystemExit as e:
+            assert e.code == 1, \
+                f"the controlled failure exits 1: {e.code!r}"
+        # no pi call is spent by the stage — the check fires at entry,
+        # before any pi call of the stage
+        assert not calls, \
+            f"no pi call is spent — the check fails at entry: {calls!r}"
+        # the check logs which relay half delivered what — the job's
+        # environment and the state dir; its lines mirror into the
+        # run's artefact log (stage-console.log)
+        console = open(os.path.join(rt, "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        assert "extension-env" in console, \
+            f"the failure names the declared provider: {console!r}"
+        assert "state-dir half lost" in console, \
+            f"the check reports the state dir's half: {console!r}"
+        assert "job-env half lost" in console, \
+            f"the check reports the job's environment's half: {console!r}"
+        # the run's artefact log names the relay loss as the failure's
+        # cause: the one-line reason the stage's artefact carries
+        reason = open(os.path.join(rt, "cw", "stage-fail-reason.txt"),
+                      encoding="utf-8").read()
+        assert "extension-env" in reason and "relay loss" in reason, \
+            (f"the artefact's one-line reason names the relay loss "
+             f"as the failure's cause: {reason!r}")
+    finally:
+        mod.pi_invoke = orig_invoke
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        sys.modules.pop("cw_delivery_check", None)
+
+
+def test_delivery_check_applies_to_every_declared_harness_provider():
+    """(setup-pi "The delivery check applies to every declared harness
+    provider" — new; reference
+    `requirements/setup-pi.feature::The delivery check applies to every
+    declared harness provider`) the same entry delivery check verifies
+    that a declared provider's recorded values were restored into the
+    job for the run's other harness providers — the model configuration,
+    the additional packages, the MCP configuration: the setup stage
+    records each declared provider's declaration and its recorded value
+    as state files on the same state-dir artefact channel the
+    extension-env values ride, and the check verifies each one's
+    delivery (both relay halves). Each is subject to the same check — a
+    declared provider whose recorded values did not arrive fails the
+    stage at its entry — and a harness that would otherwise fall back
+    silently (an element that would run absent when its provider is
+    absent — pi without additional packages, without MCP servers) is
+    treated as the same class of loss: the check fails the stage's
+    entry instead of the harness degrading quietly. The sandbox
+    restores the declarations of all three value-carrying providers
+    with their recorded value files lost (and the per-job relay
+    exported no delivery marker into the job's env): the check must
+    fail the stage at its entry, naming every lost provider.
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_delivery_all_providers",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_delivery_all_providers"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-delivery-all-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # all three value-carrying providers are declared for the run (the
+    # setup stage recorded the declarations) — but the restoration lost
+    # their recorded value files, and the per-job relay exported no
+    # delivery marker into the job's env
+    for p in ("models", "settings", "mcp"):
+        with open(os.path.join(trig, f"harness-{p}-declared.txt"), "w") as f:
+            f.write("true\n")
+    with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+        f.write("148\n")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_EXT_ENV_DECLARED",
+              "CW_EXT_ENV_KEYS",
+              "CW_HARNESS_MODELS_DECLARED", "CW_HARNESS_MODELS_DELIVERED",
+              "CW_HARNESS_SETTINGS_DECLARED",
+              "CW_HARNESS_SETTINGS_DELIVERED",
+              "CW_HARNESS_MCP_DECLARED", "CW_HARNESS_MCP_DELIVERED",
+              "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    try:
+        try:
+            mod.delivery_check("stage 3 baseline")
+            raise AssertionError(
+                "the check must fail the stage at its entry — the "
+                "declared providers' recorded values did not arrive")
+        except SystemExit as e:
+            assert e.code == 1, \
+                f"the controlled failure exits 1: {e.code!r}"
+        console = open(os.path.join(rt, "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        for p in ("models", "settings", "mcp"):
+            assert f"  - {p}:" in console, \
+                (f"the check fails for every declared provider, each a "
+                 f"harness that would otherwise fall back silently — "
+                 f"{p} missing from the failure: {console!r}")
+        reason = open(os.path.join(rt, "cw", "stage-fail-reason.txt"),
+                      encoding="utf-8").read()
+        assert all(p in reason for p in ("models", "settings", "mcp")), \
+            f"the artefact's one-line reason names every lost provider: {reason!r}"
+        assert "relay loss" in reason, \
+            f"the artefact's one-line reason names the relay loss: {reason!r}"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        sys.modules.pop("cw_delivery_all_providers", None)
+
+
+def test_delivery_check_leaves_an_absent_extension_env_provider_unchanged():
+    """(setup-pi "A run whose extension-env provider is absent is
+    unchanged by the delivery check" — new; reference
+    `requirements/setup-pi.feature::A run whose extension-env provider
+    is absent is unchanged by the delivery check`) the consumer workflow
+    declares no extension-env provider: where a stage job starts and its
+    entry runs the delivery check, the provider-declaration flag is
+    absent or false and no extension-env state file is expected — the
+    check passes without failure, and the run is unchanged: no files,
+    no flag, no spurious failure. The sandbox restores the trigger's
+    recorded state without a provider-declaration flag, without any
+    extension-env state file, and without any harness provider's
+    declaration, and the job's env is clean of the relay's exports; the
+    check must return normally — and must leave the run's state dir and
+    the job's environment exactly as it found them (no file written, no
+    flag created, no variable set).
+    """
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_delivery_absent",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_delivery_absent"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-delivery-absent-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # the trigger's recorded state — no provider-declaration flag, no
+    # extension-env state file, no harness provider's declaration;
+    # the job's env is clean of the relay's exports
+    with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+        f.write("148\n")
+    with open(os.path.join(trig, "started.txt"), "w") as f:
+        f.write("true\n")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_EXT_ENV_DECLARED",
+              "CW_EXT_ENV_KEYS",
+              "CW_HARNESS_MODELS_DECLARED", "CW_HARNESS_MODELS_DELIVERED",
+              "CW_HARNESS_SETTINGS_DECLARED",
+              "CW_HARNESS_SETTINGS_DELIVERED",
+              "CW_HARNESS_MCP_DECLARED", "CW_HARNESS_MCP_DELIVERED",
+              "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    before = sorted(os.listdir(trig))
+    try:
+        # the check passes — it returns, it does not exit the stage
+        mod.delivery_check("stage 3 baseline")
+        after = sorted(os.listdir(trig))
+        assert after == before, \
+            f"the run is unchanged — the check writes no file: {after!r}"
+        assert "ext-env-declared.txt" not in after, \
+            f"no flag is created by the check: {after!r}"
+        assert not os.path.exists(
+            os.path.join(rt, "cw", "stage-fail-reason.txt")), \
+            "no spurious failure — the check recorded none"
+        for k in saved:
+            if k in ("RUNNER_TEMP", "GITHUB_WORKSPACE"):
+                # the sandbox's own settings — the check neither creates
+                # nor disturbs them
+                assert os.environ.get(k) == rt, \
+                    f"the check leaves the sandbox's {k} untouched"
+            else:
+                assert os.environ.get(k) is None, \
+                    f"the check sets no variable of its own: {k!r}"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        sys.modules.pop("cw_delivery_absent", None)
 
 
 # ── the update stage (issue 145) ────────────────────────────────────────
@@ -6864,7 +7563,7 @@ def test_auto_update_undeclared_resolves_to_its_true_default():
                      ("review", "pr"), ("pr", "gates"),
                      ("gates", "report")):
         region = _job_region(factory, job, nxt)
-        assert "no-delta-stop auto-update" in region, (
+        assert "no-delta-stop auto-update ext-env-declared" in region, (
             f"the {job} job's Read trigger state step does not relay "
             f"the AUTO_UPDATE value into the job's env")
     # the plan job's step env relays the workflow's own binding through

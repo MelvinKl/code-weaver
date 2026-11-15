@@ -135,7 +135,10 @@ def test_documented_setup_stage_installs_and_configures_pi():
     surface that discusses the stage must carry both statements: a chapter
     that kept the verify-only story next to the new code is a false doc.
     The README's stage-list item itself is asserted on its own (the
-    surface a consumer reads first)."""
+    surface a consumer reads first). The delta's reworded line on the
+    requirement-extraction feature's side is the oracle side of that same
+    alignment (see the sibling test); these surfaces stand as pinned — no
+    assertion of this test changes."""
     surfaces = _setup_surfaces()
     assert surfaces, ("no doc surface (README or arc42 chapter) discusses "
                       "the setup stage — the contract must be stated, not "
@@ -167,7 +170,13 @@ def test_documented_surfaces_state_no_pi_prerequisite():
     pre-installed or pre-configured pi is a pre-requisite of the runner
     environment: every surface that discusses the setup stage carries the
     negation, with "pre-requisite" reserved for what survives (the `gh`
-    CLI, the runner user's `~/.config` ownership)."""
+    CLI, the runner user's `~/.config` ownership). The delta rewords the
+    requirement-extraction feature's Background line to "pi is installed
+    and configured for the run by the setup-pi stage" (replacing "pi is
+    pre-installed and pre-configured in the runner environment"): it
+    removes from the oracle the very pre-requisite this test pins as
+    retired; the documentation surfaces pinned here are the documentation
+    side of that same alignment and stand as pinned."""
     for relpath, text in _setup_surfaces():
         low = text.lower()
         assert "no pre-installed or pre-configured pi" in low, (
