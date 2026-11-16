@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 
 def repo() -> str:
@@ -476,7 +477,9 @@ def apply_extension_env() -> None:
             os.environ[name] = value
 
 
-# provider → (declaration flag, recorded-value file, job-env relay marker):
+# provider → (declaration flag, recorded-value state name, job-env relay
+# marker) — the state names ride the state dir with a .txt suffix (the
+# writer's name); the check appends it when it tests the value file:
 # the setup-pi stage records each declared value-carrying harness provider's
 # declaration and its recorded value as state files in the run's state dir,
 # on the same state-dir artefact channel the extension-env values ride
@@ -493,6 +496,70 @@ HARNESS_PROVIDER_STATE = {
     "mcp": ("harness-mcp-declared", "harness-mcp",
             "CW_HARNESS_MCP_DELIVERED"),
 }
+
+
+# The bounded catch-up wait the stage's entry opens with (see
+# delivery_check's docstring): this runner host's filesystem has been
+# observed to lag its own writes — the download step reported complete
+# (its digest verified) while the extraction's final entries were still
+# materialising on disk, so the entry would otherwise read a
+# half-restored state dir. Hold the entry until the state dir is
+# quiescent AND every declared value file has landed: a healthy,
+# complete tree settles on the first stable sample (a few hundred
+# milliseconds), a tree the filesystem is still catching up keeps the
+# wait open while its entries land, and a tree that never catches up
+# runs the bound out — the check then proceeds and fails loudly,
+# exactly as it does today. The wait must never mask the check or fail
+# the stage itself.
+_SETTLE_POLL_SECONDS = 0.1
+_SETTLE_STABLE_SAMPLES = 3
+_SETTLE_DEADLINE_SECONDS = 30.0
+
+
+def _wait_for_restored_tree(stage: str, root: str, declared) -> None:
+    expected = {value_file + ".txt"
+                for _provider, (flag, value_file, _marker)
+                in HARNESS_PROVIDER_STATE.items()
+                if declared(flag, "CW_" + flag.replace("-", "_").upper())}
+    ext_declared = declared("ext-env-declared", "CW_EXT_ENV_DECLARED")
+    try:
+        def complete(snapshot: set) -> bool:
+            if not expected <= snapshot:
+                return False
+            if ext_declared:
+                return any(f.startswith("extension-env-")
+                           and f.endswith(".txt") for f in snapshot)
+            return True
+
+        prev = None
+        stable = 0
+        seen = set()
+        deadline = time.monotonic() + _SETTLE_DEADLINE_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                snap = set(os.listdir(root))
+            except OSError:
+                snap = set()
+            if snap == prev:
+                stable += 1
+            else:
+                prev = snap
+                stable = 0
+            seen |= snap
+            if stable >= _SETTLE_STABLE_SAMPLES and complete(seen):
+                log(f"{stage}: restored state dir settled and complete "
+                    f"({len(prev or ())} file(s)) — the entry check "
+                    f"reads a full dir")
+                return
+            time.sleep(_SETTLE_POLL_SECONDS)
+        missing = expected - (prev or set())
+        log(f"::warning::{stage} — the restored state dir had not "
+            f"caught up within {int(_SETTLE_DEADLINE_SECONDS)}s (still "
+            f"missing {sorted(missing) or '—'}); the entry check "
+            f"proceeds against whatever is on disk")
+    except Exception:
+        # the wait must never mask the check or fail the stage itself
+        pass
 
 
 def delivery_check(stage: str) -> None:
@@ -543,7 +610,40 @@ def delivery_check(stage: str) -> None:
     reflects the values the stage recorded for the run —
     "delivered (N values)", or "n/a (no provider)" where the provider is
     absent.
+
+    The entry opens with a bounded catch-up wait on the restored state
+    dir: on this runner host the filesystem has been observed to lag its
+    own writes — the download step reported complete (its digest
+    verified) while the extraction's final entries were still
+    materialising on disk, so the entry check would otherwise read a
+    half-restored dir (the run's own artefacts carry the byte-complete
+    zip beside the stage's missing files, which surface only into the
+    job's later upload). The wait holds the entry until the dir is
+    quiescent AND every declared value file has landed: a healthy,
+    complete tree settles on the first stable sample (a few hundred
+    milliseconds), a tree the filesystem is still catching up keeps the
+    wait open while its entries land, and a tree that never catches up
+    runs the bound out — then the check proceeds and fails loudly,
+    exactly as it does today. The wait can never mask the check: any
+    error of its own lets the check run against whatever is on disk.
     """
+    root = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "state",
+                        "trigger")
+
+    def declared(flag: str, env_key: str) -> bool:
+        # the declaration itself rides both relay halves: the trigger's
+        # state file is the authoritative source, the per-job env relay
+        # its in-process twin
+        return (cw_state(flag) or os.environ.get(env_key) or "") \
+            .strip() == "true"
+
+    # every stage job's entry opens with the bounded catch-up wait
+    # (writer's entry included — its own work reads the trigger's state
+    # files, the same files this host's filesystem lands late): hold
+    # the entry until the state dir is quiescent AND every declared
+    # value file has landed, then re-read the dir the check reads.
+    _wait_for_restored_tree(stage, root, declared)
+
     if "setup-pi" in stage:
         log(f"{stage}: entry delivery check — the setup-pi stage is the "
             f"harness writer: the providers' recorded values it writes "
@@ -552,19 +652,10 @@ def delivery_check(stage: str) -> None:
             f"the other stage jobs' entry checks verify this stage's "
             f"recorded values arrived")
         return
-    root = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "state",
-                        "trigger")
     try:
         present = set(os.listdir(root))
     except OSError:
         present = set()
-
-    def declared(flag: str, env_key: str) -> bool:
-        # the declaration itself rides both relay halves: the trigger's
-        # state file is the authoritative source, the per-job env relay
-        # its in-process twin
-        return (cw_state(flag) or os.environ.get(env_key) or "") \
-            .strip() == "true"
 
     lost = []
     # the extension's environment — its declaration is the trigger's
@@ -618,7 +709,9 @@ def delivery_check(stage: str) -> None:
                 f"run's documented fall-through for the element is "
                 f"unchanged (no files, no flag, no spurious failure)")
             continue
-        state_half = value_file in present
+        # the state file on disk carries the .txt suffix (the writer's
+        # name); the tuple's value_file is the bare state name
+        state_half = (value_file + ".txt") in present
         env_half = bool((os.environ.get(marker) or "").strip())
         if state_half or env_half:
             log(f"{stage}: entry delivery check — {provider} declared, "
@@ -630,7 +723,7 @@ def delivery_check(stage: str) -> None:
                 (provider,
                  "declared for the run, but its recorded values were not "
                  "restored into the job — state-dir half lost (the recorded "
-                 f"state file {value_file} is absent from the restored "
+                 f"state file {value_file}.txt is absent from the restored "
                  f"state dir {root}); job-env half lost ({marker} unset — "
                  "the per-job Read trigger state relay exported no delivery "
                  "marker)"))
