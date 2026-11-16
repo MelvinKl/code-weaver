@@ -455,7 +455,7 @@ def recorded_extension_env() -> list[tuple[str, str]]:
     return out
 
 
-def apply_extension_env() -> None:
+def apply_extension_env() -> list[str]:
     """The setup-pi stage's recorded extension env — its resolved values
     from a non-empty EXTENSION_ENV provider, each recorded as a state
     file in the run's state dir (one value a file, beside the trigger's
@@ -471,10 +471,18 @@ def apply_extension_env() -> None:
     environment. The provider's leave-untouched rule applies: a value
     already present in the environment wins over the run's provided one.
     A run without the provider recorded no file — this call sets no
-    variable and the environment is unchanged."""
+    variable and the environment is unchanged. The return is the list of
+    the variables this call set — the entry snapshot's marker is built
+    from it (a stage whose entry found the recorded values certified in
+    the state dir carries that fact in its process environment for every
+    later consumer of the relay, the commit-identity guard's declared
+    check among them)."""
+    applied = []
     for name, value in recorded_extension_env():
         if value and not os.environ.get(name):
             os.environ[name] = value
+            applied.append(name)
+    return applied
 
 
 # provider → (declaration flag, recorded-value state name, job-env relay
@@ -523,36 +531,68 @@ def _wait_for_restored_tree(stage: str, root: str, declared) -> None:
                 if declared(flag, "CW_" + flag.replace("-", "_").upper())}
     ext_declared = declared("ext-env-declared", "CW_EXT_ENV_DECLARED")
     try:
-        def complete(snapshot: set) -> bool:
+        def complete(snapshot: set, ext_materialized: bool) -> bool:
             if not expected <= snapshot:
                 return False
             if ext_declared:
-                return any(f.startswith("extension-env-")
-                           and f.endswith(".txt") for f in snapshot)
+                # presence alone is not completion: on this host a dir
+                # entry has been observed to materialise before the
+                # file's data, so a declared provider's value files must
+                # also read non-empty — the data is what the entry's
+                # snapshot and the stage's consumers take
+                return (any(f.startswith("extension-env-")
+                            and f.endswith(".txt") for f in snapshot)
+                        and ext_materialized)
             return True
+
+        def fingerprint(snapshot: set):
+            # the declared provider's value files' sizes ride the
+            # fingerprint, so a file whose entry landed but whose data is
+            # still materialising keeps the wait open until it settles
+            sizes = []
+            if ext_declared:
+                for f in sorted(snapshot):
+                    if f.startswith("extension-env-") \
+                            and f.endswith(".txt"):
+                        try:
+                            sizes.append((f, os.path.getsize(
+                                os.path.join(root, f))))
+                        except OSError:
+                            sizes.append((f, -1))
+            return (snapshot, tuple(sizes))
 
         prev = None
         stable = 0
         seen = set()
+        ext_materialized = False
         deadline = time.monotonic() + _SETTLE_DEADLINE_SECONDS
         while time.monotonic() < deadline:
             try:
                 snap = set(os.listdir(root))
             except OSError:
                 snap = set()
-            if snap == prev:
+            key = fingerprint(snap)
+            if ext_declared:
+                # every visible value file reads its data back non-empty
+                ext_materialized = True
+                for fname, size in key[1]:
+                    if size <= 0:
+                        ext_materialized = False
+                        break
+            if key == prev:
                 stable += 1
             else:
-                prev = snap
+                prev = key
                 stable = 0
             seen |= snap
-            if stable >= _SETTLE_STABLE_SAMPLES and complete(seen):
+            if stable >= _SETTLE_STABLE_SAMPLES and complete(seen,
+                                                             ext_materialized):
                 log(f"{stage}: restored state dir settled and complete "
-                    f"({len(prev or ())} file(s)) — the entry check "
+                    f"({len(snap)} file(s)) — the entry check "
                     f"reads a full dir")
                 return
             time.sleep(_SETTLE_POLL_SECONDS)
-        missing = expected - (prev or set())
+        missing = expected - (prev[0] if prev else set())
         log(f"::warning::{stage} — the restored state dir had not "
             f"caught up within {int(_SETTLE_DEADLINE_SECONDS)}s (still "
             f"missing {sorted(missing) or '—'}); the entry check "
@@ -641,8 +681,46 @@ def delivery_check(stage: str) -> None:
     # (writer's entry included — its own work reads the trigger's state
     # files, the same files this host's filesystem lands late): hold
     # the entry until the state dir is quiescent AND every declared
-    # value file has landed, then re-read the dir the check reads.
+    # value file has landed — entry, and its data, on disk — then
+    # re-read the dir the check reads.
     _wait_for_restored_tree(stage, root, declared)
+
+    # The entry snapshot of the recorded extension env into this
+    # process, taken at the one moment the wait has certified the
+    # restored tree: the values are fixed in the process environment
+    # here, and every later consumer of the relay in this process reads
+    # that — the git children (their env is a snapshot of os.environ,
+    # taken at each call), the commit-identity guard's declared probe.
+    # No consumer re-reads the state dir for a value it needs at process
+    # scope: this host's filesystem has shown it cannot be re-trusted on
+    # that timescale (a run whose tree was complete and proven at entry
+    # still committed minutes later against a fresh re-read that
+    # answered empty — the entry's snapshot makes the later read a
+    # no-op fallback). The marker the snapshot records is in-process
+    # ground truth the relay's own files cannot un-make, and the guard's
+    # declared check accepts it beside the two relay halves. A writer
+    # stage's entry takes the same snapshot and finds nothing (its own
+    # recorded values do not exist at its own entry) — the uniformity
+    # holds, the marker is simply absent there. A tree genuinely lost
+    # at entry takes no snapshot and fails the check below, loudly, as
+    # before: the wait and the snapshot can certify only what is on
+    # disk, and they never mask an absence.
+    applied = apply_extension_env()
+    if applied:
+        # The marker encodes the state dir root this entry used, beside
+        # the variables it fixed: a marker naming a root this process's
+        # relay no longer points at is another scenario's (the validator
+        # suite reuses one process across its scenarios) — stale, and the
+        # guard rejects it. The entry that set the marker is the only
+        # one the marker certifies.
+        os.environ["CW_EXT_ENV_APPLIED"] = root + "\x1f" \
+            + ",".join(sorted(applied))
+    else:
+        # an entry that certifies nothing retracts a stale marker an
+        # earlier entry in this process left behind — the marker's
+        # scope is the entry that set it, and a later entry re-derives
+        # it wholly from its own view of the state dir
+        os.environ.pop("CW_EXT_ENV_APPLIED", None)
 
     if "setup-pi" in stage:
         log(f"{stage}: entry delivery check — the setup-pi stage is the "
@@ -1481,7 +1559,14 @@ def _diagnose_unresolvable_commit_identity(env: dict) -> None:
     identity of its own: the diagnosis raises — it composes no
     GIT_AUTHOR_* of its own into any child's environment — and the
     raise rides the stage's crash-diagnostics channel, which persists
-    the one-line reason to the stage's artefact.
+    the one-line reason to the stage's artefact. The two forms the
+    diagnosis takes: a relay loss (the declared provider's values
+    never arrived — the entry check's declared-but-lost finding)
+    and a provider-content gap (the entry's snapshot certified
+    values into the process, yet none of its recorded variables
+    resolves a commit identity — the marker's root scoping keeps a
+    marker another scenario's entry left in a reused process from
+    answering for this one).
     """
     if ((env.get("GIT_AUTHOR_NAME") or "").strip()
             and (env.get("GIT_AUTHOR_EMAIL") or "").strip()):
@@ -1501,10 +1586,44 @@ def _diagnose_unresolvable_commit_identity(env: dict) -> None:
         pass  # a probe that cannot answer: the diagnosis's direction
     if has_identity:
         return  # the runner's own configuration resolves the identity
-    if not ((cw_state("ext-env-declared")
-             or os.environ.get("CW_EXT_ENV_DECLARED") or "").strip()
-            == "true"):
+    # The entry snapshot's marker is the third declared source — the
+    # in-process ground truth the stage fixed at its entry, the one the
+    # relay's own files cannot un-make when this host's filesystem
+    # answers a later re-read empty. The marker encodes the state dir
+    # root its entry used: a marker naming a root this process's relay
+    # no longer points at is another scenario's (the validator's suite
+    # reuses one process across its scenarios) — stale, rejected. Where
+    # the current root cannot be derived at all (RUNNER_TEMP itself lost
+    # from the process environment — the shape this host has shown), the
+    # entry's certified root is the best available truth: the marker
+    # stands, and a commit that still cannot resolve an identity is a
+    # loss the factory names, never a raw git fatal
+    marker = os.environ.get("CW_EXT_ENV_APPLIED") or ""
+    marker_root, _, marker_names = marker.partition("\x1f")
+    _rt = os.environ.get("RUNNER_TEMP", "")
+    marker_valid = bool(marker_names.strip()) and bool(marker_root) \
+        and (marker_root == os.path.join(_rt, "cw", "state", "trigger")
+             or not _rt)
+    declared = ((cw_state("ext-env-declared")
+                 or os.environ.get("CW_EXT_ENV_DECLARED") or "").strip()
+                == "true"
+                or marker_valid)
+    if not declared:
         return  # an undeclared provider keeps the documented behaviour
+    if marker_valid:
+        # the entry snapshot certified the provider's values into this
+        # process — a commit that still cannot resolve an identity is
+        # not a relay loss, it is a provider-content gap: none of the
+        # declared provider's recorded variables is the commit identity
+        raise RuntimeError(
+            "git commit cannot resolve a commit identity: the extension-env "
+            "provider was declared for the run and its values were certified "
+            "into this process at the stage's entry, yet none of its recorded "
+            "variables resolves a commit identity (no GIT_AUTHOR_NAME / "
+            "GIT_AUTHOR_EMAIL among them, and the runner's own git "
+            "configuration carries none) — the provider's content is the "
+            "run's commit identity's source; the factory writes no identity "
+            "of its own")
     raise RuntimeError(
         "git commit cannot resolve a commit identity: the extension-env "
         "provider was declared for the run and its values never arrived "
