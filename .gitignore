@@ -5,3 +5,8 @@ test-results/
 # local scratch: the release-remote tag/sha listing written by ad-hoc
 # ls-remote probing of the `public` remote — runner-local, never part of the tree
 shas
+
+# the pi agent state directory this repo happens to be an agent cwd —
+# never part of the curated tree (the oracle forbids .pi-prefixed paths
+# in it); ignoring it keeps a git add -A from sweeping it in
+.pi/

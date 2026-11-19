@@ -1371,14 +1371,57 @@ def guard(baseline: str, allow: list[str] | tuple[str, ...],
 
 
 def commit_all(message: str) -> bool:
-    """Commit whatever the stage produced (empty = no-op)."""
+    """Commit whatever the stage produced (empty = no-op).
+
+    A commit that dies on a stale index.lock — this runner build loses
+    file operations: the unlink of a lock a completed git child released
+    never lands, so the next git child in the same repository dies on the
+    file the prior child believes it released — clears the lock and
+    retries the commit once. The stage's process is the repository's only
+    git actor at this point (the pi call completed before the commit; the
+    guard runs after it), so clearing a lock the failure's text names is
+    safe. The single retry and the signature gate keep a genuinely broken
+    repository failing loud rather than looping: a failure without the
+    stale-lock signature re-raises as-is, and a second failed commit
+    fails the stage.
+    """
     git_exec(["add", "-A"], cwd=repo(), check=True)
     dirty = git_exec(["status", "--porcelain"], cwd=repo(),
                      capture_output=True, text=True)
     if not dirty.stdout.strip():
         return False
-    git_exec(["commit", "-q", "-m", message], cwd=repo(), check=True)
+    try:
+        git_exec(["commit", "-q", "-m", message], cwd=repo(),
+                 check=True)
+    except RuntimeError as e:
+        if "index.lock" in str(e) and "File exists" in str(e):
+            _clear_stale_index_lock()
+            log("the commit died on a stale index.lock — the released "
+                "unlink never landed on this runner build; cleared, "
+                "retrying the commit once (bounded)")
+            git_exec(["commit", "-q", "-m", message], cwd=repo(),
+                     check=True)
+        else:
+            raise
     return True
+
+
+def _clear_stale_index_lock() -> None:
+    """Clear a stale index.lock the failure's text named.
+
+    The lock lives in the repository's git dir — for a worktree that is
+    the dir its .git file names, not the worktree's own .git file."""
+    gd = os.path.join(repo(), ".git")
+    if os.path.isfile(gd):
+        try:
+            line = open(gd, encoding="utf-8").readline().strip()
+            if line.startswith("gitdir:"):
+                gd = line[len("gitdir:"):].strip()
+        except OSError:
+            pass
+    lock = os.path.join(gd, "index.lock")
+    if os.path.exists(lock):
+        os.remove(lock)
 
 
 def ai_branch() -> str:
@@ -1532,7 +1575,48 @@ def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     # own — see the docstring)
     if argv and argv[0] == "commit":
         _diagnose_unresolvable_commit_identity(env)
-    return subprocess.run(["git"] + list(argv), **kwargs)
+    # the entry point captures the child's streams itself where the
+    # caller did not redirect them: on this runner build the job's logs
+    # ghost and the state dir's diagnostics can vanish from the upload,
+    # so a failed child's own words must ride in the raised error's
+    # message (the crash channel), not in a stream the runner pointed
+    # somewhere the artefact never reaches
+    if ("capture_output" not in kwargs and "stdout" not in kwargs
+            and "stderr" not in kwargs):
+        kwargs["capture_output"] = True
+    try:
+        return subprocess.run(["git"] + list(argv), **kwargs)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(_git_failure_message(argv, e)) from e
+
+
+def _git_failure_message(argv: list[str],
+                          e: subprocess.CalledProcessError) -> str:
+    """The child's own words on why git died.
+
+    The raw CalledProcessError carries only 'returned non-zero exit
+    status N'; the entry point raises carrying the child's stderr — the
+    git fatal that names the cause (a stale lock a released unlink never
+    landed, a dubious-ownership refusal, a configuration fatal), the run's
+    token redacted out of it (a push URL echo), tailed — the last lines
+    are the diagnosis, not the progress. The message rides the stage's
+    crash channel and its console, so the artefact names the cause where
+    the job log ghosts."""
+    out = e.stderr if e.stderr is not None else e.stdout
+    if out is None:
+        out = e.output
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", "replace")
+    if out:
+        token = os.environ.get("GH_TOKEN", "")
+        if token:
+            out = out.replace(token, "***")
+        out = " ".join(line.strip() for line in out.splitlines()
+                       if line.strip())
+        return (f"git {argv[0]} failed (exit {e.returncode}): "
+                + out[-400:])
+    return (f"git {argv[0]} failed (exit {e.returncode}) "
+            "with no captured output")
 
 
 def _diagnose_unresolvable_commit_identity(env: dict) -> None:

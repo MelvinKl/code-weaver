@@ -100,7 +100,33 @@ def git_exec(argv: list, **kwargs):
         env["GIT_CONFIG_KEY_%d" % i] = k
         env["GIT_CONFIG_VALUE_%d" % i] = v
     kwargs["env"] = env
-    return subprocess.run(["git"] + list(argv), **kwargs)
+    # a failed child's own words ride in the raised error's message: on
+    # this runner build the job's logs ghost and the state dir's
+    # diagnostics can vanish from the upload, so the entry point captures
+    # the child's streams itself where the caller did not redirect them,
+    # and a child that exits non-zero makes the entry point raise carrying
+    # that stderr — the git fatal that names the cause, the run's token
+    # redacted out of it, tailed
+    if ("capture_output" not in kwargs and "stdout" not in kwargs
+            and "stderr" not in kwargs):
+        kwargs["capture_output"] = True
+    try:
+        return subprocess.run(["git"] + list(argv), **kwargs)
+    except subprocess.CalledProcessError as e:
+        out = e.stderr if e.stderr is not None else (
+            e.stdout if e.stdout is not None else e.output)
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", "replace")
+        tok = os.environ.get("GH_TOKEN", "")
+        if out and tok:
+            out = out.replace(tok, "***")
+        if out:
+            out = " ".join(l.strip() for l in out.splitlines()
+                           if l.strip())
+        raise RuntimeError(
+            "git %s failed (exit %d): %s"
+            % (argv[0], e.returncode,
+               out[-400:] or "no captured output")) from e
 
 
 def _load():

@@ -202,6 +202,23 @@ Feature: The setup-pi stage installs and configures pi for the run
     And the raw git "tell me who you are" fatal is not the outermost failure signal of the run
     And the factory writes no identity of its own
 
+  @setup @safety
+  Scenario: A git child that dies names its own diagnosis in the failure
+    Given a git call of the run — a stage's commit, the guard's diff, one of the workflow's inline step programs
+    When the git child exits non-zero
+    Then the failure the single git entry point raises carries the child's own stderr — the git fatal that names the cause (a stale lock a released unlink never landed, a dubious-ownership refusal, a configuration fatal)
+    And the run's token is redacted out of the carried text
+    And the entry point captures the child's streams itself where the caller did not redirect them, so the text lands in the message regardless of where the runner pointed the step
+    And the diagnosis rides the stage's crash channel and the stage's console — the artefact names the cause where the job log ghosts
+
+  @setup @safety
+  Scenario: A stage commit that dies on a stale lock clears the lock and retries once
+    Given the runner build's filesystem lost the unlink of a lock a completed git child released
+    And the stage's commit child therefore dies on the lock file still naming itself in the repository
+    When the failure the entry point raises carries the stale-lock signature
+    Then the stage clears the stale lock and retries the commit once — the stage's work commits rather than the stage crashing
+    And a failure without the stale-lock signature re-raises without retry, and a second failed commit fails the stage loud
+
   @setup
   Scenario: Every stage records its extension-env delivery on the stage-summary channel
     Given a stage job has checked the delivery of the extension env at its entry

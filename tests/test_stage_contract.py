@@ -8017,3 +8017,411 @@ def test_auto_update_setting_is_configurable():
     assert "_auto_update_on" in src and '"off"' in src, \
         "the update stage's gate is not the documented dependency-" \
         "upgrade off-form"
+
+def test_git_exec_surfaces_the_childs_failure_in_the_raised_error():
+    """(setup-pi "A git child that dies names its own diagnosis in the
+    failure"; reference
+    `requirements/setup-pi.feature::A git child that dies names its own
+    diagnosis in the failure`) a git child that exits non-zero makes the
+    single git entry point raise carrying the child's own stderr — the git fatal that
+    names the cause (here: the stale index.lock of run 44556803514's
+    extract stage, the host losing the released unlink), the run's token
+    redacted out of it, tailed. The raw CalledProcessError carries only
+    an exit status and the child's stream runs wherever the runner
+    pointed the step — on this runner build the job's logs ghost and the
+    state dir's diagnostics can vanish from the upload, so the message
+    itself must ride the crash channel. The entry point captures the
+    child's streams itself where the caller did not redirect them (the
+    sandbox's caller passes no stream arguments: the forced capture is
+    what puts the text in the message); a caller that redirected keeps
+    its own streams.
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_git_exec_fail",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_git_exec_fail"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-gitfail-rt-")
+    repo = tempfile.mkdtemp(prefix="cw-gitfail-repo-")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "GH_TOKEN",
+              "CW_EXT_ENV_DECLARED", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = repo
+
+    class _FakeSubp:
+        CompletedProcess = real_subprocess.CalledProcessError
+        CalledProcessError = real_subprocess.CalledProcessError
+        spawned = []
+
+        @staticmethod
+        def run(argv, **kw):
+            _FakeSubp.spawned.append((list(argv), dict(kw)))
+            if len(argv) >= 2 and argv[1] == "commit":
+                raise real_subprocess.CalledProcessError(
+                    128, ["git", "commit", "-q", "-m", "x"],
+                    stderr=b"fatal: Unable to create "
+                          b"'" + repo.encode()
+                          + b"/.git/index.lock': File exists\n"
+                          b"\nAnother git process seems to be running in "
+                          b"this repository, or the previous git did not "
+                          b"terminate properly; perhaps a core dump was "
+                          b"left in the repository directory.\n")
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        try:
+            mod.git_exec(["commit", "-q", "-m", "x"], cwd=repo,
+                         check=True)
+            raise AssertionError(
+                "the entry point must raise where the child exits "
+                "non-zero under check=True")
+        except RuntimeError as e:
+            msg = str(e)
+            assert "index.lock" in msg, \
+                f"the message carries the child's own stderr: {msg!r}"
+            assert "File exists" in msg, \
+                f"the fatal's words are in the message: {msg!r}"
+            assert "exit 128" in msg, \
+                f"the exit status stays named: {msg!r}"
+        # the entry point captured the child's streams itself where the
+        # caller did not redirect them — the forced capture is what puts
+        # the text in the message
+        spawn_argv, spawn_kw = _FakeSubp.spawned[-1]
+        assert spawn_kw.get("capture_output") is True, \
+            (f"the entry point forces the capture where the caller did "
+             f"not redirect: {spawn_kw!r}")
+    finally:
+        mod.subprocess = real_subprocess
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_git_exec_fail", None)
+
+
+def test_git_exec_failure_text_redacts_the_run_token():
+    """(setup-pi "A git child that dies names its own diagnosis in the
+    failure" — the redaction clause; reference
+    `requirements/setup-pi.feature::A git child that dies names its own
+    diagnosis in the failure`) a child's stderr that echoes the
+    run's token (a push URL) is redacted out of the raised message: the
+    diagnosis rides the artefact, and the artefact is not a secret
+    channel.
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_git_exec_redact",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_git_exec_redact"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-gitred-rt-")
+    repo = tempfile.mkdtemp(prefix="cw-gitred-repo-")
+    token = "the-run-token-should-never-land-in-an-artefact"
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "GH_TOKEN",
+              "CW_EXT_ENV_DECLARED", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = repo
+    os.environ["GH_TOKEN"] = token
+
+    class _FakeSubp:
+        CalledProcessError = real_subprocess.CalledProcessError
+
+        @staticmethod
+        def run(argv, **kw):
+            raise real_subprocess.CalledProcessError(
+                128, list(argv),
+                stderr=("fatal: unable to access "
+                        f"'https://x-access-token:{token}"
+                        f"@github.com/owner/repo/': server responded "
+                        "with 401").encode())
+    try:
+        mod.subprocess = _FakeSubp
+        try:
+            mod.git_exec(["fetch", "origin"], cwd=repo, check=True)
+            raise AssertionError("a failed child must raise")
+        except RuntimeError as e:
+            msg = str(e)
+            assert token not in msg, \
+                f"the token is redacted out of the message: {msg!r}"
+            assert "***" in msg, \
+                f"the redaction marker is in its place: {msg!r}"
+            assert "401" in msg, \
+                f"the diagnosis survives the redaction: {msg!r}"
+    finally:
+        mod.subprocess = real_subprocess
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_git_exec_redact", None)
+
+
+def test_commit_all_recovers_from_a_stale_lock():
+    """(setup-pi "A stage commit that dies on a stale lock clears the
+    lock and retries once"; reference
+    `requirements/setup-pi.feature::A stage commit that dies on a stale
+    lock clears the lock and retries once`) this runner build loses file operations: the
+    unlink of a lock a completed git child released never lands, so the
+    next git child in the same repository dies on the file the prior
+    child believes it released (the extract stage's commit in run
+    44556803514 — the stage's work committed never, and the stage
+    crashed on the lock its own earlier child released). The failure the
+    entry point raises carries the stale-lock signature (the lock name
+    and the file-exists words), and the stage clears the lock and
+    retries the commit once — the stage's work commits rather than the
+    stage crashing. The single retry and the signature gate are the
+    bounds: a failure without the signature re-raises as-is (the
+    sibling test), and a second failed commit fails the stage loud.
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_commitall_lock",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_commitall_lock"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-cmall-rt-")
+    repo = tempfile.mkdtemp(prefix="cw-cmall-repo-")
+    gitdir = os.path.join(repo, ".git")
+    os.makedirs(gitdir)
+    lock = os.path.join(gitdir, "index.lock")
+    # the stale lock: the file the completed child believes it released
+    with open(lock, "w") as f:
+        f.write("")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "GH_TOKEN",
+              "CW_EXT_ENV_DECLARED", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = repo
+    commits = []
+
+    class _FakeSubp:
+        CalledProcessError = real_subprocess.CalledProcessError
+
+        @staticmethod
+        def run(argv, **kw):
+            if len(argv) >= 2 and argv[1] == "add":
+                return real_subprocess.CompletedProcess(
+                    0, list(argv), stdout=b"", stderr=b"")
+            if len(argv) >= 2 and argv[1] == "status":
+                return real_subprocess.CompletedProcess(
+                    0, list(argv), stdout=b" M app.py\n", stderr=b"")
+            if len(argv) >= 2 and argv[1] == "commit":
+                commits.append(1)
+                if len(commits) == 1:
+                    raise real_subprocess.CalledProcessError(
+                        128, list(argv),
+                        stderr=(f"fatal: Unable to create "
+                                f"'{lock}': File exists").encode())
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        ok = mod.commit_all("stage 4: generated (iteration 0)")
+        assert ok is True, "the stage's work commits after the recovery"
+        assert not os.path.exists(lock), \
+            "the stale lock is cleared before the retry"
+        assert len(commits) == 2, \
+            (f"the commit retries exactly once — the bounded recovery: "
+             f"{len(commits)} commit attempt(s)")
+    finally:
+        mod.subprocess = real_subprocess
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_commitall_lock", None)
+
+
+def test_commit_all_re_raises_a_failure_without_the_stale_lock_signature():
+    """(setup-pi "A stage commit that dies on a stale lock clears the
+    lock and retries once" — the bound's other half; reference
+    `requirements/setup-pi.feature::A stage commit that dies on a stale
+    lock clears the lock and retries once`) a commit failure
+    whose carried text lacks the stale-lock signature is not the host's
+    lost-unlink shape — the recovery must not swallow it: the failure
+    re-raises as-is, no retry is spent, and the stage fails loud on the
+    cause the entry point carried (here git's own 'bad index file'
+    fatal).
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_commitall_bound",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_commitall_bound"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-cmbnd-rt-")
+    repo = tempfile.mkdtemp(prefix="cw-cmbnd-repo-")
+    gitdir = os.path.join(repo, ".git")
+    os.makedirs(gitdir)
+    lock = os.path.join(gitdir, "index.lock")
+    with open(lock, "w") as f:
+        f.write("")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "GH_TOKEN",
+              "CW_EXT_ENV_DECLARED", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = repo
+    commits = []
+
+    class _FakeSubp:
+        CalledProcessError = real_subprocess.CalledProcessError
+
+        @staticmethod
+        def run(argv, **kw):
+            if len(argv) >= 2 and argv[1] == "add":
+                return real_subprocess.CompletedProcess(
+                    0, list(argv), stdout=b"", stderr=b"")
+            if len(argv) >= 2 and argv[1] == "status":
+                return real_subprocess.CompletedProcess(
+                    0, list(argv), stdout=b" M app.py\n", stderr=b"")
+            if len(argv) >= 2 and argv[1] == "commit":
+                commits.append(1)
+                raise real_subprocess.CalledProcessError(
+                    128, list(argv),
+                    stderr=b"fatal: bad index file\n")
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        try:
+            mod.commit_all("stage 4: generated (iteration 0)")
+            raise AssertionError(
+                "a failure without the stale-lock signature must "
+                "re-raise, not be retried away")
+        except RuntimeError as e:
+            assert "bad index file" in str(e), \
+                (f"the carried diagnosis names the real cause: "
+                 f"{str(e)!r}")
+        assert len(commits) == 1, \
+            (f"no retry is spent without the signature: "
+             f"{len(commits)} commit attempt(s)")
+        assert os.path.exists(lock), \
+            "the recovery does not touch a lock its signature did not name"
+    finally:
+        mod.subprocess = real_subprocess
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_commitall_bound", None)
+
+
+def test_every_inline_git_copy_surfaces_the_childs_failure():
+    """(setup-pi "A git child that dies names its own diagnosis in the
+    failure" — the every-program half; reference
+    `requirements/setup-pi.feature::A git child that dies names its own
+    diagnosis in the failure`) every git entry point copy the
+    factory's programs carry — the shared module's canonical copy and
+    the self-contained copies (baseline, pr-open, report, the
+    guard-check fallback, the workflow's PR-body template-fallback
+    step) — must carry the enrichment: the forced capture where the
+    caller did not redirect the streams, the raise on the failed
+    child carrying its own stderr, and the token redaction. The copies
+    are the every-program contract's git half (the sibling
+    delivery-check test pins their extension-env apply); a copy that
+    kept the bare subprocess.run would leave its program's git deaths
+    unnamed where the job log ghosts. The shared module carries the
+    redaction in the helper its entry point calls, so its region check
+    spans the entry point plus that helper; the self-contained copies
+    carry the whole enrichment inline.
+    """
+    import re
+    def git_exec_region(src, start_marker="def git_exec", until=None):
+        start = src.index(start_marker)
+        line_start = src.rfind("\n", 0, start) + 1
+        line_end = src.index("\n", start)
+        first_line = src[line_start:line_end]
+        indent = len(first_line) - len(first_line.lstrip(" "))
+        at = line_end + 1
+        n = len(src)
+        stop = src.find("\n" + until) if until else -1
+        while at < n and (stop < 0 or at <= stop):
+            line_start = src.rfind("\n", 0, at) + 1
+            line = src[at:]
+            eol = line.find("\n")
+            line = line if eol < 0 else line[:eol]
+            stripped = line.lstrip(" ")
+            li = len(line) - len(stripped)
+            if li <= indent and stripped and not stripped.startswith(
+                    ("#", '"', "'", "r\"", "f\"")):
+                break
+            at = at + (len(line) if eol < 0 else eol + 1)
+        return src[start:at]
+
+    def check(region, where, redact_in_region=True):
+        assert "capture_output" in region, \
+            f"{where}'s copy must force the capture where the caller " \
+            f"did not redirect the streams"
+        assert "except subprocess.CalledProcessError" in region, \
+            f"{where}'s copy must raise on the failed child"
+        if redact_in_region:
+            assert "GH_TOKEN" in region, \
+                f"{where}'s copy must redact the run's token out of the " \
+                f"carried text"
+        assert "RuntimeError" in region, \
+            f"{where}'s copy must raise the carried diagnosis as the " \
+            f"failure"
+
+    common_text = _read(".github/scripts/common.py")
+    check(git_exec_region(common_text, "def git_exec",
+                          until="def _diagnose_unresolvable_commit_identity")
+          if "def _diagnose_unresolvable_commit_identity" in common_text
+          else git_exec_region(common_text),
+          "the shared module's canonical copy", redact_in_region=False)
+    assert "GH_TOKEN" in common_text and \
+        'out.replace(token, "***")' in common_text, \
+        ("the shared module's failure-message helper must redact the "
+         "run's token out of the carried text")
+    for name in ("baseline", "pr-open", "report"):
+        check(git_exec_region(open(os.path.join(ROOT, ".github", "actions",
+                                               name, "stage.py"),
+                                   encoding="utf-8").read()),
+              f"{name}'s self-contained copy")
+    check(git_exec_region(open(os.path.join(ROOT, ".github", "actions",
+                                            "guard-check",
+                                            "guard-check.py"),
+                               encoding="utf-8").read()),
+          "the guard-check fallback's copy")
+    src = _pr_fallback_source()
+    check(git_exec_region(src, "def git_exec"),
+          "the PR-body template-fallback step's copy")
