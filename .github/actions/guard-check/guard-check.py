@@ -29,7 +29,14 @@ entries only, where a denied file is one no allow entry matches.
 Canonical implementation lives in .github/scripts/common.py (shared by every
 stage); this file is a thin entry point so the guard is one self-contained
 script. If the scripts dir is not materialised next to this action (degenerate
-sparse checkout), an inline fallback with identical semantics is used."""
+sparse checkout), an inline fallback with identical semantics is used. Like
+every program of the run, the entry applies the recorded extension env to its
+OWN process at its own entry, before any CLI call of it: a stage that spawns
+the guard hands it a process environment that already carries the values
+(the stage's entry snapshot — the apply a leave-untouched no-op), while a
+standalone invocation finds the empty environment to fix, so the program's
+git children (the detection, the repair's commit) and its pi repair call
+carry the provider's values in every process shape."""
 from __future__ import annotations
 
 import os
@@ -340,6 +347,32 @@ def _load():
             allow, deny = tail[:i], [a for a in tail[i + 1:] if a]
         else:
             allow, deny = tail, []
+        # the program's own entry apply, self-contained (the fallback's
+        # twin of the canonical entry's apply_extension_env call): the
+        # stage-spawned form finds the values already present in the
+        # environment the stage handed this process (a no-op), the
+        # standalone form finds the empty environment and fixes the
+        # recorded values from the run's state dir — after which every
+        # git child and pi call of the program builds its environment
+        # from a process that carries them
+        d = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "cw",
+                         "state", "trigger")
+        try:
+            fns = os.listdir(d)
+        except OSError:
+            fns = []
+        for fn in sorted(fns):
+            if not (fn.startswith("extension-env-")
+                    and fn.endswith(".txt")):
+                continue
+            k = fn[len("extension-env-"):-len(".txt")]
+            try:
+                v = open(os.path.join(d, fn), encoding="utf-8").read()
+            except OSError:
+                continue
+            v = v.strip()
+            if v and not os.environ.get(k):
+                os.environ[k] = v
         r = guard(baseline, allow, deny,
                   stage=os.environ.get("CW_GUARD_STAGE", ""),
                   template=os.environ.get("CW_GUARD_TEMPLATE", ""))

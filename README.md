@@ -362,7 +362,7 @@ runner's user-level configuration).
 | the model configuration — the run's LLM backend is defined in it; a run whose environment provides no provider for it fails the setup stage (the run's pi configuration is incomplete, no later stage runs) | `PI_MODELS` |
 | the additional-packages settings — an empty or absent settings provider leaves pi without additional packages | `PI_SETTINGS` |
 | the MCP configuration — an absent provider means the run's pi runs without MCP servers | `PI_MCP` |
-| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys, and delivery-checked and applied at every stage job's entry) | `EXTENSION_ENV` |
+| the extension's environment variables — a `.env`-style secret; a non-empty provider's values are, in addition to the materialised user-level extension, set as environment variables in the environment of every pi invocation of the run (recorded into the run's state dir, relayed to every later stage job like the other trigger-state keys, delivery-checked and applied at every stage job's entry — and applied at the entry of every program of the run that spawns CLI calls, the guard's own entry among them and the workflow's inline step programs, whose git entry-point copies apply the recorded values to the git child's environment: every git and pi call the run makes carries the values in the child's process environment) | `EXTENSION_ENV` |
 
 The extension's environment is the run's commit-identity provider, and
 the only one: the factory writes no git identity of its own, so the
@@ -500,7 +500,7 @@ factory.
     release-number.py  the release flow's number, guard and skip computations (release.yml pipes the remote's tag list in for the next single increasing number, the tag lines into the one-tag-per-commit guard, and the push's changed files into the pre-publish skip — confined to the consumer workflow → no release published)
     embed-runtime.py   the release flow's publication gate (`--check`, the flow's pre-tag step): the committed factory.yml plain text within the max allowed size, and the tagged commit's tree carrying the runtime tree the file's stage steps execute — a version that is not consistent is never published; and (`--verify-structure`, the flow's second pre-tag step): the committed file's job/step graph parses to the pinned shape under every standard engine, no step declares keys after its run block, no run block past the giant-body budget, no run block's heredoc terminator indented past the block's base, no `python3` code-heredoc body indented past the block's base, and no block opens a heredoc it never terminates — a file the gate's shape checks fail is never published
 pi-prompts/            the pi prompt templates (requirements, update, plan, implement, review, pr-body)
-requirements/          the Gherkin oracle for THIS repo (17 files, 188 scenarios)
+requirements/          the Gherkin oracle for THIS repo (17 files, 189 scenarios)
 docs/                  the arc42 set — one chapter per file (01–11); 01 carries the AI-activity section
 tests/                 unit tests (the validator + stage contracts)
 PLAN.md                the implementation plan this code implements
@@ -508,7 +508,7 @@ PLAN.md                the implementation plan this code implements
 
 ## Requirements
 
-`requirements/` holds **188 Gherkin scenarios** — the oracle this
+`requirements/` holds **189 Gherkin scenarios** — the oracle this
 implementation satisfies. The files are **structured by topic, not by
 issue**: each file is named after the topic it covers, so a search for a
 topic targets that topic's file instead of sweeping the whole oracle — and

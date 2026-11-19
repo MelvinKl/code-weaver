@@ -4863,7 +4863,8 @@ def test_guard_repairs_a_violation_with_a_pi_call():
 
 
 def _guard_fallback_sandbox(allow, deny, mode, max_loops,
-                            stage="stage 6 planning", template="plan"):
+                            stage="stage 6 planning", template="plan",
+                            leak=True, ext_env=None):
     """The fallback-form twin of _guard_repair_sandbox: the same temp
     workspace (the sandbox's fake model tracks it as a git repo — a
     committed baseline, the stage's own allowed work, the off-limits
@@ -4874,11 +4875,18 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
     mocked single git entry point: its _load() finds no canonical
     common.py and defines the inline fallback, and the process boundary
     a subprocess form would carry is exactly what the mock exists to
-    remove — a test never spawns the real git binary. Returns a
-    namespace: repo (the repo dir), rt (the state-dir root), baseline,
-    returncode (the guard CLI's exit), out (its captured stdout — the
-    narrative run_guard relays), err, and cleanup (restore the env, the
-    git-exec mock and remove the temp dirs)."""
+    remove — a test never spawns the real git binary. `leak=False` runs
+    the clean shape (the stage's allowed work only — the guard's
+    pass-through half, no pi call spent); `ext_env={name: value}` seeds
+    the run's state dir with the provider's recorded extension-env
+    values (beside the trigger's state, the declared-provider flag with
+    them) and starts the process environment WITHOUT them — the
+    standalone invocation's shape, the state files the values' only
+    source. Returns a namespace: repo (the repo dir), rt (the
+    state-dir root), baseline, returncode (the guard CLI's exit), out
+    (its captured stdout — the narrative run_guard relays), err, and
+    cleanup (restore the env, the git-exec mock and remove the temp
+    dirs)."""
     import shutil
     import tempfile
     repo = tempfile.mkdtemp(prefix="cw-guardfb-repo-")
@@ -4908,14 +4916,16 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
     # the fake `pi`'s revert restores this snapshot of the baseline tree
     _write_baseline_snapshot(ws_fake, rt)
 
-    # the stage's own work (an allowed change to the plan file) plus the
-    # scenario's leak (an off-limits edit in the requirements dir)
+    # the stage's own work (an allowed change to the plan file) plus —
+    # where the scenario carries the leak — an off-limits edit in the
+    # requirements dir
     with open(os.path.join(repo, "plans", "69.md"), "a") as f:
         f.write("- [x] a step\n")
-    with open(os.path.join(repo, "requirements", "guard-rail.feature"),
-              "a") as f:
-        f.write("  Scenario: a leak\n"
-                "    Given the stage edited the oracle\n")
+    if leak:
+        with open(os.path.join(repo, "requirements", "guard-rail.feature"),
+                  "a") as f:
+            f.write("  Scenario: a leak\n"
+                    "    Given the stage edited the oracle\n")
 
     os.makedirs(os.path.join(fake, "bin"))
     with open(os.path.join(fake, "bin", "pi"), "w") as f:
@@ -4941,6 +4951,24 @@ def _guard_fallback_sandbox(allow, deny, mode, max_loops,
         "PATH": os.path.join(fake, "bin") + os.pathsep + (saved["PATH"] or ""),
         "FAKE_PI_MODE": mode,
     })
+    # the provider's recorded extension env in the run's state dir
+    # (beside the trigger's recorded state, the declared-provider flag
+    # with it), and — the standalone invocation's shape — the process
+    # environment started without the provider's variables: the state
+    # files are their only source for this program
+    if ext_env:
+        trig = os.path.join(rt, "cw", "state", "trigger")
+        os.makedirs(trig)
+        for k, v in ext_env.items():
+            with open(os.path.join(trig, f"extension-env-{k}.txt"),
+                      "w", encoding="utf-8") as f:
+                f.write(v + "\n")
+        with open(os.path.join(trig, "ext-env-declared.txt"),
+                  "w", encoding="utf-8") as f:
+            f.write("true\n")
+        for k in ext_env:
+            saved[k] = os.environ.get(k)
+            os.environ.pop(k, None)
 
     # the entry script runs in-process against the mocked single git entry
     # point: the tree copy has no sibling scripts dir, so its _load() takes
@@ -6891,6 +6919,275 @@ def test_commit_with_no_resolvable_identity_fails_with_the_factory_diagnosis():
         shutil.rmtree(ws, ignore_errors=True)
         shutil.rmtree(rt, ignore_errors=True)
         shutil.rmtree(home, ignore_errors=True)
+
+def test_guard_program_applies_the_extension_env_at_its_own_entry():
+    """(setup-pi "Every program of the run applies the extension env to
+    its own process at its entry" — new; reference
+    `requirements/setup-pi.feature::Every program of the run applies the
+    extension env to its own process at its entry`) the guard is a
+    program of the run like any stage — its own entry point, its own git
+    children (the detection's diff/ls-files, the repair's commit), its
+    own pi repair call — and the relay's every-step contract holds for
+    it: the program applies the recorded extension env to its own
+    process environment at its own entry, before any CLI call of it.
+    The sandbox drives the canonical entry point (the common module's
+    main_guard_cli — what the guard's _load() returns where the sibling
+    scripts dir resolves) in-process, in the standalone invocation's
+    shape: the trigger's state dir seeded with the provider's recorded
+    values, the process environment started WITHOUT them (no spawner's
+    snapshot to inherit). The production entry point runs its real logic
+    to the subprocess boundary with a recording stand-in for
+    subprocess.run — no process is ever spawned, and no test in the
+    suite invokes the real git binary. A clean tree (the stand-in
+    answers every git call empty) runs the guard's pass-through half —
+    no pi call is spent, the program exits 0 — and the test's
+    assertions are the contract's two halves: after the entry, the
+    program's own process environment carries the provider's variables
+    (every CLI the program then spawns — its git children, its pi call —
+    builds its environment from a process that carries them), and the
+    git CLI calls the program actually made ride them in the child's
+    environment — the env set on the call to the git cli, the
+    provider's git user data among them."""
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_guard_entry_apply",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    # registered under its own name before exec: the module's dataclass
+    # resolves its field types through sys.modules at class-creation
+    sys.modules["cw_guard_entry_apply"] = mod
+    spec.loader.exec_module(mod)
+    repo = tempfile.mkdtemp(prefix="cw-guardentry-repo-")
+    rt = tempfile.mkdtemp(prefix="cw-guardentry-rt-")
+    provider = {"GIT_AUTHOR_NAME": "Melvin Klein",
+                "GIT_AUTHOR_EMAIL": "70433111+MelvinKl@users.noreply."
+                                    "github.com"}
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    for name, value in provider.items():
+        with open(os.path.join(trig, f"extension-env-{name}.txt"),
+                  "w", encoding="utf-8") as f:
+            f.write(value + "\n")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", *provider)}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ.update({"RUNNER_TEMP": rt, "GITHUB_WORKSPACE": repo})
+    calls = []
+    orig_run = subprocess.run
+
+    def recording_run(args, **kw):
+        calls.append((list(args), dict(kw)))
+        # every git call answers empty and succeeds: the guard's
+        # detection finds a clean tree, the pass-through half runs
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+
+    argv = sys.argv
+    sys.argv = ["guard-check.py", "baseline", "plans"]
+    exit_code = None
+    try:
+        # subprocess.run stands in at the boundary the entry point
+        # hands the child to: the real env composition runs, no
+        # process is spawned
+        subprocess.run = recording_run
+        try:
+            mod.main_guard_cli()
+        except SystemExit as e:
+            exit_code = e.code if isinstance(e.code, int) else 0
+        assert exit_code == 0, \
+            f"a clean tree passes the guard's program (exit 0): {exit_code!r}"
+        # the program's own process environment carries the provider's
+        # variables — every CLI the program then spawns (its git
+        # children, its pi call) inherits them from it
+        for name, value in provider.items():
+            assert os.environ.get(name) == value, \
+                (f"the entry apply fixed {name} in the program's own "
+                 f"process environment: {os.environ.get(name)!r}")
+        # and the git CLI calls the program made ride them in the
+        # child's environment — the env set on the call to the git cli
+        assert calls, "the guard's detection made git calls"
+        for args, kw in calls:
+            assert args and args[0] == "git", args
+            env = kw.get("env")
+            assert env is not None, \
+                "the entry point hands the git child a composed environment"
+            for name, value in provider.items():
+                assert env.get(name) == value, \
+                    (f"the guard's git child's environment carries "
+                     f"{name}: {env.get(name)!r}")
+            assert env.get("GIT_CONFIG_COUNT"), \
+                "the managed GIT_CONFIG hygiene entries stay composed"
+    finally:
+        sys.argv = argv
+        subprocess.run = orig_run
+        sys.modules.pop("cw_guard_entry_apply", None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(repo, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+
+
+def test_guard_fallback_program_applies_the_extension_env_at_its_own_entry():
+    """(setup-pi "Every program of the run applies the extension env to
+    its own process at its entry" — new; reference
+    `requirements/setup-pi.feature::Every program of the run applies the
+    extension env to its own process at its entry`) the fallback's twin
+    of the canonical entry's own apply: the self-contained guard (the
+    degenerate sparse checkout the fallback exists for) is a program of
+    the run, and its entry applies the recorded extension env to its own
+    process before any CLI call of it — the standalone invocation's
+    shape the sandbox runs: the trigger's state dir carries the
+    provider's recorded values, the process environment starts without
+    them (no spawner's snapshot to inherit), and the clean shape keeps
+    the guard's pass-through half (no pi call is spent, the program
+    exits 0). After the entry the program's own process environment
+    carries the provider's variables — every git child and pi call the
+    program then spawns builds its environment from a process that
+    carries them (the fallback's git entry point applies the recorded
+    values to the git child's environment on each call as well; the
+    process environment is the half that reaches its pi call)."""
+    provider = ("GIT_AUTHOR_NAME", "Melvin Klein",
+                "GIT_AUTHOR_EMAIL",
+                "70433111+MelvinKl@users.noreply.github.com")
+    ns = _guard_fallback_sandbox(
+        ["plans"], [], "revert", "3", leak=False,
+        ext_env=dict(zip(provider[0::2], provider[1::2])))
+    try:
+        assert ns["returncode"] == 0, \
+            (f"a clean tree passes the fallback's guard program "
+             f"(exit 0): exit {ns['returncode']}, stderr: {ns['err']!r}")
+        for name, value in zip(provider[0::2], provider[1::2]):
+            assert os.environ.get(name) == value, \
+                (f"the fallback program's entry apply fixed {name} in "
+                 f"its own process environment: {os.environ.get(name)!r}")
+    finally:
+        ns["cleanup"]()
+
+
+def test_pr_body_fallback_program_runs_git_with_the_extension_env():
+    """(setup-pi "Every program of the run applies the extension env to
+    its own process at its entry" — new; reference
+    `requirements/setup-pi.feature::Every program of the run applies the
+    extension env to its own process at its entry`) the workflow's inline
+    template-fallback program is a program of the run like any other —
+    a fresh interpreter no stage entry ever applies the relay into: on a
+    runner build whose GITHUB_ENV write ghosts, the job's env arrives
+    without the provider's variables, and this program's git calls must
+    not be the git CLI call of the run that runs without them. Its own
+    copy of the factory's single git entry point is the canonical form —
+    it applies the recorded extension env (the state-file channel) to
+    the environment of its git child — so the sandbox runs the step's
+    extracted python over its own entry point (no test injection — the
+    copy under test is the program's own), a fake `git` on PATH standing
+    in for the binary (it records its child environment to the state
+    dir; a test never spawns the real git), the trigger's state dir
+    seeded with the provider's recorded values, and the process
+    environment started without them — the ghosted-relay shape. The
+    child environment the fake recorded is the assertion: the
+    provider's variables (the run's git user data) sit in the
+    environment of the program's git child."""
+    import shutil
+    src = _pr_fallback_source()
+    ws = tempfile.mkdtemp(prefix="cw-prbodyenv-ws-")
+    rt = tempfile.mkdtemp(prefix="cw-prbodyenv-rt-")
+    os.makedirs(os.path.join(ws, ".git"))
+    os.makedirs(os.path.join(ws, "requirements"))
+    with open(os.path.join(ws, "requirements", "topic.feature"), "w") as f:
+        f.write("Feature: Topic\n  Scenario: A standing scenario\n"
+                "    Given a\n    When b\n    Then c\n")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    provider = {"GIT_AUTHOR_NAME": "Melvin Klein",
+                "GIT_AUTHOR_EMAIL": "70433111+MelvinKl@users.noreply."
+                                    "github.com"}
+    for name, value in provider.items():
+        with open(os.path.join(trig, f"extension-env-{name}.txt"),
+                  "w", encoding="utf-8") as f:
+            f.write(value + "\n")
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("true\n")
+    with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+        f.write("42\n")
+    with open(os.path.join(trig, "issue-title.txt"), "w") as f:
+        f.write("The test issue\n")
+    with open(os.path.join(trig, "base-sha.txt"), "w") as f:
+        f.write("0" * 40 + "\n")
+    child_env_file = os.path.join(rt, "cw", "child-env.txt")
+    # the fake git on PATH — the binary the program's entry point
+    # spawns: it records the child's environment (the assertion's
+    # source) and answers every diff empty (the body's delta block runs
+    # its vacuous form)
+    shim_dir = tempfile.mkdtemp(prefix="cw-prbodyenv-shim-")
+    shim = os.path.join(shim_dir, "git")
+    with open(shim, "w") as f:
+        f.write("#!/usr/bin/env python3\n"
+                "import os, sys\n"
+                "with open(os.environ['CW_CHILD_ENV_FILE'], 'a') as f:\n"
+                "    for k in ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL',\n"
+                "              'GIT_CONFIG_COUNT'):\n"
+                "        f.write(k + '=' + os.environ.get(k, '') + '\\n')\n"
+                "    for i in range(int(os.environ.get('GIT_CONFIG_COUNT', '0'))):\n"
+                "        f.write('KEY%d=%s\\n' % (i, os.environ.get('GIT_CONFIG_KEY_%d' % i, '')))\n"
+                "sys.exit(0)\n")
+    os.chmod(shim, 0o755)
+    out = os.path.join(rt, "cw", "pr-body.md")
+    keys = ("PATH", "RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_ISSUE",
+            "CW_TITLE", "CW_TARGET", "REQUIREMENTS_DIR", "PLAN_DIR",
+            "CW_CHILD_ENV_FILE", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
+    saved = {k: os.environ.get(k) for k in keys}
+    for k in keys:
+        os.environ.pop(k, None)
+    os.environ.update({
+        "RUNNER_TEMP": rt,
+        "GITHUB_WORKSPACE": ws,
+        "CW_ISSUE": "42",
+        "CW_TITLE": "The test issue",
+        "CW_TARGET": "main",
+        "REQUIREMENTS_DIR": "requirements",
+        "PLAN_DIR": "plans",
+        "CW_CHILD_ENV_FILE": child_env_file,
+        "PATH": shim_dir + os.pathsep + (saved["PATH"] or ""),
+    })
+    argv = sys.argv
+    sys.argv = ["python3", out]
+    recorded = body = ""
+    try:
+        # no git_exec in the namespace — the program's own entry-point
+        # copy is the code under test (the sibling test injects a fake
+        # over that same one function; here the copy runs)
+        exec(compile(src, "<factory.yml pr fallback step>", "exec"),
+             {"__name__": "cw_pr_body_env_test"})
+        recorded = open(child_env_file, encoding="utf-8").read()
+        body = open(out, encoding="utf-8").read()
+    finally:
+        sys.argv = argv
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(shim_dir, ignore_errors=True)
+    # the provider's variables (the run's git user data) sit in the
+    # environment of the program's git child — the state-file channel
+    # reaching the call, the ghosted job-env half beside it
+    for name, value in provider.items():
+        assert f"{name}={value}" in recorded, \
+            (f"the program's git child's environment carries {name} "
+             f"(the env set on the call to the git cli): {recorded!r}")
+    # the entry point's GIT_CONFIG hygiene stays composed beside the
+    # provider's variables — the managed safe.directory entries present
+    assert "GIT_CONFIG_COUNT=3" in recorded, recorded
+    for i in range(3):
+        assert f"KEY{i}=safe.directory" in recorded, recorded
+    # the body assembly proceeded — the env on the git call changed
+    # nothing about what the program does
+    assert "#42" in body and "The test issue" in body, body
+
 
 def test_pr_gate_reads_the_review_stage_completion():
     """(pr-and-gates "a pull request is opened against the target

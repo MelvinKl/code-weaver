@@ -431,8 +431,15 @@ def recorded_extension_env() -> list[tuple[str, str]]:
     to the git child's environment (the run's git operations ride them —
     where the provider carries GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL, git's
     environment-over-configuration precedence makes the provider's
-    account the commit's author). A run without the provider recorded no
-    file — the list is empty and neither half sets anything."""
+    account the commit's author). The consumers of the read are the run's
+    programs, one apply each: every stage process (its entry snapshot,
+    and the per-call apply its pi invocations and git children ride), the
+    guard program (its own entry apply — a program like any other, its
+    git children and its pi repair call included), and the workflow's
+    inline step programs (each carries its own copy of the single git
+    entry point, the copy applying the same recorded values to the git
+    child's environment). A run without the provider recorded no file —
+    the list is empty and no program sets anything."""
     root = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw",
                         "state", "trigger")
     try:
@@ -471,10 +478,15 @@ def apply_extension_env() -> list[str]:
     environment. The provider's leave-untouched rule applies: a value
     already present in the environment wins over the run's provided one.
     A run without the provider recorded no file — this call sets no
-    variable and the environment is unchanged. The return is the list of
-    the variables this call set — the entry snapshot's marker is built
-    from it (a stage whose entry found the recorded values certified in
-    the state dir carries that fact in its process environment for every
+    variable and the environment is unchanged. The same call serves the
+    guard program's own entry (a program of the run like any stage: a
+    stage that spawns it finds the values already fixed in the inherited
+    environment — a no-op — and a standalone invocation finds the empty
+    environment to fix, so its git children and its pi call carry the
+    values in every process shape). The return is the list of the
+    variables this call set — the entry snapshot's marker is built from
+    it (a stage whose entry found the recorded values certified in the
+    state dir carries that fact in its process environment for every
     later consumer of the relay, the commit-identity guard's declared
     check among them)."""
     applied = []
@@ -1694,7 +1706,22 @@ def main_guard_cli() -> None:
     allow entry admits it (see guard_denied). The stage's identity for the
     repair instructions (its label and prompt template) rides the
     CW_GUARD_STAGE / CW_GUARD_TEMPLATE env entries the stage sets for its
-    guard call."""
+    guard call.
+
+    The program takes the relay's entry apply into its OWN process at its
+    own entry, before any CLI call of it: the guard's git children (the
+    detection's diff/ls-files, the repair's commit) and its pi repair call
+    must carry the provider's values in every process shape the program
+    runs in — a stage that spawns the guard hands it the stage's process
+    environment (whose entry already snapshotted the recorded values: the
+    apply's leave-untouched rule makes it a no-op there), while a
+    standalone invocation (the degenerate checkout, a developer's hand)
+    has no inheriting spawner — the apply reads the recorded values from
+    the run's state dir at the program's entry and fixes them in the
+    program's process environment, so every CLI the program then spawns
+    carries them (the every-program half of the relay's every-step
+    contract: EXTENSION_ENV present in every call the run makes, in
+    every program that makes a call)."""
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
         print("usage: guard-check.py <baseline-ref> <allowed-path>… "
@@ -1709,6 +1736,15 @@ def main_guard_cli() -> None:
         allow, deny = tail[:i], [a for a in tail[i + 1:] if a]
     else:
         allow, deny = tail, []
+    # the program's own entry apply of the recorded extension env into its
+    # own process (the docstring's every-program half): the stage-spawned
+    # form finds the values already present in the environment the stage
+    # handed it (a no-op — the stage's entry snapshot carried them into
+    # the spawner's process environment), the standalone form finds an
+    # empty environment and fixes the recorded values from the run's state
+    # dir — after which every git child and pi call of the program builds
+    # its environment from a process that carries them
+    apply_extension_env()
     r = guard(baseline, allow, deny,
               stage=os.environ.get("CW_GUARD_STAGE", ""),
               template=os.environ.get("CW_GUARD_TEMPLATE", ""))

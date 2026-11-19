@@ -2738,10 +2738,52 @@ jobs:
           # call routes through — the test suite mocks that one function,
           # so no test spawns the real git binary). This step runs in a
           # fresh interpreter with no common module, so it carries its own
-          # copy; a test-injected entry point in this script's globals is
-          # honoured over it.
+          # copy — the canonical form, so this program's git child runs
+          # exactly as a stage's git child does: on a copy of the
+          # environment sanitised of any leaked GIT_CONFIG_* entries (a
+          # dangling key the count never fills would make the child's git
+          # die on the missing key), with the run's resolved extension env
+          # applied to the child's environment — the state-file channel
+          # (the job-env half of the relay ghosts on this runner build, so
+          # without the apply this program's git CLI call would run
+          # without the provider's variables — the run's git user data),
+          # and with the managed safe.directory entries (the checkout
+          # action's shim lives in a temporary HOME that exists for that
+          # step alone). A test-injected entry point in this script's
+          # globals is honoured over the copy.
           if "git_exec" not in globals():
               def git_exec(argv, **kw):
+                  env = {k: v for k, v in os.environ.items()
+                         if not k.startswith("GIT_CONFIG_")}
+                  d = os.path.join(os.environ.get("RUNNER_TEMP", ""),
+                                   "cw", "state", "trigger")
+                  try:
+                      fns = os.listdir(d)
+                  except OSError:
+                      fns = []
+                  for fn in sorted(fns):
+                      if not (fn.startswith("extension-env-")
+                              and fn.endswith(".txt")):
+                          continue
+                      k = fn[len("extension-env-"):-len(".txt")]
+                      try:
+                          v = open(os.path.join(d, fn),
+                                   encoding="utf-8").read()
+                      except OSError:
+                          continue
+                      v = v.strip()
+                      if v and not env.get(k):
+                          env[k] = v
+                  entries = [("safe.directory", os.path.expanduser("~")),
+                             ("safe.directory", os.getcwd())]
+                  ws = os.environ.get("GITHUB_WORKSPACE")
+                  if ws:
+                      entries.append(("safe.directory", ws))
+                  env["GIT_CONFIG_COUNT"] = str(len(entries))
+                  for i, (k, v) in enumerate(entries):
+                      env["GIT_CONFIG_KEY_%d" % i] = k
+                      env["GIT_CONFIG_VALUE_%d" % i] = v
+                  kw["env"] = env
                   return subprocess.run(["git"] + list(argv), **kw)
 
           def trigger_state(name):

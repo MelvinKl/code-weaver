@@ -116,6 +116,14 @@ Feature: The setup-pi stage installs and configures pi for the run
     And a run without the provider sets no variable and is unchanged
 
   @setup
+  Scenario: Every program of the run applies the extension env to its own process at its entry
+    Given a program of the run that spawns CLI calls but is not a stage job — the guard's own entry, the workflow's inline step programs
+    When the program starts
+    Then it applies the recorded extension env to its own process environment at its entry
+    And every git call the program makes routes through the single git entry point, whose git child's environment carries the recorded values
+    And every CLI call the program then spawns (its git children, its pi invocations) runs with the provider's variables present
+
+  @setup
   Scenario: The run's commits carry the author identity the extension's environment provides
     Given the run's provider for the extension's environment carries GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL
     When the run commits its stage work on the AI branch
