@@ -8652,3 +8652,341 @@ def test_settle_wait_certifies_on_content_not_metadata():
     assert "did not materialise" in check, \
         ("the check must name the shape in the failure — a present "
          "state file whose data did not materialise is a lost provider")
+
+
+def test_entry_persists_the_applied_values_to_a_state_file_of_its_own():
+    """(setup-pi "Every program of the run applies the extension env to
+    its own process at its entry"; reference
+    `requirements/setup-pi.feature::Every program of the run applies the
+    extension env to its own process at its entry`) the entry that fixes
+    the recorded values into the process environment also persists them
+    to a state file of the process's own — the in-process environment is
+    not a durable store (a host may reset a long-lived process's view
+    mid-run), and the file's name stays out of the provider's value-file
+    glob and the declaration flags' pattern: the delivery count and the
+    check's verdicts never see it as a provider's file.
+    """
+    import importlib.util
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_entry_persist",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_entry_persist"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-entry-persist-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("true\n")
+    with open(os.path.join(trig,
+                           "extension-env-GIT_AUTHOR_NAME.txt"), "w") as f:
+        f.write("Melvin Klein\n")
+    with open(os.path.join(trig,
+                           "extension-env-GIT_AUTHOR_EMAIL.txt"), "w") as f:
+        f.write("melvin@example.com\n")
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_EXT_ENV_DECLARED",
+              "CW_EXT_ENV_APPLIED", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL", "PI_JEV_BASE_URL", "PI_JEV_THINKING")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    try:
+        mod.delivery_check("stage 4 requirements-extraction")
+        snap = os.path.join(trig, "entry-applied-extension-env.txt")
+        assert os.path.isfile(snap), \
+            "the entry persists the values it applied to a state file"
+        text = open(snap, encoding="utf-8").read()
+        assert "GIT_AUTHOR_NAME=Melvin Klein" in text, \
+            f"the applied value is the file's line: {text!r}"
+        assert "GIT_AUTHOR_EMAIL=melvin@example.com" in text, \
+            f"every applied value persists: {text!r}"
+        name = os.path.basename(snap)
+        assert not name.startswith("extension-env-"), \
+            f"the file stays out of the provider's value-file glob: {name}"
+        assert not name.endswith("-declared.txt"), \
+            f"the file is not a declaration flag: {name}"
+        console = open(os.path.join(rt, "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        assert "delivered (2 value file(s))" in console, \
+            ("the delivery count never sees the persistence file as a "
+             f"provider's file: {console!r}")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        sys.modules.pop("cw_entry_persist", None)
+
+
+def test_git_child_env_rebuilds_the_values_the_host_erased():
+    """(setup-pi "Every program of the run applies the extension env to
+    its own process at its entry"; reference
+    `requirements/setup-pi.feature::Every program of the run applies the
+    extension env to its own process at its entry`) the host's process-
+    view reset erases the values the entry fixed (and the entry's marker
+    with them), and the process's fresh re-read of the restored files
+    answers empty — where the marker is gone, the git entry point
+    re-derives the applied values from the entry's own file into the
+    child's environment (a value the environment still carries wins),
+    re-fixes them into the process environment, and re-sets the entry's
+    marker — the process's view made whole again: the commit resolves the
+    identity the entry certified rather than dying on it.
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_git_rebuild",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_git_rebuild"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-git-rebuild-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # the restored tree's files: present, but the host's reset empties
+    # the process's reads of them
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("")
+    with open(os.path.join(trig,
+                           "extension-env-GIT_AUTHOR_NAME.txt"), "w") as f:
+        f.write("")
+    with open(os.path.join(trig,
+                           "extension-env-GIT_AUTHOR_EMAIL.txt"), "w") as f:
+        f.write("")
+    # the entry's own persistence — the process's write of the values it
+    # certified at its entry — the record the host's reset left standing
+    with open(os.path.join(trig, "entry-applied-extension-env.txt"),
+              "w") as f:
+        f.write("GIT_AUTHOR_EMAIL=melvin@example.com\n"
+                "GIT_AUTHOR_NAME=Melvin Klein\n")
+    # the host's reset: the applied values and the marker, gone
+    for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+              "CW_EXT_ENV_APPLIED"):
+        os.environ.pop(k, None)
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    repo = tempfile.mkdtemp(prefix="cw-git-rebuild-repo-")
+
+    class _FakeSubp:
+        CompletedProcess = real_subprocess.CompletedProcess
+        CalledProcessError = real_subprocess.CalledProcessError
+        spawned = []
+
+        @staticmethod
+        def run(argv, **kw):
+            _FakeSubp.spawned.append((list(argv), dict(kw)))
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        mod.git_exec(["commit", "-q", "-m", "x"], cwd=repo, check=True)
+        _, kw = _FakeSubp.spawned[-1]
+        env = kw.get("env") or {}
+        assert env.get("GIT_AUTHOR_NAME") == "Melvin Klein", \
+            (f"the child's environment carries the entry's value, "
+             f"rebuilt from the entry's own file: {env!r}")
+        assert env.get("GIT_AUTHOR_EMAIL") == "melvin@example.com", \
+            f"every applied value is rebuilt into the child: {env!r}"
+        assert os.environ.get("GIT_AUTHOR_NAME") == "Melvin Klein", \
+            "the process environment is re-fixed — whole for every " \
+            "later call of the process"
+        marker = os.environ.get("CW_EXT_ENV_APPLIED") or ""
+        mroot, _, mnames = marker.partition("\x1f")
+        assert "GIT_AUTHOR_NAME" in mnames and "GIT_AUTHOR_EMAIL" in mnames, \
+            f"the entry's marker is re-set on the values it names: {marker!r}"
+        assert mroot == trig, \
+            f"the re-set marker names the entry's root: {marker!r}"
+    finally:
+        mod.subprocess = real_subprocess
+        for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                  "CW_EXT_ENV_APPLIED"):
+            os.environ.pop(k, None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_git_rebuild", None)
+
+
+def test_commit_failure_names_the_hosts_process_view_reset():
+    """(setup-pi "A git child that dies names its own diagnosis in the
+    failure"; reference
+    `requirements/setup-pi.feature::A git child that dies names its own
+    diagnosis in the failure`) where the commit dies on an identity the
+    entry certified — the host having since reset the process's view,
+    the entry's marker gone and its own snapshot file reading empty —
+    the raised failure adds the host's process-view reset to the named
+    cause: the runner host's, for the runner host to make whole.
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_git_resetnote",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_git_resetnote"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-git-resetnote-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # the host's reset took both halves: the restored tree's reads answer
+    # empty, and the entry's own persistence file reads empty too
+    for name in ("ext-env-declared.txt",
+                 "extension-env-GIT_AUTHOR_NAME.txt",
+                 "extension-env-GIT_AUTHOR_EMAIL.txt",
+                 "entry-applied-extension-env.txt"):
+        open(os.path.join(trig, name), "w").close()
+    for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+              "CW_EXT_ENV_APPLIED"):
+        os.environ.pop(k, None)
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    repo = tempfile.mkdtemp(prefix="cw-git-resetnote-repo-")
+
+    class _FakeSubp:
+        CompletedProcess = real_subprocess.CompletedProcess
+        CalledProcessError = real_subprocess.CalledProcessError
+        spawned = []
+
+        @staticmethod
+        def run(argv, **kw):
+            _FakeSubp.spawned.append((list(argv), dict(kw)))
+            if len(argv) >= 2 and argv[1] == "commit":
+                raise real_subprocess.CalledProcessError(
+                    128, list(argv),
+                    stderr=b"fatal: Committer identity unknown\n"
+                           b"fatal: unable to auto-detect email "
+                           b"(got 'root@host.(none)')\n")
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        try:
+            mod.git_exec(["commit", "-q", "-m", "x"], cwd=repo,
+                         check=True)
+            raise AssertionError("a valueless commit must fail")
+        except RuntimeError as e:
+            msg = str(e)
+            assert "Committer identity unknown" in msg, \
+                f"the child's own words are carried: {msg!r}"
+            assert "process-view reset" in msg, \
+                ("the failure names the host's process-view reset — the "
+                 "entry's own file reads empty too: ") + msg
+            assert "reads empty" in msg, \
+                f"the reset is named through the file's read: {msg!r}"
+    finally:
+        mod.subprocess = real_subprocess
+        for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                  "CW_EXT_ENV_APPLIED"):
+            os.environ.pop(k, None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_git_resetnote", None)
+
+
+def test_pi_call_env_rebuilds_the_values_the_host_erased():
+    """(setup-pi "Every program of the run applies the extension env to
+    its own process at its entry"; reference
+    `requirements/setup-pi.feature::Every program of the run applies the
+    extension env to its own process at its entry`) the pi child inherits
+    the process environment — where the host has since reset that view
+    (the entry's marker gone, the restored files' reads answering
+    empty), the invocation re-fixes the applied values from the entry's
+    own file into the process environment and re-sets the marker, so the
+    call runs with the provider's variables the entry certified rather
+    than valueless.
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_pi_rebuild",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_pi_rebuild"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-pi-rebuild-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("")
+    with open(os.path.join(trig,
+                           "extension-env-PI_JEV_BASE_URL.txt"), "w") as f:
+        f.write("")
+    with open(os.path.join(trig, "entry-applied-extension-env.txt"),
+              "w") as f:
+        f.write("PI_JEV_BASE_URL=http://backend.example/v1\n")
+    for k in ("PI_JEV_BASE_URL", "PI_JEV_THINKING",
+              "CW_EXT_ENV_APPLIED"):
+        os.environ.pop(k, None)
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    repo = tempfile.mkdtemp(prefix="cw-pi-rebuild-repo-")
+    os.makedirs(os.path.join(repo, ".pi", "agents", "default"),
+                exist_ok=True)
+    with open(os.path.join(rt, "system-prompt.md"), "w") as f:
+        f.write("be brief\n")
+
+    class _FakeSubp:
+        CompletedProcess = real_subprocess.CompletedProcess
+        CalledProcessError = real_subprocess.CalledProcessError
+
+        @staticmethod
+        def run(argv, **kw):
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        mod.ensure_pi_on_path = lambda *a, **kw: None
+        mod.resolve_pi_timeout = lambda *a, **kw: 5
+        mod.pi_invoke(model="m",
+                      system_prompt_file=os.path.join(rt,
+                                                      "system-prompt.md"))
+        assert os.environ.get("PI_JEV_BASE_URL") == \
+            "http://backend.example/v1", \
+            ("the process environment is re-fixed from the entry's own "
+             "file — the pi child inherits it")
+        marker = os.environ.get("CW_EXT_ENV_APPLIED") or ""
+        _, _, mnames = marker.partition("\x1f")
+        assert "PI_JEV_BASE_URL" in mnames, \
+            f"the entry's marker is re-set on the values it names: {marker!r}"
+    finally:
+        mod.subprocess = real_subprocess
+        for k in ("PI_JEV_BASE_URL", "PI_JEV_THINKING",
+                  "CW_EXT_ENV_APPLIED"):
+            os.environ.pop(k, None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_pi_rebuild", None)

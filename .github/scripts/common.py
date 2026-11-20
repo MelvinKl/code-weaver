@@ -497,6 +497,56 @@ def apply_extension_env() -> list[str]:
     return applied
 
 
+def _entry_snapshot_file() -> str:
+    """The entry's own persistence — the path of the state file the
+    stage's entry writes with the values it applied to the process
+    environment, beside the trigger's recorded state. The root it
+    lives in is the entry's trigger root, resolved through the entry's
+    marker where the marker is valid (a marker naming a root this
+    process's relay no longer points at is another scenario's — stale,
+    like the guard rejects it), and through the canonical trigger dir
+    where it is not (a process whose marker the host erased re-derives
+    the root the same way the entry did)."""
+    marker = os.environ.get("CW_EXT_ENV_APPLIED") or ""
+    root, _, names = marker.partition("\x1f")
+    rt = os.environ.get("RUNNER_TEMP", "")
+    if not (names.strip() and root
+            and (root == os.path.join(rt, "cw", "state", "trigger")
+                 or not rt)):
+        root = os.path.join(rt, "cw", "state", "trigger") if rt else ""
+    if not root:
+        return ""
+    return os.path.join(root, "entry-applied-extension-env.txt")
+
+
+def _read_entry_snapshot() -> dict[str, str]:
+    """The values the stage's entry persisted after fixing them into
+    the process environment — {name: value}, empty where the file is
+    absent or reads empty. A file the process wrote itself: where the
+    host resets the process's view of files it had previously read
+    (the restored tree's files answer empty past the reset), the
+    process's own write is the record the read answers — data here is
+    the certificate the host's reset left standing, and an empty read
+    is the diagnosis that the host took the process's own writes too.
+    """
+    path = _entry_snapshot_file()
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return {}
+    values = {}
+    for line in text.splitlines():
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name, value = name.strip(), value.strip()
+        if name and value:
+            values[name] = value
+    return values
+
+
 # provider → (declaration flag, recorded-value state name, job-env relay
 # marker) — the state names ride the state dir with a .txt suffix (the
 # writer's name); the check appends it when it tests the value file:
@@ -776,7 +826,22 @@ def delivery_check(stage: str) -> None:
     # answered empty — the entry's snapshot makes the later read a
     # no-op fallback). The marker the snapshot records is in-process
     # ground truth the relay's own files cannot un-make, and the guard's
-    # declared check accepts it beside the two relay halves. A writer
+    # declared check accepts it beside the two relay halves. One
+    # consumer does re-read — and only the entry's own persistence
+    # file, never the relay's: this host has since reset a long-lived
+    # stage process's view mid-run (the applied values and the marker
+    # erased together, the process's reads of the restored tree's files
+    # answering empty, a fresh process on the same host reading them
+    # fine) — where the child-env builders find the marker gone, they
+    # re-derive the applied values from the file the process wrote
+    # itself (a write the host's reset may leave standing), re-fix them
+    # into the process environment, and re-set the marker — the
+    # process's view made whole again, and a later commit whose identity
+    # still does not resolve fails the diagnosis's marker branch naming
+    # the mid-run loss, never the raw fatal. Where the file itself
+    # reads empty, no in-process record of the entry survives, and the
+    # failure then names the host's process-view reset as the cause.
+    # A writer
     # stage's entry takes the same snapshot and finds nothing (its own
     # recorded values do not exist at its own entry) — the uniformity
     # holds, the marker is simply absent there. A tree genuinely lost
@@ -793,6 +858,31 @@ def delivery_check(stage: str) -> None:
         # one the marker certifies.
         os.environ["CW_EXT_ENV_APPLIED"] = root + "\x1f" \
             + ",".join(sorted(applied))
+        # The entry's own persistence — the values the entry fixed into
+        # the process environment, also written to a state file of the
+        # process's own (a write through the process's own write path,
+        # beside the relay's files the host's reset empties on re-read;
+        # the name stays out of the provider's value-file glob and the
+        # declaration flags' pattern — the delivery count and the
+        # check's verdicts never see it as a provider's file). A
+        # child-env build later in the process, finding the marker the
+        # host erased, re-derives the applied values from this file
+        # (leave-untouched) and re-sets the marker — the process's view
+        # made whole again; where the file itself reads empty, the
+        # failure names the host's process-view reset.
+        try:
+            with open(os.path.join(root, "entry-applied-extension-env.txt"),
+                      "w", encoding="utf-8") as f:
+                f.write("# the stage's entry applied these extension-env "
+                        "values to its process environment\n"
+                        "# (the in-process environment is not a durable "
+                        "store — a host may reset a long-lived "
+                        "process's view mid-run)\n")
+                for name in sorted(applied):
+                    f.write(f"{name}={os.environ.get(name, '')}\n")
+        except OSError:
+            pass  # a persistence the host denies is no gate: the marker
+            # and the check's verdict stand without it
     else:
         # an entry that certifies nothing retracts a stale marker an
         # earlier entry in this process left behind — the marker's
@@ -1065,6 +1155,24 @@ def pi_invoke(
         timeout = resolve_pi_timeout()
     ensure_pi_on_path()
     apply_extension_env()
+    # The entry's persistence re-applied to the process environment:
+    # the pi child inherits the process environment (the spawn passes
+    # no env of its own), and a host that has since reset that view —
+    # the entry's marker gone, the restored files' reads answering
+    # empty — would run the call valueless. Where the marker is gone
+    # and the file the process wrote itself at its entry reads, re-fix
+    # the applied values into the process environment (a value the
+    # environment still carries wins) and re-set the entry's marker on
+    # the values it names — the process's view made whole again
+    if not os.environ.get("CW_EXT_ENV_APPLIED"):
+        applied = _read_entry_snapshot()
+        if applied:
+            for name, value in applied.items():
+                if value and not os.environ.get(name):
+                    os.environ[name] = value
+            os.environ["CW_EXT_ENV_APPLIED"] = \
+                os.path.dirname(_entry_snapshot_file()) + "\x1f" \
+                + ",".join(sorted(applied))
     with open(system_prompt_file, encoding="utf-8") as f:
         instructions = f.read()
     # --print keeps the one-shot contract the oracle pins ("a stage
@@ -1683,6 +1791,28 @@ def git_exec(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     for name, value in recorded_extension_env():
         if value and not env.get(name):
             env[name] = value
+    # The entry's persistence re-applied: a host that resets this
+    # process's view mid-run erases the values the entry fixed (and the
+    # marker with them), and this call's fresh re-read of the restored
+    # files answers empty — the child would go valueless and the commit
+    # die on an identity the entry certified. The file the process wrote
+    # itself at its entry is the surviving certificate: where the marker
+    # is gone, re-derive the applied values from it — into the process
+    # environment (the process's view made whole for every later call)
+    # and into the child's environment this call is building (a value
+    # the environment still carries wins — leave-untouched) — and
+    # re-set the entry's marker on the values it names
+    if not os.environ.get("CW_EXT_ENV_APPLIED"):
+        applied = _read_entry_snapshot()
+        if applied:
+            for name, value in applied.items():
+                if value and not os.environ.get(name):
+                    os.environ[name] = value
+                if value and not env.get(name):
+                    env[name] = value
+            os.environ["CW_EXT_ENV_APPLIED"] = \
+                os.path.dirname(_entry_snapshot_file()) + "\x1f" \
+                + ",".join(sorted(applied))
     entries = [
         ("safe.directory", os.path.expanduser("~")),
         ("safe.directory", os.getcwd()),
@@ -1729,7 +1859,12 @@ def _git_failure_message(argv: list[str],
     token redacted out of it (a push URL echo), tailed — the last lines
     are the diagnosis, not the progress. The message rides the stage's
     crash channel and its console, so the artefact names the cause where
-    the job log ghosts."""
+    the job log ghosts. A commit that dies on an identity the entry
+    certified — the host having since reset the process's view, the
+    entry's marker gone and its own snapshot file reading empty — adds
+    the host's process-view reset to the message, so the artefact names
+    the cause's cause (a runner-host reset the factory cannot recover
+    from in-process) beside the fatal it produced."""
     out = e.stderr if e.stderr is not None else e.stdout
     if out is None:
         out = e.output
@@ -1741,10 +1876,31 @@ def _git_failure_message(argv: list[str],
             out = out.replace(token, "***")
         out = " ".join(line.strip() for line in out.splitlines()
                        if line.strip())
-        return (f"git {argv[0]} failed (exit {e.returncode}): "
-                + out[-400:])
-    return (f"git {argv[0]} failed (exit {e.returncode}) "
-            "with no captured output")
+        msg = (f"git {argv[0]} failed (exit {e.returncode}): "
+               + out[-400:])
+    else:
+        msg = (f"git {argv[0]} failed (exit {e.returncode}) "
+               "with no captured output")
+    if (argv and argv[0] == "commit"
+            and "Committer identity unknown" in (out or "")
+            and not os.environ.get("CW_EXT_ENV_APPLIED")
+            and not _read_entry_snapshot()):
+        # The host's process-view reset, named: the entry's own
+        # persistence — this process's write of the values it
+        # certified at its entry — reads empty too, so no in-process
+        # record of the entry survives. A fresh process on the same
+        # host reads the restored tree fine (the upload proves it);
+        # the reset is of the long-lived process's view, and it is the
+        # runner host's to make whole, not the factory's
+        msg += (" — the entry's own snapshot file (this process's write "
+                "of the values it certified at its entry) reads empty "
+                "now too: this host has reset the long-lived process's "
+                "view — its environment reverted to the step's launch "
+                "state and its reads of files it had read non-empty "
+                "answer empty, while a fresh process on the same host "
+                "reads them fine. A runner-host process-view reset the "
+                "factory cannot recover from in-process")
+    return msg
 
 
 def _diagnose_unresolvable_commit_identity(env: dict) -> None:

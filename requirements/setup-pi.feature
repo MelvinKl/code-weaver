@@ -120,8 +120,10 @@ Feature: The setup-pi stage installs and configures pi for the run
     Given a program of the run that spawns CLI calls but is not a stage job — the guard's own entry, the workflow's inline step programs
     When the program starts
     Then it applies the recorded extension env to its own process environment at its entry
+    And the entry persists the values it applied to a state file of its own — the in-process environment is not a durable store: a host may reset a long-lived process's view mid-run (the applied values and the entry's marker erased together, and the process's reads of the restored tree's files answering empty, while a fresh process on the same host reads them fine)
     And every git call the program makes routes through the single git entry point, whose git child's environment carries the recorded values
     And every CLI call the program then spawns (its git children, its pi invocations) runs with the provider's variables present
+    And a later CLI the program spawns, whose process environment the host has since lost its entry's values, re-derives those values from the entry's own file into the child's environment (a value the environment still carries wins — leave-untouched) — the commit resolves the identity the entry certified rather than dying on it; where the file itself reads empty, the failure names the host's process-view reset as the cause
 
   @setup
   Scenario: The run's commits carry the author identity the extension's environment provides
@@ -212,6 +214,7 @@ Feature: The setup-pi stage installs and configures pi for the run
     And the run's token is redacted out of the carried text
     And the entry point captures the child's streams itself where the caller did not redirect them, so the text lands in the message regardless of where the runner pointed the step
     And the diagnosis rides the stage's crash channel and the stage's console — the artefact names the cause where the job log ghosts
+    And where a commit dies on an identity the entry certified — the host having since reset the process's view, the entry's marker gone and its own snapshot file reading empty — the raised failure adds the host's process-view reset to the named cause: the runner host's, for the runner host to make whole
 
   @setup @safety
   Scenario: A stage commit that dies on a stale lock clears the lock and retries once
