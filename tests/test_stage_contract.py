@@ -3348,7 +3348,12 @@ def test_every_stage_records_its_extension_env_delivery_on_the_stage_summary_cha
             "CW_HARNESS_MODELS_DECLARED", "CW_HARNESS_MODELS_DELIVERED",
             "CW_HARNESS_SETTINGS_DECLARED", "CW_HARNESS_SETTINGS_DELIVERED",
             "CW_HARNESS_MCP_DECLARED", "CW_HARNESS_MCP_DELIVERED",
-            "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
+            "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+            # the extension-env value keys the case's files record — a
+            # host environment carrying its own (an agent session riding
+            # its own extension env) must not leak into a case, or the
+            # leave-untouched rule skips the recorded values
+            "PI_JEV_BASE_URL", "PI_JEV_THINKING")
     saved = {k: os.environ.get(k) for k in keys}
     for k in saved:
         os.environ.pop(k, None)
@@ -7511,6 +7516,15 @@ def test_delivery_check_fails_the_stage_entry_for_a_lost_declared_extension_env(
     # resolves its field types through sys.modules at class-creation
     sys.modules["cw_delivery_check"] = mod
     spec.loader.exec_module(mod)
+    # the sandbox's value files never land — the wait would otherwise
+    # hold the entry out to its full 30-second bound; shorten the bound
+    # so the test runs at suite speed (the verdict under test — the
+    # check's failure on the declared-but-lost provider — is the same at
+    # any bound)
+    saved_settle = (mod._SETTLE_DEADLINE_SECONDS,
+                    mod._SETTLE_POLL_SECONDS)
+    mod._SETTLE_DEADLINE_SECONDS = 0.3
+    mod._SETTLE_POLL_SECONDS = 0.05
     rt = tempfile.mkdtemp(prefix="cw-delivery-lost-rt-")
     trig = os.path.join(rt, "cw", "state", "trigger")
     os.makedirs(trig)
@@ -7566,6 +7580,7 @@ def test_delivery_check_fails_the_stage_entry_for_a_lost_declared_extension_env(
              f"as the failure's cause: {reason!r}")
     finally:
         mod.pi_invoke = orig_invoke
+        mod._SETTLE_DEADLINE_SECONDS, mod._SETTLE_POLL_SECONDS = saved_settle
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -8425,3 +8440,215 @@ def test_every_inline_git_copy_surfaces_the_childs_failure():
     src = _pr_fallback_source()
     check(git_exec_region(src, "def git_exec"),
           "the PR-body template-fallback step's copy")
+
+def test_delivery_check_fails_the_stage_entry_when_value_data_never_materialises():
+    """(setup-pi "A declared extension-env provider whose values did not
+    arrive fails the stage at its entry" — the second-shape clause;
+    reference
+    `requirements/setup-pi.feature::A declared extension-env provider
+    whose values did not arrive fails the stage at its entry`) run
+    44601846177's extract stage took this shape: the value files'
+    entries (and their size fields) were present in the restored state
+    dir — the wait's old metadata test certified them the moment the
+    download step unpacked them — while a read of every file's content
+    returned empty for the stage process's whole life. The old check
+    passed on the entries' presence, the entry's snapshot fixed nothing
+    into the process, and the stage spent its full pi run before its
+    commit's child died on the missing identity. The content-truth wait
+    closes it: a certified file that still reads empty at the bound is
+    a lost provider, the check fails the stage at its entry (no pi call
+    spent), the error names the shape, and the summary line takes the
+    missing form."""
+    import importlib.util
+    import shutil
+    spec = importlib.util.spec_from_file_location(
+        "cw_delivery_dataless",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_delivery_dataless"] = mod
+    spec.loader.exec_module(mod)
+    saved_settle = (mod._SETTLE_DEADLINE_SECONDS,
+                    mod._SETTLE_POLL_SECONDS)
+    mod._SETTLE_DEADLINE_SECONDS = 0.3
+    mod._SETTLE_POLL_SECONDS = 0.05
+    rt = tempfile.mkdtemp(prefix="cw-deliv-dataless-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    # the trigger's flag and the setup stage's recorded values all
+    # landed their ENTRIES into the restored state dir
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("true\n")
+    with open(os.path.join(trig, "issue-number.txt"), "w") as f:
+        f.write("7\n")
+    # but the value files' DATA did not materialise: present, zero-byte
+    for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                 "PI_JEV_BASE_URL"):
+        open(os.path.join(trig, f"extension-env-{name}.txt"), "w").close()
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE", "CW_EXT_ENV_DECLARED",
+              "CW_EXT_ENV_KEYS", "CW_EXT_ENV_APPLIED", "GIT_AUTHOR_NAME",
+              "GIT_AUTHOR_EMAIL", "PI_JEV_BASE_URL")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    calls = []
+    orig_invoke = mod.pi_invoke
+    mod.pi_invoke = lambda *a, **kw: calls.append((a, kw))
+    try:
+        try:
+            mod.delivery_check("stage 4 requirements-extraction")
+            raise AssertionError(
+                "the check must fail the stage at its entry — the "
+                "provider's value files are present but data-less")
+        except SystemExit as e:
+            assert e.code == 1, f"the controlled failure exits 1: {e.code!r}"
+        assert not calls, \
+            f"no pi call is spent — the check fails at entry: {calls!r}"
+        reason = open(os.path.join(rt, "cw", "stage-fail-reason.txt"),
+                      encoding="utf-8").read()
+        assert "extension-env" in reason, \
+            f"the reason names the provider: {reason!r}"
+        assert "relay loss" in reason, \
+            (f"the one-line reason names the relay loss: {reason!r}")
+        console = open(os.path.join(rt, "cw", "stage-console.log"),
+                       encoding="utf-8").read()
+        assert "present but data-less" in console, \
+            f"the wait's bound-out names the data-less files: {console!r}"
+        assert "did not materialise" in console, \
+            f"the check's failure names the shape — present but " \
+            f"data-less: {console!r}"
+        assert "CW_EXT_ENV_APPLIED" not in os.environ, \
+            "the snapshot fixed nothing into the process — the marker " \
+            "is retracted, consistent with the check's verdict"
+    finally:
+        mod.pi_invoke = orig_invoke
+        mod._SETTLE_DEADLINE_SECONDS, mod._SETTLE_POLL_SECONDS = saved_settle
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        sys.modules.pop("cw_delivery_dataless", None)
+
+
+def test_entry_snapshot_certifies_value_data_that_lands_mid_wait():
+    """(setup-pi "A declared extension-env provider whose values did not
+    arrive fails the stage at its entry" — the wait's other half;
+    reference
+    `requirements/setup-pi.feature::A declared extension-env provider
+    whose values did not arrive fails the stage at its entry`) the same
+    host lag, in its benign form: the value files' entries land first
+    and their data materialises mid-wait. The content-truth wait keeps
+    the wait open across the fingerprint flip (data landing resets the
+    stability count), completes when the reads return non-empty and
+    settle, and the entry's snapshot fixes the real values into the
+    process — the marker set, the delivered line counting what the
+    snapshot actually applied, the check passing with the relay whole."""
+    import importlib.util
+    import shutil
+    import threading
+    import time
+    spec = importlib.util.spec_from_file_location(
+        "cw_delivery_midwait",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_delivery_midwait"] = mod
+    spec.loader.exec_module(mod)
+    saved_settle = (mod._SETTLE_DEADLINE_SECONDS,
+                    mod._SETTLE_POLL_SECONDS)
+    mod._SETTLE_DEADLINE_SECONDS = 2.0
+    mod._SETTLE_POLL_SECONDS = 0.05
+    rt = tempfile.mkdtemp(prefix="cw-deliv-midwait-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    values = {"GIT_AUTHOR_NAME": "Melvin Klein",
+              "GIT_AUTHOR_EMAIL":
+                  "70433111+MelvinKl@users.noreply.github.com"}
+    with open(os.path.join(trig, "ext-env-declared.txt"), "w") as f:
+        f.write("true\n")
+    for name in values:
+        open(os.path.join(trig, f"extension-env-{name}.txt"),
+             "w").close()
+
+    def land_the_data():
+        time.sleep(0.25)
+        for name, value in values.items():
+            with open(os.path.join(trig, f"extension-env-{name}.txt"),
+                      "w") as f:
+                f.write(value + "\n")
+    thread = threading.Thread(target=land_the_data)
+    saved = {k: os.environ.get(k)
+             for k in ("RUNNER_TEMP", "GITHUB_WORKSPACE",
+                       "CW_EXT_ENV_DECLARED", "CW_EXT_ENV_KEYS",
+                       "CW_EXT_ENV_APPLIED") + tuple(values)}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    thread.start()
+    try:
+        mod.delivery_check("stage 4 requirements-extraction")
+        for name, value in values.items():
+            assert os.environ.get(name) == value, \
+                (f"the snapshot fixed the materialised value into the "
+                 f"process: {name}={os.environ.get(name)!r}")
+        marker = os.environ.get("CW_EXT_ENV_APPLIED", "")
+        assert rt in marker and "GIT_AUTHOR_NAME" in marker, \
+            f"the marker certifies the entry that fixed the values: " \
+            f"{marker!r}"
+        summary = open(os.path.join(rt, "cw", "stage-summary.txt"),
+                       encoding="utf-8").read()
+        assert "extension env: delivered (2 values)" in summary, \
+            f"the delivered line counts what the snapshot applied: " \
+            f"{summary!r}"
+    finally:
+        thread.join()
+        mod._SETTLE_DEADLINE_SECONDS, mod._SETTLE_POLL_SECONDS = saved_settle
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        sys.modules.pop("cw_delivery_midwait", None)
+
+
+def test_settle_wait_certifies_on_content_not_metadata():
+    """(setup-pi "A declared extension-env provider whose values did not
+    arrive fails the stage at its entry" — the content-read clause;
+    reference
+    `requirements/setup-pi.feature::A declared extension-env provider
+    whose values did not arrive fails the stage at its entry`) the wait
+    the entry check opens with must certify the restored tree on a
+    content read: on this host a file's dir entry and its size field
+    have been observed to materialise before the file's data (run
+    44601846177's extract stage — the old getsize test certified every
+    value file the instant it unpacked while every read of it returned
+    empty), so a getsize-based certification is a lie this host tells.
+    The wait must read the certified files' content, require it
+    non-empty, ride it in the fingerprint (data landing mid-wait resets
+    the stability count), hand the data-less names back at the bound,
+    and the check must route those names to the declared-but-lost
+    failure instead of passing the provider valueless."""
+    text = _read(".github/scripts/common.py")
+    start = text.index("def _wait_for_restored_tree")
+    end = text.index("\ndef ", start + 10)
+    region = text[start:end]
+    assert "read_data" in region and ".read()" in region, \
+        "the wait must read the certified files' content"
+    assert "getsize" not in region, \
+        ("the certification must be a content read, not a metadata test "
+         "(a size field that lands ahead of its data is the host's lie "
+         "the old test rode)")
+    assert "return missing_data" in region, \
+        "the wait must hand the data-less names back at the bound"
+    cstart = text.index("def delivery_check")
+    cend = text.index("\ndef ", cstart + 10)
+    check = text[cstart:cend]
+    assert "missing_data" in check, \
+        "the check must consume the wait's data-less certification"
+    assert "did not materialise" in check, \
+        ("the check must name the shape in the failure — a present "
+         "state file whose data did not materialise is a lost provider")

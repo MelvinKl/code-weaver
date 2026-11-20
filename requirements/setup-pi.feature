@@ -176,6 +176,8 @@ Feature: The setup-pi stage installs and configures pi for the run
     And no pi call is spent by the stage
     And the check logs which relay half delivered what — the job's environment and the state dir
     And the run's artefact log names the relay loss as the failure's cause
+    And a second shape of the same loss — the value files' entries present in the restored state dir, their data never materialising within the settle window — fails the stage at its entry too, the error naming that shape
+    And the entry's wait certifies the restored tree on a content read: a file counts materialised only when a read of it returns non-empty content, so a file whose entry and size landed but whose data has not is not certified, and a provider whose certified files read empty at the wait's bound is a lost provider the check fails
 
   @setup @safety
   Scenario: The delivery check applies to every declared harness provider

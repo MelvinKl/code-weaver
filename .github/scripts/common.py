@@ -524,59 +524,106 @@ HARNESS_PROVIDER_STATE = {
 # (its digest verified) while the extraction's final entries were still
 # materialising on disk, so the entry would otherwise read a
 # half-restored state dir. Hold the entry until the state dir is
-# quiescent AND every declared value file has landed: a healthy,
-# complete tree settles on the first stable sample (a few hundred
-# milliseconds), a tree the filesystem is still catching up keeps the
-# wait open while its entries land, and a tree that never catches up
-# runs the bound out — the check then proceeds and fails loudly,
-# exactly as it does today. The wait must never mask the check or fail
-# the stage itself.
+# quiescent AND every certified file's DATA has materialised: the
+# certification is a content read — this host's file entries and size
+# fields have been observed to land ahead of their data, and a file
+# counts materialised only when a read of it returns non-empty content
+# (a healthy, complete tree settles on the first stable sample, a few
+# hundred milliseconds; a tree the filesystem is still catching up keeps
+# the wait open while its data lands; and a tree that never catches up
+# runs the bound out — the wait then hands the data-less names back and
+# the check fails the providers those files belong to, loudly, at the
+# entry). The wait must never mask the check or fail the stage itself.
 _SETTLE_POLL_SECONDS = 0.1
 _SETTLE_STABLE_SAMPLES = 3
 _SETTLE_DEADLINE_SECONDS = 30.0
 
 
-def _wait_for_restored_tree(stage: str, root: str, declared) -> None:
+def _wait_for_restored_tree(stage: str, root: str, declared) -> list[str]:
+    """The bounded catch-up wait the shared stage-entry check opens with.
+
+    Returns the names of the state files whose ENTRY is present in the
+    restored dir but whose DATA still reads empty when the wait ends —
+    this host's data-lags-its-entries shape (run 44601846177's extract
+    stage: every value file's entry and size field read non-zero the
+    moment the download step unpacked them, while a read of the file's
+    content returned empty for the stage process's whole life — a later
+    step's fresh process saw the data). The caller (the check) routes
+    the providers those names belong to its declared-but-lost failure
+    instead of passing them valueless.
+
+    The certification is a content read, never a metadata test: a file
+    counts materialised only when a read of it returns non-empty
+    content, and the fingerprint rides the read content — a file whose
+    entry and size landed but whose data has not keeps the wait open
+    while its data materialises (and a file whose data lands mid-wait
+    flips the fingerprint, resetting the stability count). A tree that
+    never materialises its certified files runs the bound out: the wait
+    then hands the data-less names back, and the check fails the stage
+    at its entry on them — loudly, before the stage spends a pi call on
+    a run that would commit without its identity.
+    """
     expected = {value_file + ".txt"
                 for _provider, (flag, value_file, _marker)
                 in HARNESS_PROVIDER_STATE.items()
                 if declared(flag, "CW_" + flag.replace("-", "_").upper())}
     ext_declared = declared("ext-env-declared", "CW_EXT_ENV_DECLARED")
+
+    def _certified_files(snapshot: set) -> list[str]:
+        # the files the wait certifies: the declared providers' value
+        # files, the extension group's value files where the provider is
+        # declared, and every provider declaration flag whose entry is
+        # visible (an unreadable flag is a loss of the declaration
+        # itself — the check's declared probe would otherwise read
+        # absent and pass the provider vacuously)
+        fns = [f for f in expected if f in snapshot]
+        if ext_declared:
+            fns += [f for f in sorted(snapshot)
+                    if f.startswith("extension-env-")
+                    and f.endswith(".txt")]
+        fns += [f for f in sorted(snapshot)
+                if f.endswith("-declared.txt")]
+        return sorted(set(fns))
+
     try:
-        def complete(snapshot: set, ext_materialized: bool) -> bool:
+        def read_data(fname: str) -> str:
+            try:
+                with open(os.path.join(root, fname),
+                          encoding="utf-8") as fh:
+                    return fh.read()
+            except OSError:
+                return ""
+
+        def materialised(snapshot: set) -> tuple:
+            # every certified file reads its data back non-empty; returns
+            # (all materialised, the names that are not)
+            missing = []
+            for f in _certified_files(snapshot):
+                if not read_data(f).strip():
+                    missing.append(f)
+            return (not missing, missing)
+
+        def complete(snapshot: set, mat: tuple) -> bool:
             if not expected <= snapshot:
                 return False
             if ext_declared:
-                # presence alone is not completion: on this host a dir
-                # entry has been observed to materialise before the
-                # file's data, so a declared provider's value files must
-                # also read non-empty — the data is what the entry's
-                # snapshot and the stage's consumers take
                 return (any(f.startswith("extension-env-")
                             and f.endswith(".txt") for f in snapshot)
-                        and ext_materialized)
-            return True
+                        and mat[0])
+            return mat[0] if _certified_files(snapshot) else True
 
         def fingerprint(snapshot: set):
-            # the declared provider's value files' sizes ride the
-            # fingerprint, so a file whose entry landed but whose data is
-            # still materialising keeps the wait open until it settles
-            sizes = []
-            if ext_declared:
-                for f in sorted(snapshot):
-                    if f.startswith("extension-env-") \
-                            and f.endswith(".txt"):
-                        try:
-                            sizes.append((f, os.path.getsize(
-                                os.path.join(root, f))))
-                        except OSError:
-                            sizes.append((f, -1))
-            return (snapshot, tuple(sizes))
+            # the certified files' read CONTENT rides the fingerprint, so
+            # data still materialising (or landing mid-wait) keeps the
+            # wait open until it settles
+            contents = tuple((f, read_data(f))
+                             for f in _certified_files(snapshot))
+            return (snapshot, contents)
 
         prev = None
         stable = 0
         seen = set()
-        ext_materialized = False
+        mat = (True, [])
         deadline = time.monotonic() + _SETTLE_DEADLINE_SECONDS
         while time.monotonic() < deadline:
             try:
@@ -584,35 +631,35 @@ def _wait_for_restored_tree(stage: str, root: str, declared) -> None:
             except OSError:
                 snap = set()
             key = fingerprint(snap)
-            if ext_declared:
-                # every visible value file reads its data back non-empty
-                ext_materialized = True
-                for fname, size in key[1]:
-                    if size <= 0:
-                        ext_materialized = False
-                        break
+            mat = materialised(snap)
             if key == prev:
                 stable += 1
             else:
                 prev = key
                 stable = 0
             seen |= snap
-            if stable >= _SETTLE_STABLE_SAMPLES and complete(seen,
-                                                             ext_materialized):
+            if stable >= _SETTLE_STABLE_SAMPLES and complete(seen, mat):
                 log(f"{stage}: restored state dir settled and complete "
                     f"({len(snap)} file(s)) — the entry check "
-                    f"reads a full dir")
-                return
+                    f"reads a full dir, and every certified file's "
+                    f"data read non-empty")
+                return []
             time.sleep(_SETTLE_POLL_SECONDS)
         missing = expected - (prev[0] if prev else set())
-        log(f"::warning::{stage} — the restored state dir had not "
-            f"caught up within {int(_SETTLE_DEADLINE_SECONDS)}s (still "
-            f"missing {sorted(missing) or '—'}); the entry check "
-            f"proceeds against whatever is on disk")
+        missing_data = mat[1] if prev else []
+        if missing or missing_data:
+            log(f"::warning::{stage} — the restored state dir had not "
+                f"caught up within {int(_SETTLE_DEADLINE_SECONDS)}s "
+                f"(entries still missing {sorted(missing) or '—'}; "
+                f"present but data-less {missing_data or '—'}); the "
+                f"entry check fails the providers those files belong "
+                f"to instead of passing them valueless")
+        return missing_data
     except Exception:
-        # the wait must never mask the check or fail the stage itself
-        pass
-
+        # the wait must never mask the check or fail the stage itself —
+        # a wait that cannot certify hands back no data-less names, and
+        # the check runs against whatever is on disk
+        return []
 
 def delivery_check(stage: str) -> None:
     """The shared stage-entry delivery check — every stage job runs it at
@@ -671,13 +718,24 @@ def delivery_check(stage: str) -> None:
     half-restored dir (the run's own artefacts carry the byte-complete
     zip beside the stage's missing files, which surface only into the
     job's later upload). The wait holds the entry until the dir is
-    quiescent AND every declared value file has landed: a healthy,
-    complete tree settles on the first stable sample (a few hundred
-    milliseconds), a tree the filesystem is still catching up keeps the
-    wait open while its entries land, and a tree that never catches up
-    runs the bound out — then the check proceeds and fails loudly,
-    exactly as it does today. The wait can never mask the check: any
-    error of its own lets the check run against whatever is on disk.
+    quiescent AND every certified file's data has materialised — the
+    certification is a content read, never a metadata test: this host's
+    file entries and size fields have been observed to land ahead of
+    their data (run 44601846177's extract stage: every value file's
+    entry and size read non-zero the moment the download step unpacked
+    them while a read of the content returned empty, the entry's
+    snapshot fixed nothing, the check passed on the entries' presence,
+    and the stage spent its full pi run before its commit's child died
+    on the missing identity). A file counts materialised only when a
+    read of it returns non-empty content; a healthy, complete tree
+    settles on the first stable sample (a few hundred milliseconds), a
+    tree the filesystem is still catching up keeps the wait open while
+    its data lands, and a tree that never catches up runs the bound out
+    — the wait then hands the data-less names back and the check fails
+    the providers those files belong to, loudly, at the entry. The wait
+    can never mask the check: any error of its own hands back no
+    data-less names and lets the check run against whatever is on
+    disk.
     """
     root = os.path.join(os.environ.get("RUNNER_TEMP", ""), "cw", "state",
                         "trigger")
@@ -695,7 +753,15 @@ def delivery_check(stage: str) -> None:
     # the entry until the state dir is quiescent AND every declared
     # value file has landed — entry, and its data, on disk — then
     # re-read the dir the check reads.
-    _wait_for_restored_tree(stage, root, declared)
+    # the wait's certification is a content read (a file counts
+    # materialised only when a read of it returns non-empty content —
+    # this host's file entries and size fields have been observed to
+    # land ahead of their data): the names it hands back are the state
+    # files whose entry is present but whose data did not materialise
+    # within the settle window — the providers those files belong to
+    # are routed to the declared-but-lost failure below, never passed
+    # valueless
+    missing_data = set(_wait_for_restored_tree(stage, root, declared))
 
     # The entry snapshot of the recorded extension env into this
     # process, taken at the one moment the wait has certified the
@@ -752,18 +818,37 @@ def delivery_check(stage: str) -> None:
     # presence-only provider-declaration flag; its recorded values are
     # the extension-env-*.txt state files the setup stage wrote
     ext_outcome = "n/a (no provider)"
-    if declared("ext-env-declared", "CW_EXT_ENV_DECLARED"):
+    ext_flagless = ("ext-env-declared.txt" in present
+                    and "ext-env-declared.txt" in missing_data)
+    if ext_flagless:
+        # the provider's declaration flag is present but unreadable: the
+        # declared probe cannot be trusted — it would read the flag empty
+        # and pass the provider vacuously, and the stage would run
+        # valueless, dying at its commit on the missing identity. The
+        # flag's entry is present: the provider WAS declared, and an
+        # unreadable declaration is a relay loss the check names
+        ext_outcome = "missing (provider declared)"
+        lost.append(
+            ("extension-env",
+             "declared for the run, but its declaration flag "
+             f"ext-env-declared.txt is present in the restored state dir "
+             f"{root} with unreadable data — the declared probe cannot be "
+             "trusted; treated as a relay loss, the stage fails at its "
+             "entry"))
+    elif declared("ext-env-declared", "CW_EXT_ENV_DECLARED"):
         ext_files = sorted(f for f in present
                            if f.startswith("extension-env-")
                            and f.endswith(".txt"))
-        state_half = bool(ext_files)
+        ext_data_missing = [f for f in ext_files if f in missing_data]
+        state_half = bool(ext_files) and not ext_data_missing
         env_half = bool((os.environ.get("CW_EXT_ENV_KEYS") or "").strip())
         if state_half or env_half:
-            # the delivered value count — the value files the restored
-            # state dir holds, or the keys the per-job relay exported
-            # into the job's env where the state-file half is the one
-            # that was lost
-            n = (len(ext_files) if state_half
+            # the delivered value count — the values the entry's snapshot
+            # actually fixed into this process's environment (the wait
+            # certified their data materialised, so that count is truth);
+            # where the state-file half is the one that was lost, it is
+            # the keys the per-job relay exported into the job's env
+            n = (len(applied) if state_half
                  else len([k for k in
                            (os.environ.get("CW_EXT_ENV_KEYS") or "")
                            .split(",") if k]))
@@ -775,14 +860,31 @@ def delivery_check(stage: str) -> None:
                 f"job-env half: {'delivered' if env_half else 'lost'})")
         else:
             ext_outcome = "missing (provider declared)"
+            if ext_files:
+                # the second shape of the same loss: the value files'
+                # entries ARE present in the restored state dir, but
+                # their data did not materialise within the settle window
+                # — the runner host's file data lagged its entries past
+                # the wait's bound (run 44601846177: the entry's
+                # snapshot read every value empty, the check passed on
+                # the entries' presence, and the stage spent its full pi
+                # run before its commit's child died on the missing
+                # identity)
+                shape = ("the value files' entries are present in the "
+                         "restored state dir but their data did not "
+                         f"materialise within the settle window "
+                         f"({', '.join(ext_data_missing)} still read "
+                         "empty — the runner host's file data lagged its "
+                         "entries); treated as lost")
+            else:
+                shape = ("no extension-env-*.txt state file in the "
+                         f"restored state dir {root}")
             lost.append(
                 ("extension-env",
                  "declared for the run, but its recorded values were not "
-                 "restored into the job — state-dir half lost (no "
-                 f"extension-env-*.txt state file in the restored state "
-                 f"dir {root}); job-env half lost (CW_EXT_ENV_KEYS unset — "
-                 "the per-job Read trigger state relay exported no recorded "
-                 "value)"))
+                 f"restored into the job — state-dir half lost ({shape}); "
+                 "job-env half lost (CW_EXT_ENV_KEYS unset — the per-job "
+                 "Read trigger state relay exported no recorded value)"))
     # the stage's delivery line on the stage-summary channel — written
     # before the check's verdict (a declared-but-lost provider fails the
     # stage at its entry, and its line must still ride the artefact the
@@ -793,6 +895,19 @@ def delivery_check(stage: str) -> None:
     # setup stage recorded on the same channel; a harness that would fall
     # back silently when its provider is absent is the same class of loss
     for provider, (flag, value_file, marker) in HARNESS_PROVIDER_STATE.items():
+        flagf = flag + ".txt"
+        if flagf in present and flagf in missing_data:
+            # the provider's declaration flag is present but unreadable —
+            # the declared probe cannot be trusted (it would read the
+            # flag empty and pass the provider vacuously); an unreadable
+            # declaration is a relay loss the check names
+            lost.append(
+                (provider,
+                 f"declared flag {flagf} present in the restored state "
+                 f"dir with unreadable data — the declared probe cannot "
+                 "be trusted; treated as a relay loss, the stage fails "
+                 "at its entry"))
+            continue
         if not declared(flag, "CW_" + flag.replace("-", "_").upper()):
             log(f"{stage}: entry delivery check — {provider} not declared "
                 f"for the run (no provider) — the check passes it, the "
@@ -801,7 +916,8 @@ def delivery_check(stage: str) -> None:
             continue
         # the state file on disk carries the .txt suffix (the writer's
         # name); the tuple's value_file is the bare state name
-        state_half = (value_file + ".txt") in present
+        state_half = (flagf and (value_file + ".txt") in present
+                      and (value_file + ".txt") not in missing_data)
         env_half = bool((os.environ.get(marker) or "").strip())
         if state_half or env_half:
             log(f"{stage}: entry delivery check — {provider} declared, "
@@ -809,14 +925,26 @@ def delivery_check(stage: str) -> None:
                 f"{'delivered' if state_half else 'lost'}; job-env half: "
                 f"{'delivered' if env_half else 'lost'})")
         else:
+            vfile = value_file + ".txt"
+            if vfile in present:
+                # the second shape of the same loss: the state file's
+                # entry is present but its data did not materialise within
+                # the settle window (the runner host's file data lagged
+                # its entries) — treated as lost
+                shape = (f"the recorded state file {vfile} is present "
+                         "but its data did not materialise within the "
+                         "settle window — it still reads empty (the "
+                         "runner host's file data lagged its entries); "
+                         "treated as lost")
+            else:
+                shape = (f"the recorded state file {vfile} is absent "
+                         f"from the restored state dir {root}")
             lost.append(
                 (provider,
                  "declared for the run, but its recorded values were not "
-                 "restored into the job — state-dir half lost (the recorded "
-                 f"state file {value_file}.txt is absent from the restored "
-                 f"state dir {root}); job-env half lost ({marker} unset — "
-                 "the per-job Read trigger state relay exported no delivery "
-                 "marker)"))
+                 f"restored into the job — state-dir half lost ({shape}); "
+                 f"job-env half lost ({marker} unset — the per-job Read "
+                 "trigger state relay exported no delivery marker)"))
     if lost:
         # the failure rides the documented crash-diagnostics channel — the
         # stage's artefact carries the one-line reason (chapter 9), and a
