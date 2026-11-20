@@ -123,7 +123,7 @@ Feature: The setup-pi stage installs and configures pi for the run
     And the entry persists the values it applied to a state file of its own — the in-process environment is not a durable store: a host may reset a long-lived process's view mid-run (the applied values and the entry's marker erased together, and the process's reads of the restored tree's files answering empty, while a fresh process on the same host reads them fine)
     And every git call the program makes routes through the single git entry point, whose git child's environment carries the recorded values
     And every CLI call the program then spawns (its git children, its pi invocations) runs with the provider's variables present
-    And a later CLI the program spawns, whose process environment the host has since lost its entry's values, re-derives those values from the entry's own file into the child's environment (a value the environment still carries wins — leave-untouched) — the commit resolves the identity the entry certified rather than dying on it; where the file itself reads empty, the failure names the host's process-view reset as the cause
+    And a later CLI the program spawns, whose process environment the host has since lost a value the entry applied — the reset's extent varying between runs (the marker taken with the values, or the values emptied under a standing marker) — re-derives it from the entry's own file into the child's environment (a value the environment still carries wins — leave-untouched): the trigger is the variable's absence against that file, never the marker's state, and the commit resolves the identity the entry certified rather than dying on it; where the file itself reads empty, the failure names the host's process-view reset as the cause
 
   @setup
   Scenario: The run's commits carry the author identity the extension's environment provides
@@ -205,6 +205,7 @@ Feature: The setup-pi stage installs and configures pi for the run
     Then the commit fails with a factory-level error that names the cause — the declared provider whose values never arrived
     And the raw git "tell me who you are" fatal is not the outermost failure signal of the run
     And the factory writes no identity of its own
+    And where the host's reset emptied the values the entry certified into the process but left the entry's marker standing, the diagnosis fires on that marker — the same factory-level error, the commit child never spawning
 
   @setup @safety
   Scenario: A git child that dies names its own diagnosis in the failure
@@ -214,7 +215,7 @@ Feature: The setup-pi stage installs and configures pi for the run
     And the run's token is redacted out of the carried text
     And the entry point captures the child's streams itself where the caller did not redirect them, so the text lands in the message regardless of where the runner pointed the step
     And the diagnosis rides the stage's crash channel and the stage's console — the artefact names the cause where the job log ghosts
-    And where a commit dies on an identity the entry certified — the host having since reset the process's view, the entry's marker gone and its own snapshot file reading empty — the raised failure adds the host's process-view reset to the named cause: the runner host's, for the runner host to make whole
+    And where a commit dies on an identity the entry certified — the host having since reset the process's view, the entry's own snapshot file reading empty (the marker's fate varying between runs; the file's read the shared witness) — the raised failure adds the host's process-view reset to the named cause: the runner host's, for the runner host to make whole
 
   @setup @safety
   Scenario: A stage commit that dies on a stale lock clears the lock and retries once

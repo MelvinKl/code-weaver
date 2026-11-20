@@ -8990,3 +8990,180 @@ def test_pi_call_env_rebuilds_the_values_the_host_erased():
         shutil.rmtree(rt, ignore_errors=True)
         shutil.rmtree(repo, ignore_errors=True)
         sys.modules.pop("cw_pi_rebuild", None)
+
+
+def test_git_child_env_rebuilds_the_values_emptied_under_a_standing_marker():
+    """(setup-pi "Every program of the run applies the extension env to
+    its own process at its entry"; reference
+    `requirements/setup-pi.feature::Every program of the run applies the
+    extension env to its own process at its entry`) the reset's extent
+    has varied between runs — one took the entry's marker with the
+    values, another emptied exactly the variables the entry applied and
+    left the marker standing (run 44704429245's shape: the commit died
+    on the identity while the marker was still in the process
+    environment, and a rebuild keyed on the marker's absence never
+    fired). The trigger is the variables' absence from the process
+    environment against the entry's own file — never the marker's
+    state: the missing values are re-derived from the file into the
+    child's environment and the process's, and the standing marker is
+    left standing (the entry's own — re-setting it would rewrite
+    ground truth that is still true).
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_git_standing",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_git_standing"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-git-standing-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    with open(os.path.join(trig,
+                           "extension-env-GIT_AUTHOR_NAME.txt"), "w") as f:
+        f.write("")
+    with open(os.path.join(trig,
+                           "extension-env-GIT_AUTHOR_EMAIL.txt"), "w") as f:
+        f.write("")
+    with open(os.path.join(trig, "entry-applied-extension-env.txt"),
+              "w") as f:
+        f.write("GIT_AUTHOR_EMAIL=melvin@example.com\n"
+                "GIT_AUTHOR_NAME=Melvin Klein\n")
+    # the entry's marker is still standing — but the host emptied the
+    # very variables it names
+    entry_marker = trig + "\x1f" + "GIT_AUTHOR_EMAIL,GIT_AUTHOR_NAME"
+    os.environ["CW_EXT_ENV_APPLIED"] = entry_marker
+    for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"):
+        os.environ.pop(k, None)
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    repo = tempfile.mkdtemp(prefix="cw-git-standing-repo-")
+
+    class _FakeSubp:
+        CompletedProcess = real_subprocess.CompletedProcess
+        CalledProcessError = real_subprocess.CalledProcessError
+        spawned = []
+
+        @staticmethod
+        def run(argv, **kw):
+            _FakeSubp.spawned.append((list(argv), dict(kw)))
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        mod.git_exec(["commit", "-q", "-m", "x"], cwd=repo, check=True)
+        _, kw = _FakeSubp.spawned[-1]
+        env = kw.get("env") or {}
+        assert env.get("GIT_AUTHOR_NAME") == "Melvin Klein", \
+            ("the child's environment carries the entry's value, rebuilt "
+             f"from the entry's own file under a standing marker: {env!r}")
+        assert env.get("GIT_AUTHOR_EMAIL") == "melvin@example.com", \
+            f"every emptied value is rebuilt into the child: {env!r}"
+        assert os.environ.get("GIT_AUTHOR_NAME") == "Melvin Klein", \
+            "the process environment is re-fixed for every later call"
+        assert os.environ.get("CW_EXT_ENV_APPLIED") == entry_marker, \
+            ("the standing marker is left standing — the entry's own "
+             "ground truth, still true")
+    finally:
+        mod.subprocess = real_subprocess
+        for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"):
+            os.environ.pop(k, None)
+        os.environ.pop("CW_EXT_ENV_APPLIED", None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_git_standing", None)
+
+
+def test_commit_under_a_standing_marker_fails_the_diagnosis_not_the_raw_fatal():
+    """(setup-pi "A commit with no resolvable identity fails with a
+    factory-level diagnosis"; reference
+    `requirements/setup-pi.feature::A commit with no resolvable identity fails with a factory-level diagnosis`) where the host's reset emptied the values the entry certified but left the entry's marker standing (and took the entry's own file's data with them), the diagnosis fires on the marker — the commit fails with the factory-level error that names the loss of the values the entry certified into the process, before any commit child spawns: the raw git fatal is not the outermost signal of the run, and the entry's own file reading empty is the host taking the process's own writes too — the runner host's process-view reset, for the runner host to make whole.
+    """
+    import importlib.util
+    import shutil
+    import subprocess as real_subprocess
+    spec = importlib.util.spec_from_file_location(
+        "cw_git_standingnote",
+        os.path.join(ROOT, ".github", "scripts", "common.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cw_git_standingnote"] = mod
+    spec.loader.exec_module(mod)
+    rt = tempfile.mkdtemp(prefix="cw-git-standingnote-rt-")
+    trig = os.path.join(rt, "cw", "state", "trigger")
+    os.makedirs(trig)
+    for name in ("ext-env-declared.txt",
+                 "extension-env-GIT_AUTHOR_NAME.txt",
+                 "extension-env-GIT_AUTHOR_EMAIL.txt",
+                 "entry-applied-extension-env.txt"):
+        open(os.path.join(trig, name), "w").close()
+    # the marker stands while everything else the entry certified reads
+    # empty — the host took the file's data, not the marker
+    os.environ["CW_EXT_ENV_APPLIED"] = (
+        trig + "\x1f" + "GIT_AUTHOR_EMAIL,GIT_AUTHOR_NAME")
+    for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"):
+        os.environ.pop(k, None)
+    saved = {k: os.environ.get(k) for k in
+             ("RUNNER_TEMP", "GITHUB_WORKSPACE")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ["RUNNER_TEMP"] = rt
+    os.environ["GITHUB_WORKSPACE"] = rt
+    repo = tempfile.mkdtemp(prefix="cw-git-standingnote-repo-")
+
+    class _FakeSubp:
+        CompletedProcess = real_subprocess.CompletedProcess
+        CalledProcessError = real_subprocess.CalledProcessError
+        spawned = []
+
+        @staticmethod
+        def run(argv, **kw):
+            _FakeSubp.spawned.append((list(argv), dict(kw)))
+            if len(argv) >= 2 and argv[1] == "commit":
+                raise real_subprocess.CalledProcessError(
+                    128, list(argv),
+                    stderr=b"fatal: Committer identity unknown\n")
+            return real_subprocess.CompletedProcess(
+                0, list(argv), stdout=b"", stderr=b"")
+    try:
+        mod.subprocess = _FakeSubp
+        try:
+            mod.git_exec(["commit", "-q", "-m", "x"], cwd=repo,
+                         check=True)
+            raise AssertionError("a valueless commit must fail")
+        except RuntimeError as e:
+            msg = str(e)
+            assert "certified into this process at the stage's entry" in msg, \
+                ("the diagnosis fires on the marker — it names the loss "
+                 f"of the values the entry certified: {msg!r}")
+            assert "none of its recorded variables resolves a commit " \
+                "identity" in msg, \
+                f"the marker branch's words are in the failure: {msg!r}"
+        commits = [a for a, _ in _FakeSubp.spawned
+                   if len(a) >= 2 and a[1] == "commit"]
+        assert not commits, \
+            ("the commit child never spawns — the raw git fatal is not "
+             "the outermost failure signal of the run")
+    finally:
+        mod.subprocess = real_subprocess
+        for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"):
+            os.environ.pop(k, None)
+        os.environ.pop("CW_EXT_ENV_APPLIED", None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(rt, ignore_errors=True)
+        shutil.rmtree(repo, ignore_errors=True)
+        sys.modules.pop("cw_git_standingnote", None)
